@@ -4,6 +4,7 @@ import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
 import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { confirmKeyboard } from "../keyboards/trade.js";
 import type { BotContext } from "../../types/index.js";
@@ -63,7 +64,8 @@ export function registerShort(bot: Bot<BotContext>) {
         ? `\n⚠️ Leverage capped to max <b>${snapshot.maxLeverage}x</b> for ${symbol}.\n`
         : "";
 
-    const kb = confirmKeyboard(`short:${symbol}:${effectiveLeverage}:${sizeUsdc}`);
+    // markPrice encoded so the callback can compute correct base units without a re-fetch
+    const kb = confirmKeyboard(`short:${symbol}:${effectiveLeverage}:${sizeUsdc}:${estimatedEntry.toFixed(6)}`);
 
     await ctx.reply(
       [
@@ -84,26 +86,25 @@ export function registerShort(bot: Bot<BotContext>) {
     );
   });
 
-  bot.callbackQuery(/^confirm:short:(.+):([\d.]+):([\d.]+)$/, async (ctx) => {
+  bot.callbackQuery(/^confirm:short:([A-Z0-9]+):([\d.]+):([\d.]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Placing order...");
     if (!ctx.user) return;
 
-    const [symbol, leverageStr, sizeStr] = ctx.match.slice(1);
+    const [symbol, leverageStr, sizeStr, markPriceStr] = ctx.match.slice(1);
     const leverage = Number(leverageStr);
     const sizeUsdc = Number(sizeStr);
-
-    const settings = (await db.query.userSettings.findFirst({
-      where: eq(userSettings.userId, ctx.user.id),
-    })) ?? { slippageBps: 50 };
+    const markPrice = Number(markPriceStr);
 
     try {
-      const sig = await placeMarketOrder({
-        symbol,
-        side: "short",
-        sizeUsdc: sizeUsdc * leverage,
-        slippageBps: settings.slippageBps,
-        walletAddress: ctx.user.walletAddress,
-      });
+      const sig = await placeMarketOrder(
+        {
+          symbol,
+          side: "short",
+          baseUnits: String((sizeUsdc * leverage) / markPrice),
+          walletAddress: ctx.user.walletAddress,
+        },
+        getKitSigner(ctx.user.walletAddress),
+      );
       await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
       await ctx.editMessageText(
         `✅ <b>Short ${symbol} opened!</b>\n\nTx: <code>${sig}</code>`,

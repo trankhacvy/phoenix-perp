@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { setTpSl } from "../../services/phoenix/trade.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 
 export function registerSetTp(bot: Bot<BotContext>) {
@@ -27,14 +29,29 @@ export function registerSetTp(bot: Bot<BotContext>) {
       return;
     }
 
+    let positionSide: "long" | "short";
+    try {
+      const state = await getTraderState(ctx.user.walletAddress);
+      const pos = state.positions.find((p) => p.symbol === symbol);
+      if (!pos) {
+        await ctx.reply(`No open ${symbol} position found. Open a position first.`);
+        return;
+      }
+      positionSide = pos.side;
+    } catch {
+      await ctx.reply("❌ Failed to fetch position. Please try again.");
+      return;
+    }
+
     const kb = new InlineKeyboard()
-      .text("✅ Confirm", `settp:confirm:${symbol}:${price}:${mode}`)
+      .text("✅ Confirm", `settp:confirm:${symbol}:${price}:${mode}:${positionSide}`)
       .text("❌ Cancel", "cancel");
 
     await ctx.reply(
       [
         `🎯 <b>Set Take-Profit: ${symbol}</b>`,
         ``,
+        `Side: <b>${positionSide.toUpperCase()}</b>`,
         `Trigger price: <code>$${price}</code>`,
         `Execution: <b>${mode === "market" ? "Market (IOC, ±10% buffer)" : "Limit"}</b>`,
       ].join("\n"),
@@ -42,17 +59,15 @@ export function registerSetTp(bot: Bot<BotContext>) {
     );
   });
 
-  bot.callbackQuery(/^settp:confirm:(.+):([\d.]+):(market|limit)$/, async (ctx) => {
+  bot.callbackQuery(/^settp:confirm:([A-Z0-9]+):([\d.]+):(market|limit):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Setting TP...");
     if (!ctx.user) return;
-    const [symbol, priceStr, mode] = ctx.match.slice(1) as [string, string, "market" | "limit"];
+    const [symbol, priceStr, mode, positionSide] = ctx.match.slice(1) as [string, string, "market" | "limit", "long" | "short"];
     try {
-      await setTpSl({
-        symbol,
-        walletAddress: ctx.user.walletAddress,
-        tpPrice: Number(priceStr),
-        tpMode: mode,
-      });
+      await setTpSl(
+        { symbol, walletAddress: ctx.user.walletAddress, positionSide, tpPrice: Number(priceStr), tpMode: mode },
+        getKitSigner(ctx.user.walletAddress),
+      );
       await ctx.editMessageText(`✅ Take-profit for ${symbol} set at $${priceStr}.`);
     } catch {
       await ctx.editMessageText("❌ Failed to set take-profit.");

@@ -1,4 +1,5 @@
-import { config } from "../../config/index.js";
+import type { ExchangeMarketConfig } from "@ellipsis-labs/rise";
+import { getPhoenixClient } from "./client.js";
 
 export const ISOLATED_ONLY_MARKETS = new Set(["GOLD", "SILVER", "SKR", "WTIOIL"]);
 
@@ -9,48 +10,58 @@ export function isIsolatedOnly(symbol: string): boolean {
 export interface MarketSnapshot {
   markPrice: number;
   tickSize: number;
-  baseLotSize: number;
+  baseLotsDecimals: number;
   maxLeverage: number;
+  takerFee: number;
+  makerFee: number;
   fundingRate: number;
   openInterest: string;
   isIsolatedOnly: boolean;
+  symbol: string;
 }
 
-export async function getMarkets() {
-  const res = await fetch(`${config.PHOENIX_API_URL}/exchange/markets`);
-  if (!res.ok) throw new Error(`Failed to fetch markets: ${res.status}`);
-  return res.json() as Promise<Record<string, unknown>[] | { markets: Record<string, unknown>[] }>;
+export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
+  return getPhoenixClient().api.markets().getMarkets();
 }
 
-export async function getMarket(symbol: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${config.PHOENIX_API_URL}/exchange/markets/${symbol}`);
-  if (!res.ok) throw new Error(`Failed to fetch market ${symbol}: ${res.status}`);
-  return res.json() as Promise<Record<string, unknown>>;
+export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
+  return getPhoenixClient().api.markets().getMarket(symbol.toUpperCase());
 }
 
 export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
-  const market = await getMarket(symbol);
+  const [market, orderbook, fundingHistory] = await Promise.all([
+    getMarket(symbol),
+    getOrderbook(symbol),
+    getPhoenixClient().api.funding().getFundingRateHistory(symbol.toUpperCase(), { limit: 1 }).catch(() => null),
+  ]);
+
+  const maxLeverage = market.leverageTiers.length > 0 ? market.leverageTiers[0].maxLeverage : 20;
+  const fundingRate = fundingHistory?.rates?.[0]
+    ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
+    : 0;
+
   return {
-    markPrice: Number(market.markPrice ?? 0),
-    tickSize: Number(market.tickSize ?? 0.01),
-    baseLotSize: Number(market.baseLotSize ?? 1),
-    maxLeverage: Number(market.maxLeverage ?? 20),
-    fundingRate: Number(market.fundingRate ?? 0),
-    openInterest: String(market.openInterest ?? "0"),
+    symbol: market.symbol,
+    markPrice: orderbook.mid ?? 0,
+    tickSize: market.tickSize,
+    baseLotsDecimals: market.baseLotsDecimals,
+    maxLeverage,
+    takerFee: market.takerFee,
+    makerFee: market.makerFee,
+    fundingRate,
+    openInterest: String(market.openInterestCapBaseLots),
     isIsolatedOnly: isIsolatedOnly(symbol),
   };
 }
 
 export async function getOrderbook(symbol: string) {
-  const res = await fetch(`${config.PHOENIX_API_URL}/orderbook/${symbol}`);
-  if (!res.ok) throw new Error(`Failed to fetch orderbook ${symbol}: ${res.status}`);
-  return res.json();
+  return getPhoenixClient().api.orderbook().getOrderbook(symbol.toUpperCase());
 }
 
 export async function getFundingRateHistory(symbol: string, limit = 24) {
-  const res = await fetch(
-    `${config.PHOENIX_API_URL}/funding/history?symbol=${symbol}&limit=${limit}`,
-  );
-  if (!res.ok) throw new Error(`Failed to fetch funding history: ${res.status}`);
-  return res.json();
+  return getPhoenixClient().api.funding().getFundingRateHistory(symbol.toUpperCase(), { limit });
+}
+
+export async function getMarketStatsHistory(symbol: string, limit = 1) {
+  return getPhoenixClient().api.markets().getMarketStatsHistory(symbol.toUpperCase(), { limit }).catch(() => null);
 }

@@ -23,13 +23,17 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@ellipsis-labs/rise": "^0.4.9",
     "@fastify/cors": "^10.0.0",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/inter": "^5.2.8",
     "@privy-io/server-auth": "^1.20.0",
     "@resvg/resvg-js": "^2.6.2",
+    "@solana/kit": "^6.9.0",
+    "@solana/signers": "^6.9.0",
     "@solana/web3.js": "^1.98.0",
     "bullmq": "^5.34.0",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.38.0",
     "fastify": "^5.2.0",
     "grammy": "^1.31.0",

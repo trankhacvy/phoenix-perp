@@ -2,8 +2,12 @@ import type { Bot } from "grammy";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
-import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
+import {
+  getMarketSnapshot,
+  isIsolatedOnly,
+} from "../../services/phoenix/market.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { confirmKeyboard } from "../keyboards/trade.js";
 import type { BotContext } from "../../types/index.js";
@@ -18,7 +22,9 @@ export function registerLong(bot: Bot<BotContext>) {
 
     const parts = ctx.match?.trim().split(" ");
     if (!parts || parts.length < 3) {
-      await ctx.reply("Usage: /long <symbol> <leverage>x <size_usdc>\nExample: /long SOL 5x 100");
+      await ctx.reply(
+        "Usage: /long <symbol> <leverage>x <size_usdc>\nExample: /long SOL 5x 100",
+      );
       return;
     }
 
@@ -26,7 +32,12 @@ export function registerLong(bot: Bot<BotContext>) {
     const leverage = Number(parts[1].replace("x", ""));
     const sizeUsdc = Number(parts[2]);
 
-    if (Number.isNaN(leverage) || Number.isNaN(sizeUsdc) || leverage <= 0 || sizeUsdc <= 0) {
+    if (
+      Number.isNaN(leverage) ||
+      Number.isNaN(sizeUsdc) ||
+      leverage <= 0 ||
+      sizeUsdc <= 0
+    ) {
       await ctx.reply("Invalid leverage or size.");
       return;
     }
@@ -47,7 +58,9 @@ export function registerLong(bot: Bot<BotContext>) {
     try {
       snapshot = await getMarketSnapshot(symbol);
     } catch {
-      await ctx.reply(`❌ Could not fetch market data for ${symbol}. Check the symbol and try again.`);
+      await ctx.reply(
+        `❌ Could not fetch market data for ${symbol}. Check the symbol and try again.`,
+      );
       return;
     }
 
@@ -63,7 +76,10 @@ export function registerLong(bot: Bot<BotContext>) {
         ? `\n⚠️ Leverage capped to max <b>${snapshot.maxLeverage}x</b> for ${symbol}.\n`
         : "";
 
-    const kb = confirmKeyboard(`long:${symbol}:${effectiveLeverage}:${sizeUsdc}`);
+    // markPrice encoded so the callback can compute correct base units without a re-fetch
+    const kb = confirmKeyboard(
+      `long:${symbol}:${effectiveLeverage}:${sizeUsdc}:${estimatedEntry.toFixed(6)}`,
+    );
 
     await ctx.reply(
       [
@@ -84,33 +100,36 @@ export function registerLong(bot: Bot<BotContext>) {
     );
   });
 
-  bot.callbackQuery(/^confirm:long:(.+):([\d.]+):([\d.]+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Placing order...");
-    if (!ctx.user) return;
+  bot.callbackQuery(
+    /^confirm:long:([A-Z0-9]+):([\d.]+):([\d.]+):([\d.]+)$/,
+    async (ctx) => {
+      await ctx.answerCallbackQuery("Placing order...");
+      if (!ctx.user) return;
 
-    const [symbol, leverageStr, sizeStr] = ctx.match.slice(1);
-    const leverage = Number(leverageStr);
-    const sizeUsdc = Number(sizeStr);
+      const [symbol, leverageStr, sizeStr, markPriceStr] = ctx.match.slice(1);
+      const leverage = Number(leverageStr);
+      const sizeUsdc = Number(sizeStr);
+      const markPrice = Number(markPriceStr);
 
-    const settings = (await db.query.userSettings.findFirst({
-      where: eq(userSettings.userId, ctx.user.id),
-    })) ?? { slippageBps: 50 };
-
-    try {
-      const sig = await placeMarketOrder({
-        symbol,
-        side: "long",
-        sizeUsdc: sizeUsdc * leverage,
-        slippageBps: settings.slippageBps,
-        walletAddress: ctx.user.walletAddress,
-      });
-      await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
-      await ctx.editMessageText(
-        `✅ <b>Long ${symbol} opened!</b>\n\nTx: <code>${sig}</code>`,
-        { parse_mode: "HTML" },
-      );
-    } catch {
-      await ctx.editMessageText("❌ Order failed. Please try again.");
-    }
-  });
+      try {
+        const sig = await placeMarketOrder(
+          {
+            symbol,
+            side: "long",
+            baseUnits: String((sizeUsdc * leverage) / markPrice),
+            walletAddress: ctx.user.walletAddress,
+          },
+          getKitSigner(ctx.user.walletAddress),
+        );
+        await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
+        await ctx.editMessageText(
+          `✅ <b>Long ${symbol} opened!</b>\n\nTx: <code>${sig}</code>`,
+          { parse_mode: "HTML" },
+        );
+      } catch (e) {
+        console.error(e);
+        await ctx.editMessageText("❌ Order failed. Please try again.");
+      }
+    },
+  );
 }

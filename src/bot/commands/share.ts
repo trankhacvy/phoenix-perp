@@ -18,20 +18,23 @@ export function registerShare(bot: Bot<BotContext>) {
     }
 
     const history = await getTradeHistory(ctx.user.walletAddress, 20);
-    const trade = history.trades.find((t) => t.symbol === symbol && t.status === "closed");
+    const trade = history.trades.find((t) => t.symbol === symbol);
 
     if (!trade) {
-      await ctx.reply(`No closed ${symbol} position found.`);
+      await ctx.reply(`No ${symbol} trades found.`);
       return;
     }
 
     const botInfo = await bot.api.getMe();
+    const pnl = Number(trade.realizedPnl ?? 0);
+    const notional = Number(trade.size) * Number(trade.price);
+    const roiPct = notional > 0 ? ((pnl / notional) * 100).toFixed(2) : "0";
     const card = await generatePnlCard({
       symbol,
       side: trade.side,
-      entryPrice: trade.entryPrice,
-      exitPrice: trade.exitPrice,
-      roiPercent: trade.roiPercent,
+      entryPrice: trade.price,
+      exitPrice: trade.price,
+      roiPercent: roiPct,
       pnlUsdc: trade.realizedPnl,
       botHandle: `@${botInfo.username}`,
     });

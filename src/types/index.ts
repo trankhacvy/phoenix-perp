@@ -7,12 +7,14 @@ export interface BotContext extends Context {
 
 // Phoenix risk tiers from traderState WebSocket
 export type RiskTier =
-  | "Safe"
-  | "AtRisk"
-  | "Cancellable"
-  | "Liquidatable"
-  | "BackstopLiquidatable"
-  | "HighRisk";
+  | "safe"
+  | "healthy"
+  | "atRisk"
+  | "at_risk"
+  | "cancellable"
+  | "liquidatable"
+  | "backstopLiquidatable"
+  | "highRisk";
 
 export interface TraderStateEvent {
   walletAddress: string;

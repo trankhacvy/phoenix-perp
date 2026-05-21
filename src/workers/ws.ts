@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { alertSubscriptions, users } from "../db/schema/index.js";
 import { alertQueue } from "../jobs/queues.js";
@@ -13,19 +13,21 @@ const connections = new Map<string, WebSocket>();
 const userCache = new Map<string, string>();
 
 const RISK_ALERT_TIERS: RiskTier[] = [
-  "AtRisk",
-  "Cancellable",
-  "Liquidatable",
-  "BackstopLiquidatable",
-  "HighRisk",
+  "atRisk",
+  "at_risk",
+  "cancellable",
+  "liquidatable",
+  "backstopLiquidatable",
+  "highRisk",
 ];
 
 const TIER_MESSAGES: Record<string, string> = {
-  AtRisk: "⚠️ <b>Account At Risk</b>\nYour margin is below initial requirement.",
-  Cancellable: "🟠 <b>Orders May Be Cancelled</b>\nRisk-increasing orders can be force-cancelled.",
-  Liquidatable: "🔴 <b>Liquidation Warning</b>\nYour account can be liquidated now.",
-  BackstopLiquidatable: "🆘 <b>Backstop Liquidation</b>\nAccount beyond normal liquidation.",
-  HighRisk: "🆘 <b>High Risk — ADL Eligible</b>\nAccount deeply stressed.",
+  atRisk: "⚠️ <b>Account At Risk</b>\nYour margin is below initial requirement.",
+  at_risk: "⚠️ <b>Account At Risk</b>\nYour margin is below initial requirement.",
+  cancellable: "🟠 <b>Orders May Be Cancelled</b>\nRisk-increasing orders can be force-cancelled.",
+  liquidatable: "🔴 <b>Liquidation Warning</b>\nYour account can be liquidated now.",
+  backstopLiquidatable: "🆘 <b>Backstop Liquidation</b>\nAccount beyond normal liquidation.",
+  highRisk: "🆘 <b>High Risk — ADL Eligible</b>\nAccount deeply stressed.",
 };
 
 function buildRiskAlertMessage(event: TraderStateEvent): string | null {
@@ -175,8 +177,16 @@ function subscribeAllMids() {
   });
 }
 
-async function checkPriceAlerts(mids: Record<string, number>) {
-  const subs = await db
+type PriceAlertSub = { id: string; userId: string; symbol: string | null; triggerPrice: string | null; telegramId: string };
+let _priceAlertCache: PriceAlertSub[] | null = null;
+let _priceAlertCacheTs = 0;
+const PRICE_ALERT_CACHE_TTL_MS = 30_000;
+
+async function getPriceAlertSubs(): Promise<PriceAlertSub[]> {
+  if (_priceAlertCache && Date.now() - _priceAlertCacheTs < PRICE_ALERT_CACHE_TTL_MS) {
+    return _priceAlertCache;
+  }
+  _priceAlertCache = await db
     .select({
       id: alertSubscriptions.id,
       userId: alertSubscriptions.userId,
@@ -186,12 +196,13 @@ async function checkPriceAlerts(mids: Record<string, number>) {
     })
     .from(alertSubscriptions)
     .innerJoin(users, eq(alertSubscriptions.userId, users.id))
-    .where(
-      and(
-        eq(alertSubscriptions.type, "price"),
-        eq(alertSubscriptions.enabled, true),
-      ),
-    );
+    .where(and(eq(alertSubscriptions.type, "price"), eq(alertSubscriptions.enabled, true)));
+  _priceAlertCacheTs = Date.now();
+  return _priceAlertCache;
+}
+
+async function checkPriceAlerts(mids: Record<string, number>) {
+  const subs = await getPriceAlertSubs();
 
   for (const sub of subs) {
     if (!sub.symbol || !sub.triggerPrice) continue;
@@ -218,18 +229,22 @@ async function checkPriceAlerts(mids: Record<string, number>) {
 
 async function bootstrap() {
   const keys = await redis.keys("ws:positions:*");
-  let count = 0;
-  for (const key of keys) {
-    const walletAddress = key.replace("ws:positions:", "");
-    const user = await db.query.users.findFirst({
-      where: eq(users.walletAddress, walletAddress),
-    });
-    if (user) {
-      await subscribeUser(walletAddress, user.telegramId);
-      count++;
-    }
+  if (keys.length === 0) {
+    logger.info({ count: 0 }, "WS worker bootstrapped");
+    subscribeAllMids();
+    return;
   }
-  logger.info({ count }, "WS worker bootstrapped");
+
+  const walletAddresses = keys.map((k) => k.replace("ws:positions:", ""));
+  const dbUsers = await db
+    .select({ walletAddress: users.walletAddress, telegramId: users.telegramId })
+    .from(users)
+    .where(inArray(users.walletAddress, walletAddresses));
+
+  for (const user of dbUsers) {
+    await subscribeUser(user.walletAddress, user.telegramId);
+  }
+  logger.info({ count: dbUsers.length }, "WS worker bootstrapped");
   subscribeAllMids();
 }
 

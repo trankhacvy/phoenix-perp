@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { setTpSl } from "../../services/phoenix/trade.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 
 export function registerSetSl(bot: Bot<BotContext>) {
@@ -27,14 +29,29 @@ export function registerSetSl(bot: Bot<BotContext>) {
       return;
     }
 
+    let positionSide: "long" | "short";
+    try {
+      const state = await getTraderState(ctx.user.walletAddress);
+      const pos = state.positions.find((p) => p.symbol === symbol);
+      if (!pos) {
+        await ctx.reply(`No open ${symbol} position found. Open a position first.`);
+        return;
+      }
+      positionSide = pos.side;
+    } catch {
+      await ctx.reply("❌ Failed to fetch position. Please try again.");
+      return;
+    }
+
     const kb = new InlineKeyboard()
-      .text("✅ Confirm", `setsl:confirm:${symbol}:${price}:${mode}`)
+      .text("✅ Confirm", `setsl:confirm:${symbol}:${price}:${mode}:${positionSide}`)
       .text("❌ Cancel", "cancel");
 
     await ctx.reply(
       [
         `🛑 <b>Set Stop-Loss: ${symbol}</b>`,
         ``,
+        `Side: <b>${positionSide.toUpperCase()}</b>`,
         `Trigger price: <code>$${price}</code>`,
         `Execution: <b>${mode === "market" ? "Market (IOC, ±10% buffer)" : "Limit"}</b>`,
       ].join("\n"),
@@ -42,17 +59,15 @@ export function registerSetSl(bot: Bot<BotContext>) {
     );
   });
 
-  bot.callbackQuery(/^setsl:confirm:(.+):([\d.]+):(market|limit)$/, async (ctx) => {
+  bot.callbackQuery(/^setsl:confirm:([A-Z0-9]+):([\d.]+):(market|limit):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Setting SL...");
     if (!ctx.user) return;
-    const [symbol, priceStr, mode] = ctx.match.slice(1) as [string, string, "market" | "limit"];
+    const [symbol, priceStr, mode, positionSide] = ctx.match.slice(1) as [string, string, "market" | "limit", "long" | "short"];
     try {
-      await setTpSl({
-        symbol,
-        walletAddress: ctx.user.walletAddress,
-        slPrice: Number(priceStr),
-        slMode: mode,
-      });
+      await setTpSl(
+        { symbol, walletAddress: ctx.user.walletAddress, positionSide, slPrice: Number(priceStr), slMode: mode },
+        getKitSigner(ctx.user.walletAddress),
+      );
       await ctx.editMessageText(`✅ Stop-loss for ${symbol} set at $${priceStr}.`);
     } catch {
       await ctx.editMessageText("❌ Failed to set stop-loss.");

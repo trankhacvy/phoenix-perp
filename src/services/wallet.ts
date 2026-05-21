@@ -1,6 +1,19 @@
 import type { Transaction, VersionedTransaction } from "@solana/web3.js";
+import { createKeyPairSignerFromBytes, type KeyPairSigner } from "@solana/signers";
+import bs58 from "bs58";
 import { config } from "../config/index.js";
 import { privy } from "../lib/privy.js";
+
+let _testSigner: KeyPairSigner | null = null;
+
+/** Call once at test-script startup to wire TEST_KEYPAIR into getKitSigner. */
+export async function initTestSigner(): Promise<string> {
+  const raw = process.env.TEST_KEYPAIR;
+  if (!raw) throw new Error("TEST_KEYPAIR env var not set");
+  const bytes = bs58.decode(raw);
+  _testSigner = await createKeyPairSignerFromBytes(bytes);
+  return _testSigner.address as string;
+}
 
 export async function createEmbeddedWallet(telegramUserId: string) {
   const user = await privy.importUser({
@@ -26,6 +39,15 @@ export function getWalletSigner(walletAddress: string) {
     });
     return signedTransaction;
   };
+}
+
+// TODO: implement Privy → @solana/kit signer bridge; see scripts/test-onchain.ts for on-chain testing
+export function getKitSigner(_walletAddress: string): KeyPairSigner {
+  if (_testSigner) return _testSigner;
+  throw new Error(
+    "Privy → @solana/kit signer bridge not yet implemented. " +
+    "Call initTestSigner() first (test scripts) or implement the Privy adapter.",
+  );
 }
 
 export async function activatePhoenixAccount(walletAddress: string) {

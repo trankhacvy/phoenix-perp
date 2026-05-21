@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { closePosition, setTpSl, addMargin } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { redis } from "../../lib/redis.js";
@@ -30,7 +31,7 @@ export function registerPositions(bot: Bot<BotContext>) {
           `Entry: <code>$${pos.entryPrice}</code>`,
           `Mark: <code>$${pos.markPrice}</code>`,
           `uPnL: <code>${pnlSign}${pos.unrealizedPnl} USDC</code>`,
-          `Liq price: <code>$${pos.liquidationPrice}</code>`,
+          `Liq price: <code>${pos.liquidationPrice === "N/A" ? "N/A (safe)" : `$${pos.liquidationPrice}`}</code>`,
           ``,
           `<i>Effective collateral uses discounted uPnL — liq price may shift with market moves or funding.</i>`,
         ].join("\n"),
@@ -39,7 +40,7 @@ export function registerPositions(bot: Bot<BotContext>) {
     }
   });
 
-  bot.callbackQuery(/^close:(.+):(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^close:([A-Z0-9]+):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Closing...");
     if (!ctx.user) return;
 
@@ -47,7 +48,7 @@ export function registerPositions(bot: Bot<BotContext>) {
     const fraction = Number(ctx.match[2]) / 100;
 
     try {
-      const sig = await closePosition(symbol, ctx.user.walletAddress, fraction);
+      const sig = await closePosition(symbol, ctx.user.walletAddress, getKitSigner(ctx.user.walletAddress), fraction);
       await ctx.editMessageText(
         `✅ Closed ${fraction * 100}% of ${symbol}\n\nTx: <code>${sig}</code>`,
         { parse_mode: "HTML" },
@@ -69,15 +70,23 @@ export function registerPositions(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^editsl:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
     const symbol = ctx.match[1];
+    const state = await getTraderState(ctx.user.walletAddress);
+    const pos = state.positions.find((p) => p.symbol === symbol);
+    const side = pos?.side ?? "long";
     await ctx.reply(`Enter new Stop-Loss price for <b>${symbol}</b>:`, { parse_mode: "HTML" });
-    await redis.set(`pending:${ctx.from.id}`, `editsl:${symbol}`, "EX", 120);
+    await redis.set(`pending:${ctx.from.id}`, `editsl:${symbol}:${side}`, "EX", 120);
   });
 
   bot.callbackQuery(/^edittp:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
     const symbol = ctx.match[1];
+    const state = await getTraderState(ctx.user.walletAddress);
+    const pos = state.positions.find((p) => p.symbol === symbol);
+    const side = pos?.side ?? "long";
     await ctx.reply(`Enter new Take-Profit price for <b>${symbol}</b>:`, { parse_mode: "HTML" });
-    await redis.set(`pending:${ctx.from.id}`, `edittp:${symbol}`, "EX", 120);
+    await redis.set(`pending:${ctx.from.id}`, `edittp:${symbol}:${side}`, "EX", 120);
   });
 }

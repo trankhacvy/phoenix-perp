@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { getMarket } from "../../services/phoenix/market.js";
+import { getMarketSnapshot, getMarketStatsHistory } from "../../services/phoenix/market.js";
 import { marketActionKeyboard } from "../keyboards/market.js";
 import type { BotContext } from "../../types/index.js";
 
@@ -11,17 +11,21 @@ export function registerPrice(bot: Bot<BotContext>) {
       return;
     }
 
-    const market = await getMarket(symbol);
+    const [snapshot, stats] = await Promise.all([
+      getMarketSnapshot(symbol),
+      getMarketStatsHistory(symbol, 1),
+    ]);
+
+    const oi = stats?.stats?.[0]?.open_interest;
+    const oiStr = oi != null ? String(oi) : "—";
 
     await ctx.reply(
       [
         `📈 <b>${symbol}</b>`,
         ``,
-        `Mark price: <code>$${market.markPrice ?? "—"}</code>`,
-        `Oracle price: <code>$${market.oraclePrice ?? "—"}</code>`,
-        `Funding APR: <code>${market.fundingRate ?? "—"}%</code>`,
-        `Open interest: <code>$${market.openInterest ?? "—"}</code>`,
-        `24h volume: <code>$${market.volume24h ?? "—"}</code>`,
+        `Mark price: <code>$${snapshot.markPrice.toFixed(4)}</code>`,
+        `Funding APR: <code>${(snapshot.fundingRate * 100).toFixed(4)}%</code>`,
+        `Open interest: <code>${oiStr}</code>`,
       ].join("\n"),
       { parse_mode: "HTML", reply_markup: marketActionKeyboard(symbol) },
     );

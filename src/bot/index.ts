@@ -3,6 +3,7 @@ import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { redis } from "../lib/redis.js";
 import { addMargin, setTpSl } from "../services/phoenix/trade.js";
+import { getKitSigner } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
 import { registerCommands } from "./commands/index.js";
 import { authMiddleware } from "./middleware/auth.js";
@@ -27,9 +28,10 @@ bot.on("message:text", async (ctx) => {
 
   await redis.del(pendingKey);
 
-  const colonIdx = pending.indexOf(":");
-  const action = pending.slice(0, colonIdx);
-  const symbol = pending.slice(colonIdx + 1);
+  const parts = pending.split(":");
+  const action = parts[0];
+  const symbol = parts[1];
+  const positionSide: "long" | "short" = parts[2] === "short" ? "short" : "long";
   const value = Number(ctx.message.text.trim());
 
   if (Number.isNaN(value) || value <= 0) {
@@ -38,14 +40,15 @@ bot.on("message:text", async (ctx) => {
   }
 
   try {
+    const signer = getKitSigner(ctx.user.walletAddress);
     if (action === "addmargin") {
-      await addMargin(symbol, ctx.user.walletAddress, value);
+      await addMargin(symbol, ctx.user.walletAddress, value, signer);
       await ctx.reply(`✅ Added $${value} USDC margin to ${symbol}.`);
     } else if (action === "editsl") {
-      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, slPrice: value });
+      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, positionSide, slPrice: value }, signer);
       await ctx.reply(`✅ Stop-loss for ${symbol} set to $${value}.`);
     } else if (action === "edittp") {
-      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, tpPrice: value });
+      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, positionSide, tpPrice: value }, signer);
       await ctx.reply(`✅ Take-profit for ${symbol} set to $${value}.`);
     }
   } catch {
@@ -62,4 +65,6 @@ bot.catch(async (err) => {
   }
 });
 
-export const handleWebhook = webhookCallback(bot, "fastify");
+export function handleWebhook() {
+  return webhookCallback(bot, "fastify");
+}

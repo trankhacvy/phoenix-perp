@@ -1,6 +1,9 @@
 import type { Bot, CallbackQueryContext } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { ISOLATED_ONLY_MARKETS, getMarkets } from "../../services/phoenix/market.js";
+import {
+  ISOLATED_ONLY_MARKETS,
+  getMarkets,
+} from "../../services/phoenix/market.js";
 import type { BotContext } from "../../types/index.js";
 
 const PAGE_SIZE = 10;
@@ -22,22 +25,16 @@ async function sendMarketsPage(
   page: number,
   edit: boolean,
 ) {
-  const data = await getMarkets();
-  const markets: Record<string, unknown>[] = Array.isArray(data) ? data : (data.markets ?? []);
-
-  const query = "markets" in ctx && typeof (ctx as BotContext & { match?: string }).match === "string"
-    ? ""
-    : "";
+  const markets = await getMarkets();
 
   const start = page * PAGE_SIZE;
   const slice = markets.slice(start, start + PAGE_SIZE);
   const totalPages = Math.ceil(markets.length / PAGE_SIZE);
 
   const lines = slice.map((m) => {
-    const symbol = String(m.symbol ?? m.name ?? "?");
-    const isIsolated = ISOLATED_ONLY_MARKETS.has(symbol);
+    const isIsolated = ISOLATED_ONLY_MARKETS.has(m.symbol) || m.isolatedOnly;
     const badge = isIsolated ? " [ISO]" : "";
-    return `• <b>${symbol}${badge}</b> $${m.markPrice ?? "—"} | ${m.fundingRate ?? "—"}% apr`;
+    return `• <b>${m.symbol}${badge}</b>`;
   });
 
   const kb = new InlineKeyboard();

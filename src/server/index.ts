@@ -10,7 +10,7 @@ export async function createServer() {
   await app.register(cors);
   await app.register(healthRoutes);
 
-  app.post(`/webhook/${config.TELEGRAM_BOT_TOKEN}`, handleWebhook);
+  app.post(`/webhook/${config.TELEGRAM_BOT_TOKEN}`, handleWebhook());
 
   return app;
 }
