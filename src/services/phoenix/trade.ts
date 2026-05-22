@@ -29,6 +29,7 @@ import {
 } from "@solana/signers";
 import { config } from "../../config/index.js";
 import { getTradingClient } from "./client.js";
+import { fractionToCloseLots } from "./lots.js";
 import { getMarket } from "./market.js";
 import { getTraderStateSnapshot } from "./position.js";
 
@@ -287,7 +288,7 @@ export async function closePosition(
 
   const rawLots = Number(pos.basePositionLots);
   const isLong = rawLots > 0;
-  const closeLots = BigInt(Math.round(Math.abs(rawLots) * fraction));
+  const closeLots = fractionToCloseLots(rawLots, fraction);
   const closeSide = isLong ? Side.Ask : Side.Bid;
 
   const orderPacket: ImmediateOrCancelOrderPacket = {

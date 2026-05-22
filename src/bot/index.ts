@@ -11,15 +11,18 @@ import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
 import { sendRemoveTpConfirm, sendTpModePicker } from "./commands/settp.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import { sendWithdrawConfirm } from "./commands/withdraw.js";
+import { renderBotError } from "./lib/errors.js";
 import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
 import { clearPending, getPending } from "./lib/pending.js";
 import { BASE58_RE } from "./lib/validate.js";
+import { actionLogMiddleware } from "./middleware/action-log.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
 
 export const bot = new Bot<BotContext>(config.TELEGRAM_BOT_TOKEN);
 
 bot.use(authMiddleware);
+bot.use(actionLogMiddleware);
 bot.use(rateLimitMiddleware);
 
 bot.command("long", orderRateLimitMiddleware);
@@ -149,7 +152,7 @@ bot.on("message:text", async (ctx) => {
 bot.catch(async (err) => {
   logger.error({ err: err.error, update: err.ctx.update }, "Bot error");
   try {
-    await err.ctx.reply("Something went wrong. Please try again.");
+    await renderBotError(err.ctx, err.error);
   } catch {
     // ctx may be invalid (e.g. callback query already answered)
   }

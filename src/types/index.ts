@@ -1,8 +1,17 @@
 import type { Context } from "grammy";
 import type { User } from "../db/schema/users.js";
 
+export interface ActionLogHint {
+  skip?: boolean;
+  outcome?: "success" | "error";
+  errorCode?: string;
+  errorCategory?: string;
+  txSignature?: string;
+}
+
 export interface BotContext extends Context {
   user?: User;
+  actionLog?: ActionLogHint;
 }
 
 // Phoenix risk tiers from traderState WebSocket

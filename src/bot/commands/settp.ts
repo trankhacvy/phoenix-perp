@@ -6,7 +6,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
@@ -91,7 +91,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.editMessageText(`✅ Take profit removed for ${symbol}.`);
     } catch (e) {
       logger.error({ err: e, symbol }, "cancelStopLoss (TP) failed");
-      await ctx.editMessageText(formatTradeError(e, "Remove take profit"), { parse_mode: "HTML" });
+      await renderBotError(ctx, e, { action: "Remove take profit", edit: true });
     }
   });
 
@@ -119,7 +119,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
       logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (TP) failed");
-      await ctx.editMessageText(formatTradeError(e, "Set take profit"), { parse_mode: "HTML" });
+      await renderBotError(ctx, e, { action: "Set take profit", edit: true });
     }
   });
 
@@ -182,7 +182,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
       logger.error({ err: e, symbol }, "tp_ladder_exec failed");
-      await ctx.editMessageText(formatTradeError(e, "Ladder TP"), { parse_mode: "HTML" });
+      await renderBotError(ctx, e, { action: "Ladder TP", edit: true });
     }
   });
 }

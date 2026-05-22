@@ -6,7 +6,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
@@ -89,7 +89,7 @@ export function registerSetSl(bot: Bot<BotContext>) {
       await ctx.editMessageText(`✅ Stop loss removed for ${symbol}.`);
     } catch (e) {
       logger.error({ err: e, symbol }, "cancelStopLoss failed");
-      await ctx.editMessageText(formatTradeError(e, "Remove stop loss"), { parse_mode: "HTML" });
+      await renderBotError(ctx, e, { action: "Remove stop loss", edit: true });
     }
   });
 
@@ -117,7 +117,7 @@ export function registerSetSl(bot: Bot<BotContext>) {
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
       logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (SL) failed");
-      await ctx.editMessageText(formatTradeError(e, "Set stop loss"), { parse_mode: "HTML" });
+      await renderBotError(ctx, e, { action: "Set stop loss", edit: true });
     }
   });
 }
