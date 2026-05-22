@@ -2,18 +2,20 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
+import { trackAction } from "../../services/action-log.js";
+import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
+import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError, toBotError } from "../lib/errors.js";
 import {
   price as fmtPrice,
   fundingApr,
@@ -98,21 +100,63 @@ export function registerLong(bot: Bot<BotContext>) {
   bot.callbackQuery(/^confirm:long:([A-Z0-9]+):([\d.]+):([\d.]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Opening trade…");
     if (!ctx.user) return;
-    const [symbol, leverageStr, sizeStr, markPriceStr] = ctx.match.slice(1);
+    const [symbol, leverageStr, sizeStr, anchorStr] = ctx.match.slice(1);
     const lev = Number(leverageStr);
     const sizeUsdc = Number(sizeStr);
-    const markPrice = Number(markPriceStr);
+    const anchorPrice = Number(anchorStr);
+
+    let pf: PreflightResult;
+    try {
+      pf = await preflightOpen({
+        user: ctx.user,
+        symbol,
+        side: "long",
+        marginUsdc: sizeUsdc,
+        leverage: lev,
+        anchorPrice,
+      });
+    } catch (e) {
+      const be = toBotError(e);
+      ctx.actionLog = { outcome: "error", errorCode: be.code, errorCategory: be.category };
+      const kb = new InlineKeyboard()
+        .text("Try again", `trade:long:${symbol}`)
+        .text("← Back", "nav:positions");
+      await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
+      return;
+    }
 
     try {
-      const sig = await placeMarketOrder(
-        {
-          symbol,
-          side: "long",
-          baseUnits: String((sizeUsdc * lev) / markPrice),
-          walletAddress: ctx.user.walletAddress,
-        },
-        getKitSigner(ctx.user.walletAddress),
+      const baseUnits = marginToTokens(
+        pf.snapshot,
+        sizeUsdc,
+        pf.effectiveLeverage,
+        anchorPrice > 0 ? anchorPrice : undefined,
       );
+      const userId = ctx.user.id;
+      const walletAddress = ctx.user.walletAddress;
+      const sig = await trackAction(
+        {
+          userId,
+          command: "trade.long",
+          args: {
+            symbol,
+            leverage: pf.effectiveLeverage,
+            marginUsdc: sizeUsdc,
+            notional: pf.notional,
+          },
+        },
+        () =>
+          placeMarketOrder(
+            {
+              symbol,
+              side: "long",
+              baseUnits,
+              walletAddress,
+            },
+            getKitSigner(walletAddress),
+          ),
+      );
+      ctx.actionLog = { skip: true };
       await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
 
       const kb = new InlineKeyboard()
@@ -121,8 +165,7 @@ export function registerLong(bot: Bot<BotContext>) {
         .text("🛑 Set stop loss", `editsl:${symbol}:long`)
         .text("🎯 Set take profit", `edittp:${symbol}:long`);
 
-      const totalFee = (sizeUsdc * lev * (3.5 + config.BUILDER_FEE_BPS)) / 10000;
-      const msg = fmt`✅ ${FormattedString.b("Trade opened!")}\n\n🟢 ${symbol}/USD — Long ${lev}x\nPosition: ${FormattedString.b(usd(sizeUsdc * lev))}\nFee paid: ${FormattedString.b(usd(totalFee))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      const msg = fmt`✅ ${FormattedString.b("Trade opened!")}\n\n🟢 ${symbol}/USD — Long ${pf.effectiveLeverage}x\nPosition: ${FormattedString.b(usd(pf.notional))}\nFee paid: ${FormattedString.b(usd(pf.feeUsdc))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
       await ctx.editMessageText(msg.text, {
         entities: msg.entities,
         reply_markup: kb,
@@ -130,13 +173,11 @@ export function registerLong(bot: Bot<BotContext>) {
       });
     } catch (e) {
       logger.error({ err: e, symbol, side: "long" }, "placeMarketOrder failed");
+      ctx.actionLog = { skip: true };
       const kb = new InlineKeyboard()
         .text("Try again", `trade:long:${symbol}`)
         .text("← Back", "nav:positions");
-      await ctx.editMessageText(formatTradeError(e, "Trade"), {
-        parse_mode: "HTML",
-        reply_markup: kb,
-      });
+      await renderBotError(ctx, e, { action: "Trade", edit: true, replyMarkup: kb });
     }
   });
 }
@@ -236,50 +277,24 @@ export async function sendTradeConfirm(
   sizeUsdc: number,
 ): Promise<void> {
   if (!ctx.user) return;
-  const [snapshot, state] = await Promise.all([
-    getMarketSnapshot(symbol).catch(() => null),
-    getTraderState(ctx.user.walletAddress),
-  ]);
 
-  if (!snapshot) {
-    await ctx.reply(`Market "${symbol}" not found.`);
+  let pf: PreflightResult;
+  try {
+    pf = await preflightOpen({
+      user: ctx.user,
+      symbol,
+      side,
+      marginUsdc: sizeUsdc,
+      leverage: lev,
+    });
+  } catch (e) {
+    await renderBotError(ctx, e, { action: "Trade preview" });
     return;
   }
 
-  const available = Number(state.effectiveCollateral);
-  if (sizeUsdc > available) {
-    const msg = fmt`You only have ${FormattedString.b(usd(available))} available. Enter a smaller amount.`;
-    await ctx.reply(msg.text, { entities: msg.entities });
-    return;
-  }
-  const effectiveLev = Math.min(lev, snapshot.maxLeverage);
-  const notional = sizeUsdc * effectiveLev;
-
-  if (snapshot.leverageTiers.length > 0) {
-    const sortedTiers = [...snapshot.leverageTiers].sort(
-      (a, b) => a.maxNotionalUsdc - b.maxNotionalUsdc,
-    );
-    const fittingTier = sortedTiers.find((t) => notional <= t.maxNotionalUsdc);
-    if (!fittingTier) {
-      await ctx.reply(`Position too large for ${symbol}. Reduce your size.`);
-      return;
-    }
-    if (effectiveLev > fittingTier.maxLeverage) {
-      const msg = fmt`⚠️ At ${FormattedString.b(usd(notional))} notional, max leverage is ${FormattedString.b(`${fittingTier.maxLeverage}x`)}.\n\nReduce your position size or lower your leverage.`;
-      await ctx.reply(msg.text, { entities: msg.entities });
-      return;
-    }
-  }
+  const { snapshot, effectiveLeverage, notional, feeUsdc, liqPrice, totalCost } = pf;
   const entry = snapshot.markPrice;
-  const mmFrac = 0.5 / snapshot.maxLeverage;
-  const liqPrice =
-    side === "long"
-      ? entry * (1 - 1 / effectiveLev + mmFrac)
-      : entry * (1 + 1 / effectiveLev - mmFrac);
-  const liqPct = (100 / effectiveLev).toFixed(0);
-
-  const totalFee = (notional * (3.5 + config.BUILDER_FEE_BPS)) / 10000;
-  const totalCost = sizeUsdc + totalFee;
+  const liqPct = (100 / effectiveLeverage).toFixed(0);
 
   const absApr = Math.abs(snapshot.fundingRate * 1095 * 100);
   const fundingPerDay = (notional * Math.abs(snapshot.fundingRate) * 3).toFixed(2);
@@ -295,10 +310,10 @@ export async function sendTradeConfirm(
   const kb = new InlineKeyboard()
     .text(
       "✅ Open trade",
-      `confirm:${side}:${symbol}:${effectiveLev}:${sizeUsdc}:${entry.toFixed(4)}`,
+      `confirm:${side}:${symbol}:${effectiveLeverage}:${sizeUsdc}:${entry.toFixed(8)}`,
     )
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📋 ${FormattedString.b("Confirm your trade")}\n\n${emoji} ${symbol}/USD — ${label} ${effectiveLev}x\n\nPosition value  ${FormattedString.b(usd(notional))}\nYour margin     ${FormattedString.b(usd(sizeUsdc))}\nEntry price     ${FormattedString.b(`~${fmtPrice(entry)}`)}\nFee             ${FormattedString.b(usd(totalFee))}\nTotal cost      ${FormattedString.b(usd(totalCost))}\n\nLiquidated if price ${dirWord} ${FormattedString.b(fmtPrice(liqPrice))}  ${FormattedString.i(`(-${liqPct}%)`)}${fundingNote}`;
+  const msg = fmt`📋 ${FormattedString.b("Confirm your trade")}\n\n${emoji} ${symbol}/USD — ${label} ${effectiveLeverage}x\n\nPosition value  ${FormattedString.b(usd(notional))}\nYour margin     ${FormattedString.b(usd(sizeUsdc))}\nEntry price     ${FormattedString.b(`~${fmtPrice(entry)}`)}\nFee             ${FormattedString.b(usd(feeUsdc))}\nTotal cost      ${FormattedString.b(usd(totalCost))}\n\nLiquidated if price ${dirWord} ${FormattedString.b(fmtPrice(liqPrice))}  ${FormattedString.i(`(-${liqPct}%)`)}${fundingNote}`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

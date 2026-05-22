@@ -7,7 +7,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { withdrawCollateral } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError } from "../lib/errors.js";
 import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
@@ -75,7 +75,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       });
     } catch (err) {
       logger.error({ err }, "Withdrawal failed");
-      await ctx.editMessageText(formatTradeError(err, "Withdrawal"), { parse_mode: "HTML" });
+      await renderBotError(ctx, err, { action: "Withdrawal", edit: true });
     }
   });
 

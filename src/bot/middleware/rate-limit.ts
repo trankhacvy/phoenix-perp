@@ -18,6 +18,7 @@ export async function rateLimitMiddleware(ctx: BotContext, next: NextFunction) {
   }
 
   if (count > LIMIT) {
+    ctx.actionLog = { outcome: "error", errorCode: "RATE_LIMIT", errorCategory: "ratelimit" };
     await ctx.reply("Too many requests. Please wait a moment.");
     return;
   }
@@ -33,6 +34,7 @@ export async function orderRateLimitMiddleware(ctx: BotContext, next: NextFuncti
   if (count === 1) await redis.expire(key, WINDOW_SECONDS);
 
   if (count > ORDER_LIMIT) {
+    ctx.actionLog = { outcome: "error", errorCode: "RATE_LIMIT", errorCategory: "ratelimit" };
     await ctx.reply("Too many orders. Please wait a minute.");
     return;
   }

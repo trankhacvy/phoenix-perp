@@ -8,7 +8,7 @@ import { addMargin, closePosition } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError } from "../lib/errors.js";
 import {
   cryptoSize,
   price as fmtPrice,
@@ -55,7 +55,10 @@ function formatLiqValue(pos: PhoenixPosition): { text: string; warn: boolean } {
 
 // ─── List view ────────────────────────────────────────────────────────────────
 
-export function buildPositionRows(positions: PhoenixPosition[], botUsername: string): FormattedString[] {
+export function buildPositionRows(
+  positions: PhoenixPosition[],
+  botUsername: string,
+): FormattedString[] {
   return positions.map((pos, i) => {
     const upnl = Number(pos.unrealizedPnl);
     const upnlPct = calcPnlPct(pos);
@@ -317,10 +320,7 @@ export function registerPositions(bot: Bot<BotContext>) {
     } catch (e) {
       logger.error({ err: e, symbol, fraction }, "closePosition failed");
       const kb = new InlineKeyboard().text("← Back", "nav:positions");
-      await ctx.editMessageText(formatTradeError(e, "Close position"), {
-        parse_mode: "HTML",
-        reply_markup: kb,
-      });
+      await renderBotError(ctx, e, { action: "Close position", edit: true, replyMarkup: kb });
     }
   });
 
@@ -352,9 +352,7 @@ export function registerPositions(bot: Bot<BotContext>) {
       await ctx.editMessageText(doneMsg.text, { entities: doneMsg.entities });
     } catch (e) {
       logger.error({ err: e, symbol, amount }, "addMargin failed");
-      await ctx.editMessageText(formatTradeError(e, "Add margin"), {
-        parse_mode: "HTML",
-      });
+      await renderBotError(ctx, e, { action: "Add margin", edit: true });
     }
   });
 

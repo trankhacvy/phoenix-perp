@@ -1,15 +1,17 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { config } from "../../config/index.js";
 import { logger } from "../../lib/logger.js";
+import { trackAction } from "../../services/action-log.js";
+import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
+import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
-import { formatTradeError } from "../lib/errors.js";
+import { renderBotError, toBotError } from "../lib/errors.js";
 import { parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 import { sendLeveragePicker, sendSizePicker, sendSymbolPicker, sendTradeConfirm } from "./long.js";
@@ -87,21 +89,63 @@ export function registerShort(bot: Bot<BotContext>) {
   bot.callbackQuery(/^confirm:short:([A-Z0-9]+):([\d.]+):([\d.]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Opening trade…");
     if (!ctx.user) return;
-    const [symbol, leverageStr, sizeStr, markPriceStr] = ctx.match.slice(1);
+    const [symbol, leverageStr, sizeStr, anchorStr] = ctx.match.slice(1);
     const lev = Number(leverageStr);
     const sizeUsdc = Number(sizeStr);
-    const markPrice = Number(markPriceStr);
+    const anchorPrice = Number(anchorStr);
+
+    let pf: PreflightResult;
+    try {
+      pf = await preflightOpen({
+        user: ctx.user,
+        symbol,
+        side: "short",
+        marginUsdc: sizeUsdc,
+        leverage: lev,
+        anchorPrice,
+      });
+    } catch (e) {
+      const be = toBotError(e);
+      ctx.actionLog = { outcome: "error", errorCode: be.code, errorCategory: be.category };
+      const kb = new InlineKeyboard()
+        .text("Try again", `trade:short:${symbol}`)
+        .text("← Back", "nav:positions");
+      await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
+      return;
+    }
 
     try {
-      const sig = await placeMarketOrder(
-        {
-          symbol,
-          side: "short",
-          baseUnits: String((sizeUsdc * lev) / markPrice),
-          walletAddress: ctx.user.walletAddress,
-        },
-        getKitSigner(ctx.user.walletAddress),
+      const baseUnits = marginToTokens(
+        pf.snapshot,
+        sizeUsdc,
+        pf.effectiveLeverage,
+        anchorPrice > 0 ? anchorPrice : undefined,
       );
+      const userId = ctx.user.id;
+      const walletAddress = ctx.user.walletAddress;
+      const sig = await trackAction(
+        {
+          userId,
+          command: "trade.short",
+          args: {
+            symbol,
+            leverage: pf.effectiveLeverage,
+            marginUsdc: sizeUsdc,
+            notional: pf.notional,
+          },
+        },
+        () =>
+          placeMarketOrder(
+            {
+              symbol,
+              side: "short",
+              baseUnits,
+              walletAddress,
+            },
+            getKitSigner(walletAddress),
+          ),
+      );
+      ctx.actionLog = { skip: true };
       await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
 
       const kb = new InlineKeyboard()
@@ -110,8 +154,7 @@ export function registerShort(bot: Bot<BotContext>) {
         .text("🛑 Set stop loss", `editsl:${symbol}:short`)
         .text("🎯 Set take profit", `edittp:${symbol}:short`);
 
-      const totalFee = (sizeUsdc * lev * (3.5 + config.BUILDER_FEE_BPS)) / 10000;
-      const msg = fmt`✅ ${FormattedString.b("Trade opened!")}\n\n🔴 ${symbol}/USD — Short ${lev}x\nPosition: ${FormattedString.b(usd(sizeUsdc * lev))}\nFee paid: ${FormattedString.b(usd(totalFee))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      const msg = fmt`✅ ${FormattedString.b("Trade opened!")}\n\n🔴 ${symbol}/USD — Short ${pf.effectiveLeverage}x\nPosition: ${FormattedString.b(usd(pf.notional))}\nFee paid: ${FormattedString.b(usd(pf.feeUsdc))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
       await ctx.editMessageText(msg.text, {
         entities: msg.entities,
         reply_markup: kb,
@@ -119,13 +162,11 @@ export function registerShort(bot: Bot<BotContext>) {
       });
     } catch (e) {
       logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
+      ctx.actionLog = { skip: true };
       const kb = new InlineKeyboard()
         .text("Try again", `trade:short:${symbol}`)
         .text("← Back", "nav:positions");
-      await ctx.editMessageText(formatTradeError(e, "Trade"), {
-        parse_mode: "HTML",
-        reply_markup: kb,
-      });
+      await renderBotError(ctx, e, { action: "Trade", edit: true, replyMarkup: kb });
     }
   });
 }

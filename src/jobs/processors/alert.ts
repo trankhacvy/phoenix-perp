@@ -1,5 +1,6 @@
 import { Worker } from "bullmq";
 import { bot } from "../../bot/index.js";
+import { toBotError } from "../../bot/lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import type { AlertJobData } from "../queues.js";
@@ -9,8 +10,6 @@ export const alertWorker = new Worker<AlertJobData>(
   async (job) => {
     const { telegramId, message } = job.data;
 
-    // Telegram rate limit: 1 msg/sec per user chat
-    // Redis dedup: skip if same alert type sent within 5s
     const dedupKey = `alert:dedup:${telegramId}:${job.data.type}:${job.data.symbol ?? ""}`;
     const already = await redis.set(dedupKey, "1", "EX", 5, "NX");
     if (!already) {
@@ -18,8 +17,20 @@ export const alertWorker = new Worker<AlertJobData>(
       return;
     }
 
-    await bot.api.sendMessage(telegramId, message, { parse_mode: "HTML" });
-    logger.info({ telegramId, type: job.data.type }, "Alert sent");
+    try {
+      await bot.api.sendMessage(telegramId, message, { parse_mode: "HTML" });
+      logger.info({ telegramId, type: job.data.type }, "Alert sent");
+    } catch (err) {
+      const be = toBotError(err);
+      if (!be.retryable) {
+        logger.warn(
+          { code: be.code, telegramId, type: job.data.type },
+          "Dropping non-retryable alert",
+        );
+        return;
+      }
+      throw err;
+    }
   },
   {
     connection: redis,
