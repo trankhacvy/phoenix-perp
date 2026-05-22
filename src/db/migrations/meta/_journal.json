@@ -15,6 +15,13 @@
       "when": 1747900800000,
       "tag": "0001_action_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779467911803,
+      "tag": "0002_clear_ben_grimm",
+      "breakpoints": true
     }
   ]
 }

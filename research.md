@@ -1,343 +1,297 @@
 # Phoenix Perp Bot — Deep Research Report
 
-## 1. What This Project Is
+## What It Is
 
-A Telegram-based perpetual futures trading bot for **Phoenix Protocol** on Solana. Users interact entirely through Telegram commands (no web UI). The bot manages wallets via Privy custody, routes trades through the Rise/Phoenix SDK, streams live risk data via WebSocket, and dispatches asynchronous alerts through a BullMQ job queue.
-
----
-
-## 2. Technology Stack
-
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js 22+, TypeScript 5.7 (ESM, NodeNext modules) |
-| Bot framework | grammY |
-| Blockchain | @solana/kit + @ellipsis-labs/rise (Phoenix SDK) |
-| Wallet custody | Privy (server-side embedded wallets) |
-| Database | PostgreSQL via Drizzle ORM (postgres.js) |
-| Job queue | BullMQ (backed by Redis) |
-| Cache / state | IoRedis |
-| HTTP server | Fastify (webhook mode) |
-| Image generation | satori (JSX → SVG) + sharp (SVG → PNG) |
-| Linter/formatter | Biome 1.9.4 |
-| Tests | Vitest (unit + integration) |
-| Package manager | pnpm 10.15+ |
+A Telegram trading bot for **Phoenix Protocol perpetual futures**. Users interact entirely through Telegram: opening/closing positions, depositing/withdrawing collateral, setting TP/SL, monitoring portfolios, and earning referral fees. The bot creates **server-side embedded Solana wallets** (via Privy) so users never need to handle keys.
 
 ---
 
-## 3. Process Architecture
+## Process Model (Three Independent Services)
 
-Three independently deployed processes (intended for separate Railway services):
+The application is split into three Railway-deployed services that never call each other directly:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Bot process  (src/main.ts)                                  │
-│  grammY + Fastify webhook server                             │
-│  Handles all Telegram commands and user interactions         │
-└──────────────────┬───────────────────────────────────────────┘
-                   │ writes jobs to BullMQ
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│  Alert worker  (src/workers/alert.ts)                        │
-│  BullMQ consumer → dedup → bot.api.sendMessage               │
-└──────────────────────────────────────────────────────────────┘
+| Service | Entry Point | Role |
+|---|---|---|
+| **Bot** | `src/main.ts` | grammY bot + Fastify webhook server |
+| **WS Worker** | `src/workers/ws.ts` | Phoenix WebSocket subscriptions, event detection |
+| **Alert Worker** | `src/workers/alert.ts` | BullMQ consumer, Telegram message dispatch |
 
-┌──────────────────────────────────────────────────────────────┐
-│  WS worker  (src/workers/ws.ts)                              │
-│  Phoenix WebSocket subscriptions                             │
-│  Detects fills, risk changes, price alerts → alertQueue      │
-└──────────────────────────────────────────────────────────────┘
-```
-
-The bot process and WS worker both write to `alertQueue`; the alert worker exclusively reads from it. No direct cross-process calls.
+The WS worker detects events and writes jobs to a BullMQ `alertQueue`. The alert worker consumes those jobs and calls `bot.api.sendMessage`. This decoupling means real-time event detection and user notification are independently scalable and can fail without taking each other down.
 
 ---
 
-## 4. Request Flow
+## Startup (`src/main.ts`)
 
-```
-Telegram update
-  → POST /webhook/<token>  (Fastify)
-  → handleWebhook()  (grammY webhookCallback)
-  → authMiddleware  (loads ctx.user from DB by telegramId)
-  → rateLimitMiddleware  (Redis INCR, 20 req/min)
-  → command handler
-```
-
-`ctx.user` is `undefined` for new users; `/start` handles onboarding. All other handlers guard with `if (!ctx.user)`. Multi-step flows store transient state in Redis under `pending:<telegramId>` (10-minute TTL); a catch-all `bot.on("message:text")` handler dispatches based on this key.
+1. Validate all env vars via Zod (`src/config/index.ts`) — crashes loudly on any missing/invalid field
+2. Initialize test signer if `TEST_KEYPAIR` env var is set (dev shortcut)
+3. Start daily action log retention job (deletes entries >30 days old)
+4. Mode selection:
+   - **Production** (if `WEBHOOK_URL` set): Fastify server + Telegram webhook registration
+   - **Development**: grammY long-polling, no server
 
 ---
 
-## 5. Database Schema
+## Request Pipeline
+
+```
+Telegram → POST /webhook/<token>  (Fastify)
+  → authMiddleware         loads ctx.user from DB by telegramId
+  → actionLogMiddleware    wraps execution, times it, writes DB audit entry
+  → rateLimitMiddleware    Redis INCR, 20 req/min global / 5 orders/min
+  → command handler        guards if (!ctx.user), executes logic
+  → bot.catch()            converts errors to BotError, renders to user
+```
+
+**Multi-step flows** (e.g., long order entry) use Redis pending state:
+- User sends `/long` → bot stores `pending:<telegramId>` = `"trade_leverage:long:SOL"` → asks for leverage
+- User replies with text → `bot.on("message:text")` reads pending key → dispatches to next step → clears pending
+
+---
+
+## Database (Drizzle ORM + PostgreSQL)
+
+Six schema files in `src/db/schema/`:
 
 ### `users`
-- `id` — telegram user ID (string PK)
-- `telegramId` (unique), `username`, `firstName`
-- `privyUserId`, `walletAddress` — Privy embedded wallet
-- `phoenixActivated` — whether POST `/v1/invite/activate` succeeded
-- `referralCode` — 8-char uppercase hex, bot-native
-- `referredBy` — code used at signup
+Primary identity table. `id` = `telegramId` (string PK). Holds Privy userId, embedded wallet address, Phoenix activation status, and bot-native referral code.
 
 ### `alert_subscriptions`
-- `userId` (FK → users, cascade), `type` (pgEnum), `symbol` (nullable)
-- `triggerPrice` — for price alerts only
-- `enabled` boolean
+Per-user alert type toggles. Eight alert types: `at_risk`, `cancellable`, `liquidatable`, `fill`, `tpsl_flip`, `price`, `funding_flip`, `large_funding`. `symbol` is nullable (null = all markets). `triggerPrice` only populated for price alerts.
 
-Alert types: `at_risk`, `cancellable`, `liquidatable`, `fill`, `tpsl_flip`, `price`, `funding_flip`, `large_funding`
+### `wallet_monitors`
+External wallet tracking. Users can watch any Solana address and get alerts on fills or position changes. Unique constraint on `(userId, watchedWallet)`.
 
 ### `referrals`
-- `referrerId`, `refereeId` (FKs → users, cascade)
-- `tier` (pgEnum): `t1` | `t2`
-- `accruedUsdc`, `claimedUsdc` — numeric(20,6); bot-funded rebate tracking
+T1/T2 multi-level referral chain. `tier` is `"t1"` (direct) or `"t2"` (indirect). Tracks `accruedUsdc` and `claimedUsdc` as `numeric(20,6)` for precision.
 
-### `settings`
-- `userId` (PK, FK → users, cascade)
-- `slippageBps` (default 50 = 0.5%), `defaultLeverage` (default 5x)
+### `user_settings`
+Per-user defaults: `slippageBps` (default 50), `defaultLeverage` (default 5).
 
----
-
-## 6. Command Inventory (22 commands)
-
-### Account
-| Command | Description |
-|---|---|
-| `/start [code]` | Onboarding: jurisdiction attestation, Privy wallet creation, Phoenix activation, referral link. Also handles deep links from `/positions` (`pos_<symbol>_<side>`) and `/history` (`hist_<idx>_<page>`). |
-| `/balance` | Deposited USDC, available margin, unrealized PnL, unsettled funding, SOL gas, risk tier |
-| `/deposit` | QR code to embedded wallet address |
-| `/withdraw [amount]` | Two-step with 5-minute security delay |
-| `/export` | Private key export notice (Privy dashboard link) |
-
-### Trading
-| Command | Description |
-|---|---|
-| `/long [symbol] [lev] [size]` | Open long; guided flow or one-liner |
-| `/short [symbol] [lev] [size]` | Open short |
-| `/positions` | List open positions; deep-link to detail with close/margin/SL-TP actions |
-| `/markets` | Browse all markets paginated (10/page) with price and funding APR |
-| `/price <symbol>` | Mark price, funding APR, OI, fees, technical indicators, long/short actions |
-| `/setsl <symbol>` | Set stop loss (presets −2% to −20%, custom, market/limit mode) |
-| `/settp <symbol>` | Set take profit (presets +5% to +50%, custom, ladder exit) |
-
-### History & Analytics
-| Command | Description |
-|---|---|
-| `/history` | Paginated trade history (5/page, last 30 trades). Each row: size, fill price, trade value (opens) or realized PnL (closes). Deep-link per row to full detail + Solscan. |
-| `/pnl` | Unrealized PnL + pending funding across all positions |
-| `/portfolio` | Full account snapshot — balance + all open positions in one view |
-| `/share <symbol>` | Generates PNG P&L card via satori/sharp |
-
-### Referral
-| Command | Description |
-|---|---|
-| `/referral` | T1/T2 counts, total accrued, claimable USDC, referral link |
-| `/claim` | Claims accrued rebate (min $1) |
-
-### Alerts
-| Command | Description |
-|---|---|
-| `/alerts` | Toggle 7 alert types per-user (at-risk, cancellable, liquidatable, fill, TP/SL flip, funding flip, large funding) |
-| `/alert <symbol>` | Set price alert; fires once when price crosses target |
-
-### Settings & Info
-| Command | Description |
-|---|---|
-| `/settings` | Slippage (0.1–2%) + default leverage (2x–50x) presets |
-| `/funding` | Top 10 markets by funding rate magnitude with APR |
+### `action_logs`
+Audit trail for every command. Records command name, redacted args (jsonb), outcome, error code/category, duration in ms, and tx signature. Indexed on `(userId, createdAt)` and `(command, createdAt)` for efficient retention cleanup. Kept 30 days.
 
 ---
 
-## 7. Phoenix Integration
+## Phoenix Integration (`src/services/phoenix/`)
 
-### Clients (`src/services/phoenix/client.ts`)
-Two singletons from `@ellipsis-labs/rise`:
-- **Read client** — `getPhoenixClient()`: no exchange metadata stream
-- **Trading client** — `getTradingClient()`: Flight routing enabled if `BUILDER_AUTHORITY_PUBKEY` is ≥43 chars
+### Market data (`market.ts`)
+- `getMarkets()` — cached 60s
+- `getMarketSnapshot(symbol)` — rich struct: `markPrice, tickSize, baseLotsDecimals, maxLeverage, takerFee, makerFee, fundingRate, leverageTiers[]`
+- `ISOLATED_ONLY_MARKETS` — GOLD, SILVER, SKR, WTIOIL require isolated subaccounts (not cross-margin)
+- `getOrderbook(symbol)` — mid-price, bid/ask levels
 
-### Markets (`src/services/phoenix/market.ts`)
-- `ISOLATED_ONLY_MARKETS`: `Set(['GOLD', 'SILVER', 'SKR', 'WTIOIL'])` — require isolated subaccount
-- `getMarketSnapshot(symbol)` — 3 parallel calls: market config + mid price + funding rate
-- `MarketSnapshot` type: markPrice, tickSize, baseLotsDecimals, maxLeverage, taker/makerFee, fundingRate, openInterest, isIsolatedOnly
+### Position tracking (`position.ts`)
+- `getTraderState(walletAddress)` — aggregates cross + all isolated subaccounts, flattens all positions into a single list
+  - Subaccount index 0 = cross-margin; >0 = isolated
+  - Risk tier extracted from cross account
+- `getTradeHistory(walletAddress)` + `fetchAllTradeHistory()` — paginated fills
+- `computeWalletAnalytics(trades)` — PnL, win rate, best/worst trade, per-market breakdown
 
-### Positions (`src/services/phoenix/position.ts`)
-- `getTraderState(walletAddress)` — REST → parses nested subaccounts response
-  - Side derived from sign of `virtualQuotePosition`
-  - markPrice derived from `positionValue / size`
-- `getTradeHistory(walletAddress, limit)` — fills with realized P&L, cursor-based pagination
-  - `TradeHistoryEntry` fields: `symbol`, `side`, `realizedPnl`, `price`, `size`, `fee?` (mapped defensively as `(r as any).fee`), `timestamp`, `signature`, `instructionType`
-  - `instructionType === "ReduceOnly"` identifies closing trades; open trades may carry `"Market"` / `"Limit"` / `"PostOnly"` (detected by substring match in `history.ts`)
+### Trading (`trade.ts`)
+All functions accept a `KeyPairSigner` from `getKitSigner()`.
 
-### Trades (`src/services/phoenix/trade.ts`)
-- `placeMarketOrder()`, `placeLimitOrder()` — via `@ellipsis-labs/rise`
-- `closePosition(symbol, wallet, signer, fraction)` — reduce-only IOC
-- `setTpSl()`, `cancelStopLoss()` — risk management orders
-- `addMargin()`, `depositCollateral()`, `withdrawCollateral()` — collateral management
-- Internal: `sendInstruction()` / `sendInstructions()` serialize, sign, and broadcast; block hash is cached
+- `placeMarketOrder(params, signer)` → tx signature
+- `placeLimitOrder(params, signer)` → tx signature
+- `setTpSl(params, signer)` — supports multiple TP/SL levels per position, "market" (IOC) or "limit" execution
+- `closePosition(symbol, walletAddress, signer, fraction=1)` — 0.5 = half close
+- `cancelStopLoss(symbol, walletAddress, direction, signer)` — directions: `long_sl`, `long_tp`, `short_sl`, `short_tp`
+- `addMargin(...)` — add collateral to open position
+- `depositCollateral(...)` / `withdrawCollateral(...)` — account-level deposits/withdrawals
 
-### Key Phoenix Facts
-- **Phoenix USDC** (`PhUsd...`) ≠ standard USDC (`EPjFWdd5...`); goes through **Ember proxy** (1:1 wrap)
-- Account PDA: `(wallet_authority, portfolio_index, subaccount_index)` — `subaccount_index=0` = cross-margin
-- Builder fees: 10–15 bps taker-only; user activation via `POST /v1/invite/activate`
+**Note**: The Rise SDK (`@ellipsis-labs/rise`) is listed in `package.json` at v0.4.9 but `client.ts` contains stubs that throw. Actual SDK integration is not yet implemented — all trade execution will fail until this bridge is completed.
+
+### Size calculation (`lots.ts`)
+- `marginToTokens(snap, marginUsdc, leverage, priceOverride?)` — converts USDC margin + leverage to base token amount, validates minimum size, rounds to `baseLotsDecimals`
+- `fractionToCloseLots(rawLots, fraction)` — calculates base lots to close for a partial exit
+
+### Preflight validation (`preflight.ts`)
+Runs before every order placement. Checks:
+1. Account is activated on Phoenix
+2. Market is not isolated-only (for cross-margin orders)
+3. Margin and leverage are within valid ranges
+4. Market exists and has a valid price
+5. Collateral balance covers margin + fees
+6. Doesn't exceed leverage tier caps
+7. Mark price hasn't drifted >50bps from anchor quote
+
+Returns: effective leverage, notional size, fee breakdown, estimated liquidation price.
+
+### Client singletons (`client.ts`)
+- `getPhoenixClient()` — read-only, no Flight routing
+- `getTradingClient()` — trading client with optional Flight builder routing (if `BUILDER_AUTHORITY_PUBKEY` is a valid pubkey)
 
 ---
 
-## 8. Wallet & Signing
+## Wallet & Identity (`src/services/wallet.ts`)
 
-`src/services/wallet.ts`:
-- **`createEmbeddedWallet(telegramUserId)`** — creates Privy user with Telegram linked account, returns Solana address
-- **`getWalletSigner(walletAddress)`** — async signer via `privyClient.walletApi.solana.signTransaction()`
-- **`getKitSigner(walletAddress)`** — **NOT IMPLEMENTED** for production; only `TEST_KEYPAIR` path works
-- **`initTestSigner()`** — loads `TEST_KEYPAIR` env var as `KeyPairSigner` (dev/test only)
-
-The Privy → `@solana/kit` `TransactionSigner` bridge (needed to pass a signer to the Rise SDK) is the primary production blocker. Without it, all on-chain transactions fail outside of test mode.
+- `createEmbeddedWallet(telegramUserId)` — Privy API creates server-side Solana wallet tied to Telegram ID. Users cannot export keys; the bot signs on their behalf.
+- `getKitSigner(walletAddress)` — **currently throws** (Privy → @solana/kit bridge not implemented)
+- `initTestSigner()` — dev helper: decodes `TEST_KEYPAIR` (base58) into a `KeyPairSigner` for testing without Privy
+- `activatePhoenixAccount(walletAddress)` — POST `/v1/invite/activate` with `BUILDER_ACCESS_CODE`; activates builder fee routing
 
 ---
 
-## 9. Referral System
+## Real-Time Monitoring (`src/workers/ws.ts`)
 
-Two-level, operator-funded rebate chain (independent of Phoenix's native referral program):
+Dedicated worker subscribing to Phoenix WebSocket (`wss://perp-api.phoenix.trade/v1/ws`) for `traderState` events.
+
+**Per event, detects**:
+- **Position flip** (side changed after TP/SL execution) → queues `tpsl_flip` alert
+- **Risk tier change** (atRisk, liquidatable) → queues risk alert
+- **Trade fill** → queues fill alert + triggers referral fee accrual
+- **Monitored wallet** fill/position change → queues alert for all watchers
+
+**Connection management**:
+- One WebSocket per unique wallet address (pooled)
+- Watcher index: `wallet → Set<telegramId>` (multiple users can watch one wallet)
+- Owner cache: `wallet → ownerTelegramId` (distinguishes self vs. monitored)
+- 3 reconnect failures → notify owner, exponential backoff starting at 5s
+
+---
+
+## Alert Pipeline
 
 ```
-User A (referrer) ← T1 ← User B ← T1 ← User C
-                           └── A is T2 referrer of C
+WS worker detects event
+  → alertQueue.add(type, { telegramId, message, symbol })
+  → Alert worker dequeues
+  → Redis NX check: dedup:<telegramId>:<type>:<symbol> (5s TTL)
+  → If not duplicate: bot.api.sendMessage(telegramId, message)
+  → Retry 3x with exponential backoff (1s, 2s, 4s) on failure
 ```
 
-- **`linkReferral(refereeId, code)`** — creates T1 row; if referrer also has a T1 parent, creates T2 row linking grandparent to new user
-- **`accrueReferralFee(userId, notionalUsdc)`** — called on fill; builder fee = `notional × BUILDER_FEE_BPS / 10000`; T1 gets 20%, T2 gets 10%
-- **`getReferralStats(userId)`** — T1 count, T2 count, total accrued, claimable (accrued − claimed)
-- Claim threshold: $1 minimum; updates `claimedUsdc` (no on-chain transaction — internal accounting)
-
-Known bug: `linkReferral` T2 lookup doesn't filter `eq(referrals.tier, "t1")`, so it can pick a T2 row as the parent reference, creating incorrect chains.
+BullMQ keeps 100 completed jobs and 500 failed jobs in Redis for debugging.
 
 ---
 
-## 10. Alert & WebSocket Pipeline
+## Bot Commands
 
-### WS Worker (`src/workers/ws.ts`)
+25+ commands, all guarding `if (!ctx.user)`. Key flows:
 
-Per-user subscriptions to Phoenix `traderState` channel:
-- **Position flip detection** — compares incoming position sides vs Redis-cached `ws:positions:<wallet>` (3600s TTL); queues `tpsl_flip` alert on side change
-- **Risk alerts** — fires for `atRisk`, `cancellable`, `liquidatable` tiers
-- **Fill alerts** — fires on new fills; triggers `accrueReferralFee()` asynchronously
-- Reconnects on WebSocket close (5-second delay)
-
-Single `allMids` subscription for price alert evaluation:
-- On each price tick, fetches cached alert subscriptions (30s cache)
-- Checks if price crossed `triggerPrice` threshold per subscription
-- Dedup key: `alert:price:{userId}:{symbol}:{trigger}` (3600s TTL — fires once per hour max)
-
-### Alert Worker (`src/jobs/processors/alert.ts`)
-
-BullMQ consumer (concurrency 10):
-1. Receives `AlertJobData` (telegramId, type, message, symbol?)
-2. Checks dedup key `alert:dedup:{telegramId}:{type}:{symbol}` (NX, 5s EX)
-3. Sends `bot.api.sendMessage()` with HTML parse mode
-4. 3 retry attempts with exponential backoff
-
----
-
-## 11. Image Generation
-
-`src/services/image.ts`:
-- Uses **satori** (JSX → SVG, no browser) + **sharp** (SVG → PNG Buffer)
-- Output: 1200×630px dark slate card
-- Content: symbol, side (LONG/SHORT badge), ROI%, P&L USDC, entry/exit prices, bot handle, funding APR if notable
-- Font: Inter Bold loaded from disk at build time
-- Returns `Buffer` for use with Telegram `InputFile`
-
----
-
-## 12. Formatting Utilities (`src/bot/lib/fmt.ts`)
-
-| Function | Output |
+| Command | Flow |
 |---|---|
-| `usd(n)` | `$1,234.56` |
-| `price(n)` | Adaptive decimal places (2/4/6) by magnitude |
-| `pct(n)` | `+1.23%` |
-| `fundingApr(rate)` | `rate × 1095 × 100` % (3× daily annualized) |
-| `fundingDir(rate)` | `"Longs pay shorts"` / `"Shorts pay longs"` |
-| `cryptoSize(n, sym)` | `"0.0042 BTC"` |
-| `shortAddr(addr)` | `"ABCD...WXYZ"` |
-| `parseAmount(raw)` | Strips `$`, commas, spaces → float |
-| `parseLeverage(raw)` | Strips `x`/`X` → float |
-| `solscanUrl(sig)` | Solscan transaction link |
-
-## 12a. Pagination Utility (`src/bot/lib/paginate.ts`)
-
-Shared helper used wherever a command paginates a list (currently `/history`; designed for reuse in `/markets`, etc.).
-
-| Export | Signature | Description |
-|---|---|---|
-| `paginate<T>` | `(all, page, pageSize) → Paginated<T>` | Slices an array for the requested page; clamps `page` to valid range; returns `{ items, page, totalPages, hasPrev, hasNext }` |
-| `addPaginationRow` | `(kb, prefix, page, totalPages) → void` | Appends `← Prev · N/Total · Next →` buttons to an existing `InlineKeyboard`; no-op when `totalPages ≤ 1` |
-
-Callback convention: `<prefix>:<page>` (e.g. `hist:list:0`). The `N/Total` centre button uses the `noop` callback.
+| `/start` | Create Privy wallet → activate Phoenix → show nav |
+| `/long` / `/short` | Symbol picker → leverage → size → confirm → preflight → execute |
+| `/deposit` / `/withdraw` | Amount → confirm → execute |
+| `/positions` | Paginated list with TP/SL per position |
+| `/history` | Trade history with PnL breakdown |
+| `/portfolio` | Balance, collateral, PnL summary |
+| `/markets` | Browse all markets (paginated) |
+| `/settp` / `/setsl` | Choose market → position → mode → price → confirm |
+| `/alerts` | Toggle alert subscriptions |
+| `/referral` | Show code + stats |
+| `/claim` | Claim accrued referral fees |
+| `/share` | Generate PnL card image → `replyWithPhoto` |
+| `/wallet-monitor` | Add/remove external wallets to watch |
 
 ---
 
-## 13. Test Coverage
+## Message Formatting
 
-### Unit Tests
-- `tests/unit/services/referral.test.ts` — `generateReferralCode()` format and uniqueness
-- `tests/unit/services/market.test.ts` — `isIsolatedOnly()` correctness + case-insensitivity
-- `tests/unit/services/image.test.ts` — `generatePnlCard()` returns Buffer for profit/loss
+**Mandatory pattern**: Always `@grammyjs/parse-mode` (`fmt` template literal + `FormattedString`). Never raw HTML strings or `parse_mode: "HTML"`.
 
-### Integration Tests
-- `tests/integration/referral.test.ts` — full T1/T2 chain, self-referral prevention, depth cap
-- `tests/integration/alerts.test.ts` — toggle targeting (only matched type affected), insert on missing
+```typescript
+const msg = fmt`${bold("SOL · LONG")}  (Cross)
+Entry  ${bold("$87.00")}`;
+await ctx.reply(msg.text, { entities: msg.entities });
+```
 
-Test setup (`tests/setup.ts`) overrides env vars with safe test values. `vitest.config.ts` (unit) and `vitest.integration.config.ts` (integration, 30s timeout) are both present.
-
----
-
-## 14. Known Bugs (from CLAUDE.md + code review)
-
-| # | Location | Bug |
-|---|---|---|
-| 1 | `src/bot/commands/alerts.ts` | `findFirst` for alert toggle missing `type` filter — can toggle wrong alert |
-| 2 | `src/bot/commands/deposit.ts`, `share.ts` | `replyWithPhoto` receives raw `Uint8Array`; needs `new InputFile(...)` wrapper |
-| 3 | `src/bot/commands/long.ts`, `short.ts` | Confirm callback regex `(\d+)` rejects decimal sizes |
-| 4 | `src/services/referral.ts` | T2 chain lookup missing `eq(referrals.tier, "t1")` filter — may pick T2 row as parent |
-| 5 | `package.json` | `ws` and `@types/ws` missing; imported in `src/workers/ws.ts` |
-| 6 | `src/services/wallet.ts` | Privy → `@solana/kit` signer bridge not implemented — all production transactions fail |
-| 7 | Type system | `RiskTier` defines both `"at_risk"` and `"atRisk"` — inconsistent casing between WS messages and internal types |
-| 8 | `src/bot/commands/history.ts` | `realizedPnl` in the list header always shows $0.00 if the Rise SDK does not populate that field for closing trades — needs verification against live API response |
+`src/bot/lib/fmt.ts` has helpers: `num()`, `usd()`, `price()`, `pct()`, `fundingApr()`, `pnlEmoji()`, `signedUsd()`.
 
 ---
 
-## 15. Environment Variables
+## Error Handling
 
-Required at startup (Zod crash on missing):
+`BotError` class with fields: `category`, `code`, `userMessage`, `hint`, `retryable`.
 
-| Variable | Purpose |
+`toBotError(err)` pattern-matches on 11+ regex patterns against SDK/network error messages and converts them to user-friendly structured errors. Categories: `validation`, `ratelimit`, `network`, `insufficient_funds`, etc.
+
+`renderBotError(ctx, err, opts)` formats and sends the error with hint and retry indicator.
+
+---
+
+## Referral System (`src/services/referral.ts`)
+
+Bot-native, independent of Phoenix's built-in referral (which requires $10K volume).
+
+- **T1** (direct referral): referrer gets 20% of builder fees on referee's trades
+- **T2** (indirect): if the referrer was themselves referred, their T1 referrer gets 10%
+
+`linkReferral(refereeId, code)` creates both T1 and T2 rows atomically.
+`accrueReferralFee(userId, notionalUsdc)` is called by the WS worker on every fill — looks up T1/T2 and updates `accruedUsdc`.
+
+---
+
+## Image Generation (`src/services/image.ts`)
+
+`generatePnlCard(data)` renders a 1200×630px PNG trade card via:
+- `satori` — JSX React elements → SVG
+- `sharp` — SVG → PNG buffer
+
+Output is sent via `/share` command using `replyWithPhoto`. Used for social sharing of profitable trades.
+
+---
+
+## Known Bugs (Phase 0, Unfixed)
+
+1. **`alerts.ts`** — `findFirst()` missing `type` filter; wrong subscription may be toggled
+2. **`deposit.ts` + `share.ts`** — `replyWithPhoto` receives raw `Uint8Array`, needs `new InputFile(buffer, "file.png")`
+3. **`long.ts` + `short.ts`** — Confirm callback regex `(\d+)` rejects decimal leverage/size inputs
+4. **`referral.ts`** — T2 lookup can pick a T2 row as the parent; needs `eq(referrals.tier, "t1")` guard
+5. **`ws` package** — Not in `package.json` despite being imported in `src/workers/ws.ts`
+6. **`vitest.config.ts`** — Was missing (tests couldn't run)
+7. **`src/db/schema/settings.ts`** — Was missing; `userSettings` table was referenced but undefined
+
+---
+
+## ESM / Import Rules
+
+`"type": "module"` + `"moduleResolution": "NodeNext"`. All imports use `.js` extensions even for `.ts` source files. No CommonJS `require()`.
+
+---
+
+## Environment Variables
+
+Validated at startup by `src/config/index.ts` (Zod schema). Required:
+
+| Var | Purpose |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Bot auth |
-| `WEBHOOK_URL` | Production webhook URL (optional dev) |
-| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Wallet custody |
-| `BUILDER_AUTHORITY_PUBKEY` | Phoenix Flight routing |
-| `BUILDER_ACCESS_CODE` | User activation |
-| `BUILDER_FEE_BPS` | Builder fee (default 10) |
-| `PHOENIX_API_URL` / `PHOENIX_WS_URL` | API endpoints |
+| `TELEGRAM_BOT_TOKEN` | @BotFather token |
+| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | Embedded wallet API |
+| `BUILDER_AUTHORITY_PUBKEY` | Phoenix Flight builder pubkey |
+| `BUILDER_ACCESS_CODE` | Builder activation code for user onboarding |
+| `PHOENIX_API_URL` / `PHOENIX_WS_URL` | Phoenix REST + WS endpoints |
 | `HELIUS_RPC_URL` | Solana RPC |
 | `DATABASE_URL` | PostgreSQL |
-| `REDIS_URL` | Redis |
-| `PORT` / `HOST` | Server binding (default 3000 / 0.0.0.0) |
-| `TEST_KEYPAIR` | Dev/test only; bypasses Privy |
+| `REDIS_URL` | Redis (pending state, rate limiting, BullMQ) |
+| `WEBHOOK_URL` | (prod only) HTTPS URL for Telegram webhook |
+| `TEST_KEYPAIR` | (dev only) base58 keypair for local signing |
 
 ---
 
-## 16. Architecture Strengths & Gaps
+## Testing Strategy
 
-### Strengths
-- **Clear process separation** — bot, WS worker, and alert worker are fully decoupled; each can scale or restart independently
-- **Type-safe stack** — Zod env validation, Drizzle schema inference, strict TypeScript throughout
-- **Deduplication at two layers** — NX Redis key in alert worker (5s window) + price-alert dedup (3600s)
-- **Graceful multi-step UX** — Redis pending state enables natural conversation flows without maintaining in-memory bot state across restarts
-- **Operator-funded rebates** — referral system doesn't depend on Phoenix's $10K volume threshold
+- **Unit tests** (`tests/unit/`): `action-log`, `lots`, `market`, `preflight`, `referral`, `errors` — pure logic, no DB
+- **Integration tests** (`tests/integration/`): `alerts`, `referral` — end-to-end flows
+- **Setup** (`tests/setup.ts`): sets mock env vars so config validation passes in test env
+- Vitest with v8 coverage
 
-### Gaps
-- **Privy signer bridge missing** — `getKitSigner()` is a stub; no production trades possible from Telegram
-- **Isolated margin not enforced** — GOLD/SILVER/SKR/WTIOIL show warnings but the bot doesn't switch to isolated subaccount before trading
-- **No retry on WebSocket bootstrap failure** — if Phoenix WS is down at startup, user subscriptions are silently lost
-- **No BullMQ draining on SIGTERM** — in-flight alerts may be dropped on deploy restart
-- **Referral accrual not atomic** — fill event and `accrueReferralFee()` are separate; a crash between them loses the fee
-- **`TEST_KEYPAIR` shortcut active in dev** — auth middleware bypasses Privy and auto-registers; easy to forget when testing onboarding flows
+---
+
+## Key Architectural Decisions
+
+1. **Job queue decoupling** — WS worker never calls bot API directly; always via BullMQ. Allows independent scaling and retry semantics.
+2. **Server-side wallets** — Privy-managed embedded wallets eliminate the UX burden of key management. Trade-off: custodial trust model.
+3. **Redis for everything ephemeral** — pending state, rate limiting, dedup keys, BullMQ backend. Single shared dependency.
+4. **Three-process split** — bot, ws-worker, alert-worker are separate Railway services. Can crash and restart independently.
+5. **Dual referral systems** — bot-native (T1/T2 by volume, accessible to all) vs. Phoenix native (requires $10K threshold). Bot-native is the primary incentive mechanism.
+6. **Preflight as safety layer** — All orders validated before SDK call. Prevents silent failures from bad size, insufficient margin, or stale prices.
+7. **Action log redaction** — Sensitive fields stripped before DB write. All user actions auditable without leaking secrets.
+
+---
+
+## Blocking Issues (Cannot Trade Until Fixed)
+
+1. **Rise SDK not integrated** — `client.ts` stubs throw on all trade calls. SDK must be properly installed and bridged before any on-chain execution works.
+2. **`getKitSigner()` not implemented** — Privy → @solana/kit signing bridge is a stub. Without this, no transaction can be signed in production.
+3. **`ws` package missing** — WS worker will crash on import before any subscriptions start.
