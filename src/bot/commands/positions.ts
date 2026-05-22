@@ -9,6 +9,7 @@ import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { cryptoSize, price as fmtPrice, solscanUrl, usd } from "../lib/fmt.js";
+import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
@@ -72,7 +73,13 @@ export async function sendPositionDetail(
   const label = side === "long" ? "Long" : "Short";
   const liqLabel = pos.liquidationPrice === "N/A" ? "Safe" : fmtPrice(Number(pos.liquidationPrice));
 
-  const msg = fmt`${emoji} ${FormattedString.b(`${pos.symbol}/USD — ${label}`)}\n\nSize       ${FormattedString.b(cryptoSize(Number(pos.size), pos.symbol))}\nEntry      ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}\nMark       ${FormattedString.b(fmtPrice(Number(pos.markPrice)))}\nP&L       ${FormattedString.b(`${pnlSign}${usd(upnl)}`)}\nLiq price  ${FormattedString.b(liqLabel)}`;
+  const unsettledFunding = Number(state.unsettledFunding);
+  const fundingNote =
+    Math.abs(unsettledFunding) > 0.01
+      ? fmt`\nFunding    ${FormattedString.b(usd(unsettledFunding))}`
+      : fmt``;
+
+  const msg = fmt`${emoji} ${FormattedString.b(`${pos.symbol}/USD — ${label}`)}\n\nSize       ${FormattedString.b(cryptoSize(Number(pos.size), pos.symbol))}\nEntry      ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}\nMark       ${FormattedString.b(fmtPrice(Number(pos.markPrice)))}\nP&L        ${FormattedString.b(`${pnlSign}${usd(upnl)}`)}${fundingNote}\nLiq price  ${FormattedString.b(liqLabel)}`;
 
   await ctx.reply(msg.text, {
     entities: msg.entities,
@@ -135,11 +142,11 @@ export function registerPositions(bot: Bot<BotContext>) {
       if (pos) {
         try {
           const pnl = Number(pos.unrealizedPnl) * fraction;
-          const roiPct = (
-            ((Number(pos.markPrice) - Number(pos.entryPrice)) / Number(pos.entryPrice)) *
-            100 *
-            (side === "long" ? 1 : -1)
-          ).toFixed(2);
+          const leverage = pos.leverage ?? 1;
+          const margin =
+            (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
+          const roiPct =
+            margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
           const botInfo = await ctx.api.getMe();
           const card = await generatePnlCard({
             symbol,
@@ -161,10 +168,11 @@ export function registerPositions(bot: Bot<BotContext>) {
       }
     } catch (e) {
       logger.error({ err: e, symbol, fraction }, "closePosition failed");
-      const errMsg = e instanceof Error ? e.message : "Unknown error";
-      const msg = fmt`❌ Close failed: ${FormattedString.code(errMsg)}`;
       const kb = new InlineKeyboard().text("← Back", "nav:positions");
-      await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+      await ctx.editMessageText(formatTradeError(e, "Close position"), {
+        parse_mode: "HTML",
+        reply_markup: kb,
+      });
     }
   });
 
@@ -194,9 +202,7 @@ export function registerPositions(bot: Bot<BotContext>) {
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
       logger.error({ err: e, symbol, amount }, "addMargin failed");
-      const errMsg = e instanceof Error ? e.message : "Unknown error";
-      const msg = fmt`❌ Failed to add margin: ${FormattedString.code(errMsg)}`;
-      await ctx.editMessageText(msg.text, { entities: msg.entities });
+      await ctx.editMessageText(formatTradeError(e, "Add margin"), { parse_mode: "HTML" });
     }
   });
 

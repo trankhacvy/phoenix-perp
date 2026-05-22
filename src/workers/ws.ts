@@ -11,6 +11,9 @@ import type { RiskTier, TraderStateEvent } from "../types/index.js";
 
 const connections = new Map<string, WebSocket>();
 const userCache = new Map<string, string>();
+const reconnecting = new Set<string>();
+const reconnectFailures = new Map<string, number>();
+const MAX_RECONNECT_FAILURES = 3;
 
 const RISK_ALERT_TIERS: RiskTier[] = [
   "atRisk",
@@ -47,6 +50,7 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
   connections.set(walletAddress, ws);
 
   ws.on("open", () => {
+    reconnectFailures.delete(walletAddress);
     ws.send(
       JSON.stringify({
         type: "subscribe",
@@ -120,11 +124,37 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
   ws.on("close", () => {
     connections.delete(walletAddress);
     logger.info({ walletAddress }, "WS closed");
-    setTimeout(() => subscribeUser(walletAddress, telegramId), 5000);
+
+    if (reconnecting.has(walletAddress)) return;
+    reconnecting.add(walletAddress);
+    setTimeout(() => {
+      reconnecting.delete(walletAddress);
+      subscribeUser(walletAddress, telegramId).catch((err) => {
+        logger.error({ err, walletAddress }, "WS reconnect failed");
+      });
+    }, 5000);
   });
 
   ws.on("error", (err) => {
     logger.error({ err, walletAddress }, "WS error");
+    const failures = (reconnectFailures.get(walletAddress) ?? 0) + 1;
+    reconnectFailures.set(walletAddress, failures);
+
+    if (failures >= MAX_RECONNECT_FAILURES) {
+      reconnectFailures.delete(walletAddress);
+      const tid = userCache.get(walletAddress);
+      if (tid) {
+        alertQueue
+          .add("ws-error", {
+            telegramId: tid,
+            type: "fill",
+            symbol: undefined,
+            message:
+              "⚠️ <b>Live alerts interrupted</b>\n\nWe lost connection to the market feed. Reconnecting…\n\nUse /positions to check your account.",
+          })
+          .catch(() => undefined);
+      }
+    }
   });
 }
 
@@ -148,6 +178,7 @@ async function getUserId(walletAddress: string): Promise<string | null> {
 }
 
 let allMidsWs: WebSocket | null = null;
+let allMidsReconnecting = false;
 
 function subscribeAllMids() {
   if (allMidsWs) return;
@@ -169,7 +200,12 @@ function subscribeAllMids() {
 
   allMidsWs.on("close", () => {
     allMidsWs = null;
-    setTimeout(subscribeAllMids, 5000);
+    if (allMidsReconnecting) return;
+    allMidsReconnecting = true;
+    setTimeout(() => {
+      allMidsReconnecting = false;
+      subscribeAllMids();
+    }, 5000);
   });
 
   allMidsWs.on("error", (err) => {

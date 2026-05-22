@@ -1,49 +1,88 @@
+import type {
+  Position,
+  TraderStateResponse,
+  TraderView,
+} from "@ellipsis-labs/rise";
+import { withRetry } from "../../lib/retry.js";
 import type { TraderStateEvent } from "../../types/index.js";
 import { getPhoenixClient } from "./client.js";
 
-function uiStr(field: unknown): string {
-  if (field && typeof field === "object" && "ui" in (field as object)) {
-    return String((field as { ui: unknown }).ui);
-  }
-  return String(field ?? "0");
+export async function getTraderState(
+  walletAddress: string,
+): Promise<TraderStateEvent> {
+  return withRetry(() => _getTraderState(walletAddress));
 }
 
-export async function getTraderState(walletAddress: string): Promise<TraderStateEvent> {
-  const res = await getPhoenixClient().api.traders().getTraderState(walletAddress);
-  const traders = (res as { traders?: unknown[] }).traders;
-  const t = (Array.isArray(traders) ? traders[0] : res) as Record<string, unknown>;
+async function _getTraderState(
+  walletAddress: string,
+): Promise<TraderStateEvent> {
+  const res = (await getPhoenixClient()
+    .api.traders()
+    .getTraderState(walletAddress)) as TraderStateResponse;
 
-  const rawPositions = Array.isArray(t.positions) ? (t.positions as Record<string, unknown>[]) : [];
+  const traders: TraderView[] = res.traders ?? [];
 
-  const positions: TraderStateEvent["positions"] = rawPositions.map((p) => {
-    const vq = (p.virtualQuotePosition as { value?: number } | undefined)?.value ?? 0;
-    const size = uiStr(p.positionSize);
-    const posValue = Number(uiStr(p.positionValue));
-    const posSize = Number(size) || 1;
-    const markPriceComputed = (posValue / posSize).toFixed(4);
-    const liqPriceRaw = Number(uiStr(p.liquidationPrice));
-    const liqPrice = liqPriceRaw > 0 ? liqPriceRaw.toFixed(4) : "N/A";
+  // subaccount_index=0 is the cross account — primary collateral pool
+  const crossAccount = traders.find((t) => t.traderSubaccountIndex === 0) ?? traders[0];
+
+  if (!crossAccount) {
     return {
-      symbol: String(p.symbol ?? ""),
-      side: vq <= 0 ? "long" : "short",
-      size,
-      entryPrice: uiStr(p.entryPrice),
-      markPrice: markPriceComputed,
-      unrealizedPnl: uiStr(p.unrealizedPnl),
-      liquidationPrice: liqPrice,
-      marginMode: "cross" as const,
-      subaccountIndex: 0,
+      walletAddress,
+      riskTier: "safe",
+      riskScore: 0,
+      effectiveCollateral: "0",
+      depositedCollateral: "0",
+      unrealizedPnl: "0",
+      unsettledFunding: "0",
+      positions: [],
+      fills: [],
     };
-  });
+  }
+
+  // Aggregate positions from every subaccount (cross + isolated)
+  const positions: TraderStateEvent["positions"] = traders.flatMap((trader) =>
+    (trader.positions ?? []).map((p: Position) => {
+      const vq = p.virtualQuotePosition.value;
+      const size = p.positionSize.ui;
+      const posValue = p.positionValue.value;
+      const posSize = Number(size) || 1;
+      const markPriceComputed = (posValue / posSize).toFixed(4);
+      const liqPriceRaw = p.liquidationPrice.value;
+      const liqPrice = liqPriceRaw > 0 ? liqPriceRaw.toFixed(4) : "N/A";
+      const marginApprox = p.initialMargin.value;
+      const leverageApprox =
+        marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
+      return {
+        symbol: String(p.symbol),
+        side: vq <= 0 ? "long" : "short",
+        size,
+        entryPrice: p.entryPrice.ui,
+        markPrice: markPriceComputed,
+        unrealizedPnl: p.unrealizedPnl.ui,
+        liquidationPrice: liqPrice,
+        marginMode: trader.traderSubaccountIndex === 0 ? ("cross" as const) : ("isolated" as const),
+        subaccountIndex: trader.traderSubaccountIndex,
+        leverage: leverageApprox,
+      };
+    }),
+  );
+
+  // Sum unrealizedPnl and unsettledFunding across all subaccounts
+  const totalUnrealizedPnl = traders
+    .reduce((sum, t) => sum + Number(t.unrealizedPnl.ui), 0)
+    .toFixed(6);
+  const totalUnsettledFunding = traders
+    .reduce((sum, t) => sum + Number(t.unsettledFundingOwed.ui), 0)
+    .toFixed(6);
 
   return {
     walletAddress,
-    riskTier: (t.riskTier as TraderStateEvent["riskTier"]) ?? "safe",
-    riskScore: Number(t.riskScore ?? 0),
-    effectiveCollateral: uiStr(t.effectiveCollateral),
-    depositedCollateral: uiStr(t.collateralBalance),
-    unrealizedPnl: uiStr(t.unrealizedPnl),
-    unsettledFunding: uiStr(t.unsettledFundingOwed),
+    riskTier: crossAccount.riskTier ?? "safe",
+    riskScore: 0,
+    effectiveCollateral: crossAccount.effectiveCollateral.ui,
+    depositedCollateral: crossAccount.collateralBalance.ui,
+    unrealizedPnl: totalUnrealizedPnl,
+    unsettledFunding: totalUnsettledFunding,
     positions,
     fills: [],
   };
@@ -91,5 +130,9 @@ export async function getTradeHistory(
     instructionType: r.instructionType,
   }));
 
-  return { trades, hasMore: res.hasMore, nextCursor: res.nextCursor ?? undefined };
+  return {
+    trades,
+    hasMore: res.hasMore,
+    nextCursor: res.nextCursor ?? undefined,
+  };
 }

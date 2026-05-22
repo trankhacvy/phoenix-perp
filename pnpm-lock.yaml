@@ -74,6 +74,9 @@ importers:
       sharp:
         specifier: ^0.33.5
         version: 0.33.5
+      technicalindicators:
+        specifier: ^3.1.0
+        version: 3.1.0
       ws:
         specifier: ^8.20.1
         version: 8.20.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
@@ -1907,6 +1910,9 @@ packages:
   '@types/node@22.19.19':
     resolution: {integrity: sha512-dyh/xO2Fh5bYrfWaaqGrRQQGkNdmYw6AmaAUvYeUMNTWQtvb796ikLdmTchRmOlOiIJ1TDXfWgVx1QkUlQ6Hew==}
 
+  '@types/node@6.14.13':
+    resolution: {integrity: sha512-J1F0XJ/9zxlZel5ZlbeSuHW2OpabrUAqpFuC2sm2I3by8sERQ8+KCjNKUcq8QHuzpGMWiJpo9ZxeHrqrP2KzQw==}
+
   '@types/qrcode@1.5.6':
     resolution: {integrity: sha512-te7NQcV2BOvdj2b1hCAHzAoMNuj65kNBMz0KBaxM6c3VGBOhU0dURQKOtH8CFNI/dsKkwlv32p26qYQTWoB5bw==}
 
@@ -2945,6 +2951,9 @@ packages:
 
   svix@1.94.0:
     resolution: {integrity: sha512-FuP5nJez1P/SeK+4zOBI8RrNhtrzMTBSvwuD4yGGsn+Af2yQazid6OwPu3fpZpMifOJxrJua0su/dYB5fe4v9Q==}
+
+  technicalindicators@3.1.0:
+    resolution: {integrity: sha512-f16mOc+Y05hNy/of+UbGxhxQQmxUztCiluhsqC5QLUYz4WowUgKde9m6nIjK1Kay0wGHigT0IkOabpp0+22UfA==}
 
   test-exclude@7.0.2:
     resolution: {integrity: sha512-u9E6A+ZDYdp7a4WnarkXPZOx8Ilz46+kby6p1yZ8zsGTz9gYa6FIS7lj2oezzNKmtdyyJNNmmXDppga5GB7kSw==}
@@ -4854,6 +4863,8 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/node@6.14.13': {}
+
   '@types/qrcode@1.5.6':
     dependencies:
       '@types/node': 22.19.19
@@ -5943,6 +5954,10 @@ snapshots:
   svix@1.94.0:
     dependencies:
       standardwebhooks: 1.0.0
+
+  technicalindicators@3.1.0:
+    dependencies:
+      '@types/node': 6.14.13
 
   test-exclude@7.0.2:
     dependencies:

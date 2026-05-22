@@ -48,6 +48,12 @@ export interface LimitOrderParams {
   walletAddress: string;
 }
 
+export interface TpSlLevel {
+  price: number;
+  fraction?: number;
+  mode?: "market" | "limit";
+}
+
 export interface TpSlParams {
   symbol: string;
   walletAddress: string;
@@ -56,6 +62,8 @@ export interface TpSlParams {
   slPrice?: number;
   slMode?: "market" | "limit";
   tpMode?: "market" | "limit";
+  tpLevels?: TpSlLevel[];
+  slLevels?: TpSlLevel[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -79,15 +87,33 @@ function getRpc() {
   return { rpc: _rpc, sendAndConfirm: _sendAndConfirm };
 }
 
+type LatestBlockhashValue = Awaited<
+  ReturnType<ReturnType<ReturnType<typeof createSolanaRpc>["getLatestBlockhash"]>["send"]>
+>["value"];
+
+let _cachedBlockhash: { value: LatestBlockhashValue; fetchedAt: number } | null = null;
+const BLOCKHASH_TTL_MS = 20_000;
+
+async function getBlockhash(): Promise<LatestBlockhashValue> {
+  const now = Date.now();
+  if (_cachedBlockhash && now - _cachedBlockhash.fetchedAt < BLOCKHASH_TTL_MS) {
+    return _cachedBlockhash.value;
+  }
+  const { rpc } = getRpc();
+  const result = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+  _cachedBlockhash = { value: result.value, fetchedAt: now };
+  return result.value;
+}
+
 async function sendInstruction(ix: AnyInstruction, signer: KeyPairSigner): Promise<string> {
-  const { rpc, sendAndConfirm } = getRpc();
-  const latestBlockhash = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+  const { sendAndConfirm } = getRpc();
+  const latestBlockhash = await getBlockhash();
   const signedIx = addSignersToInstruction([signer], ix);
 
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     (tx) => setTransactionMessageFeePayerSigner(signer, tx),
-    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash.value, tx),
+    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
     (tx) => appendTransactionMessageInstructions([signedIx], tx),
   );
 
@@ -95,7 +121,7 @@ async function sendInstruction(ix: AnyInstruction, signer: KeyPairSigner): Promi
   await sendAndConfirm(
     {
       ...signedTx,
-      lifetimeConstraint: { lastValidBlockHeight: latestBlockhash.value.lastValidBlockHeight },
+      lifetimeConstraint: { lastValidBlockHeight: latestBlockhash.lastValidBlockHeight },
     },
     { commitment: "confirmed" },
   );
@@ -103,8 +129,11 @@ async function sendInstruction(ix: AnyInstruction, signer: KeyPairSigner): Promi
 }
 
 async function sendInstructions(ixs: AnyInstruction[], signer: KeyPairSigner): Promise<string> {
-  const sigs = await Promise.all(ixs.map((ix) => sendInstruction(ix, signer)));
-  return sigs[sigs.length - 1] ?? "";
+  let sig = "";
+  for (const ix of ixs) {
+    sig = await sendInstruction(ix, signer);
+  }
+  return sig;
 }
 
 function toMarketSymbol(s: string) {
@@ -183,37 +212,55 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
   const market = (await getMarket(params.symbol)) as { tickSize: number; baseLotsDecimals: number };
   const closeSide = params.positionSide === "long" ? Side.Ask : Side.Bid;
 
-  const sends: Promise<string>[] = [];
+  const tpLevels: TpSlLevel[] = params.tpLevels?.length
+    ? params.tpLevels
+    : params.tpPrice !== undefined
+      ? [{ price: params.tpPrice, mode: params.tpMode ?? "limit" }]
+      : [];
 
-  if (params.slPrice !== undefined) {
-    const triggerTicks = priceToTicks(params.slPrice, market);
-    const ix = await client.ixs.buildPlaceStopLoss({
-      authority: params.walletAddress as Authority,
-      symbol: marketSymbol,
-      tradeSide: closeSide,
-      executionDirection:
-        params.positionSide === "long" ? Direction.LessThan : Direction.GreaterThan,
-      orderKind: params.slMode === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
-      triggerPrice: triggerTicks,
-    });
-    sends.push(sendInstruction(ix, signer));
+  const slLevels: TpSlLevel[] = params.slLevels?.length
+    ? params.slLevels
+    : params.slPrice !== undefined
+      ? [{ price: params.slPrice, mode: params.slMode ?? "market" }]
+      : [];
+
+  const ixs: AnyInstruction[] = [];
+
+  for (const level of tpLevels) {
+    const triggerTicks = priceToTicks(level.price, market);
+    ixs.push(
+      await client.ixs.buildPlaceStopLoss({
+        authority: params.walletAddress as Authority,
+        symbol: marketSymbol,
+        tradeSide: closeSide,
+        executionDirection:
+          params.positionSide === "long" ? Direction.GreaterThan : Direction.LessThan,
+        orderKind:
+          (level.mode ?? "limit") === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
+        triggerPrice: triggerTicks,
+      }),
+    );
   }
 
-  if (params.tpPrice !== undefined) {
-    const triggerTicks = priceToTicks(params.tpPrice, market);
-    const ix = await client.ixs.buildPlaceStopLoss({
-      authority: params.walletAddress as Authority,
-      symbol: marketSymbol,
-      tradeSide: closeSide,
-      executionDirection:
-        params.positionSide === "long" ? Direction.GreaterThan : Direction.LessThan,
-      orderKind: params.tpMode === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
-      triggerPrice: triggerTicks,
-    });
-    sends.push(sendInstruction(ix, signer));
+  for (const level of slLevels) {
+    const triggerTicks = priceToTicks(level.price, market);
+    ixs.push(
+      await client.ixs.buildPlaceStopLoss({
+        authority: params.walletAddress as Authority,
+        symbol: marketSymbol,
+        tradeSide: closeSide,
+        executionDirection:
+          params.positionSide === "long" ? Direction.LessThan : Direction.GreaterThan,
+        orderKind:
+          (level.mode ?? "market") === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
+        triggerPrice: triggerTicks,
+      }),
+    );
   }
 
-  await Promise.all(sends);
+  for (const ix of ixs) {
+    await sendInstruction(ix, signer);
+  }
 }
 
 export async function closePosition(

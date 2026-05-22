@@ -22,6 +22,7 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
+import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
 
 export function registerLong(bot: Bot<BotContext>) {
@@ -61,7 +62,7 @@ export function registerLong(bot: Bot<BotContext>) {
     await sendLeveragePicker(ctx, "long", ctx.match[1]);
   });
 
-  bot.callbackQuery(/^trade_lev:long:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_lev:long:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendSizePicker(ctx, "long", ctx.match[1], Number(ctx.match[2]));
@@ -77,13 +78,13 @@ export function registerLong(bot: Bot<BotContext>) {
     await setPending(ctx.from.id, `trade_leverage:long:${symbol}`);
   });
 
-  bot.callbackQuery(/^trade_size:long:([A-Z0-9]+):(\d+):([\d.]+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_size:long:([A-Z0-9]+):([\d.]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendTradeConfirm(ctx, "long", ctx.match[1], Number(ctx.match[2]), Number(ctx.match[3]));
   });
 
-  bot.callbackQuery(/^trade_size_custom:long:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_size_custom:long:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, levStr] = ctx.match.slice(1);
@@ -129,12 +130,13 @@ export function registerLong(bot: Bot<BotContext>) {
       });
     } catch (e) {
       logger.error({ err: e, symbol, side: "long" }, "placeMarketOrder failed");
-      const errMsg = e instanceof Error ? e.message : "Unknown error";
       const kb = new InlineKeyboard()
         .text("Try again", `trade:long:${symbol}`)
         .text("← Back", "nav:positions");
-      const errFmt = fmt`❌ ${FormattedString.b("Trade failed")}\n\n${symbol} Long\nReason: ${FormattedString.code(errMsg)}`;
-      await ctx.editMessageText(errFmt.text, { entities: errFmt.entities, reply_markup: kb });
+      await ctx.editMessageText(formatTradeError(e, "Trade"), {
+        parse_mode: "HTML",
+        reply_markup: kb,
+      });
     }
   });
 }
@@ -252,9 +254,28 @@ export async function sendTradeConfirm(
   }
   const effectiveLev = Math.min(lev, snapshot.maxLeverage);
   const notional = sizeUsdc * effectiveLev;
+
+  if (snapshot.leverageTiers.length > 0) {
+    const sortedTiers = [...snapshot.leverageTiers].sort(
+      (a, b) => a.maxNotionalUsdc - b.maxNotionalUsdc,
+    );
+    const fittingTier = sortedTiers.find((t) => notional <= t.maxNotionalUsdc);
+    if (!fittingTier) {
+      await ctx.reply(`Position too large for ${symbol}. Reduce your size.`);
+      return;
+    }
+    if (effectiveLev > fittingTier.maxLeverage) {
+      const msg = fmt`⚠️ At ${FormattedString.b(usd(notional))} notional, max leverage is ${FormattedString.b(`${fittingTier.maxLeverage}x`)}.\n\nReduce your position size or lower your leverage.`;
+      await ctx.reply(msg.text, { entities: msg.entities });
+      return;
+    }
+  }
   const entry = snapshot.markPrice;
+  const mmFrac = 0.5 / snapshot.maxLeverage;
   const liqPrice =
-    side === "long" ? entry * (1 - 1 / effectiveLev) : entry * (1 + 1 / effectiveLev);
+    side === "long"
+      ? entry * (1 - 1 / effectiveLev + mmFrac)
+      : entry * (1 + 1 / effectiveLev - mmFrac);
   const liqPct = (100 / effectiveLev).toFixed(0);
 
   const totalFee = (notional * (3.5 + config.BUILDER_FEE_BPS)) / 10000;

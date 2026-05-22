@@ -1,4 +1,5 @@
 import type { ExchangeMarketConfig } from "@ellipsis-labs/rise";
+import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
 
 export const ISOLATED_ONLY_MARKETS = new Set(["GOLD", "SILVER", "SKR", "WTIOIL"]);
@@ -18,6 +19,7 @@ export interface MarketSnapshot {
   openInterest: string;
   isIsolatedOnly: boolean;
   symbol: string;
+  leverageTiers: Array<{ maxLeverage: number; maxNotionalUsdc: number }>;
 }
 
 export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
@@ -29,6 +31,10 @@ export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
 }
 
 export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
+  return withRetry(() => _getMarketSnapshot(symbol));
+}
+
+async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
   const [market, orderbook, fundingHistory] = await Promise.all([
     getMarket(symbol),
     getOrderbook(symbol),
@@ -42,10 +48,16 @@ export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot>
   const fundingRate = fundingHistory?.rates?.[0]
     ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
     : 0;
+  const markPrice = orderbook.mid ?? 0;
+  const lotToBase = Math.pow(10, -market.baseLotsDecimals);
+  const leverageTiers = market.leverageTiers.map((t) => ({
+    maxLeverage: t.maxLeverage,
+    maxNotionalUsdc: t.maxSizeBaseLots * lotToBase * markPrice,
+  }));
 
   return {
     symbol: market.symbol,
-    markPrice: orderbook.mid ?? 0,
+    markPrice,
     tickSize: market.tickSize,
     baseLotsDecimals: market.baseLotsDecimals,
     maxLeverage,
@@ -54,6 +66,7 @@ export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot>
     fundingRate,
     openInterest: String(market.openInterestCapBaseLots),
     isIsolatedOnly: isIsolatedOnly(symbol),
+    leverageTiers,
   };
 }
 

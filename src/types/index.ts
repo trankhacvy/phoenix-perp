@@ -38,6 +38,7 @@ export interface PhoenixPosition {
   liquidationPrice: string;
   marginMode: "cross" | "isolated";
   subaccountIndex: number;
+  leverage?: number;
 }
 
 export interface PhoenixFill {

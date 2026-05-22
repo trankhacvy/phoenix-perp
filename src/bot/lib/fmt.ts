@@ -51,9 +51,21 @@ export function parseAmount(raw: string): number {
 }
 
 export function parseLeverage(raw: string): number {
-  return Math.round(Number.parseFloat(raw.replace(/[xX]/g, "")));
+  return Number.parseFloat(raw.replace(/[xX]/g, ""));
 }
 
 export function solscanUrl(sig: string): string {
   return `https://solscan.io/tx/${sig}`;
+}
+
+export function fundingTrend(rates: number[]): string {
+  if (rates.length < 3) return "";
+  const recent = rates.slice(-3);
+  const deltas = recent.slice(1).map((r, i) => r - recent[i]);
+  const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+  if (avgDelta > 0.00001) return "↑↑";
+  if (avgDelta > 0) return "↑";
+  if (avgDelta < -0.00001) return "↓↓";
+  if (avgDelta < 0) return "↓";
+  return "→";
 }

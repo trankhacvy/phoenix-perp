@@ -40,18 +40,15 @@ export async function sendPriceAlertConfirm(
     // ignore
   }
 
-  const direction =
-    markPrice !== null
-      ? triggerPrice >= markPrice
-        ? "rises to or above"
-        : "drops to or below"
-      : "reaches";
+  const direction: "above" | "below" =
+    markPrice !== null ? (triggerPrice >= markPrice ? "above" : "below") : "above";
+  const dirLabel = direction === "above" ? "🔼 rises above" : "🔽 drops below";
 
   const kb = new InlineKeyboard()
-    .text("✅ Set alert", `pricealert:exec:${symbol}:${triggerPrice}`)
+    .text("✅ Set alert", `pricealert:exec:${symbol}:${triggerPrice}:${direction}`)
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`Set price alert?\n\n${FormattedString.b(symbol)} — alert when price ${direction} ${FormattedString.code(fmtPrice(triggerPrice))}`;
+  const msg = fmt`Set price alert?\n\n${FormattedString.b(symbol)} — notify when ${dirLabel} ${FormattedString.code(fmtPrice(triggerPrice))}`;
 
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
@@ -91,22 +88,24 @@ export function registerPriceAlert(bot: Bot<BotContext>) {
     await sendPriceAlertPrompt(ctx, ctx.match[1]);
   });
 
-  bot.callbackQuery(/^pricealert:exec:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
+  bot.callbackQuery(/^pricealert:exec:([A-Z0-9]+):([\d.]+):(above|below)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Setting alert…");
     if (!ctx.user) return;
-    const [symbol, priceStr] = ctx.match.slice(1) as [string, string];
+    const [symbol, priceStr, direction] = ctx.match.slice(1) as [string, string, "above" | "below"];
     const triggerPrice = Number(priceStr);
+    const storedPrice = direction === "below" ? -triggerPrice : triggerPrice;
 
     await db.insert(alertSubscriptions).values({
       id: crypto.randomUUID(),
       userId: ctx.user.id,
       type: "price",
       symbol,
-      triggerPrice: String(triggerPrice),
+      triggerPrice: String(storedPrice),
       enabled: true,
     });
 
-    const msg = fmt`🔔 Alert set: ${FormattedString.b(symbol)} at ${FormattedString.code(fmtPrice(triggerPrice))}`;
+    const dirLabel = direction === "above" ? "rises above" : "drops below";
+    const msg = fmt`🔔 Alert set: ${FormattedString.b(symbol)} — notify when price ${dirLabel} ${FormattedString.code(fmtPrice(triggerPrice))}`;
     await ctx.editMessageText(msg.text, { entities: msg.entities });
   });
 }

@@ -8,6 +8,7 @@ import { withdrawCollateral } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
+import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
 
 const SECURITY_DELAY_SECONDS = 300;
@@ -74,9 +75,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       });
     } catch (err) {
       logger.error({ err }, "Withdrawal failed");
-      await ctx.editMessageText(
-        "❌ Withdrawal failed. Check your balance with /balance and try again.",
-      );
+      await ctx.editMessageText(formatTradeError(err, "Withdrawal"), { parse_mode: "HTML" });
     }
   });
 

@@ -11,6 +11,7 @@ import { registerHistory, sendHistoryScreen } from "./history.js";
 import { registerLong, sendSymbolPicker } from "./long.js";
 import { registerMarkets } from "./markets.js";
 import { registerPnl } from "./pnl.js";
+import { registerPortfolio } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
 import { registerPrice } from "./price.js";
 import { registerPriceAlert } from "./pricealert.js";
@@ -40,6 +41,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerReferral(bot);
   registerShare(bot);
   registerFunding(bot);
+  registerPortfolio(bot);
   registerSetSl(bot);
   registerSetTp(bot);
   registerExport(bot);

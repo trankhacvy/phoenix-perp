@@ -7,7 +7,10 @@ import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
+import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
+
+const LADDER_FRACTIONS = [0.25, 0.5, 1.0];
 
 export function registerSetTp(bot: Bot<BotContext>) {
   bot.command("settp", async (ctx) => {
@@ -88,7 +91,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.editMessageText(`✅ Take profit removed for ${symbol}.`);
     } catch (e) {
       logger.error({ err: e, symbol }, "cancelStopLoss (TP) failed");
-      await ctx.editMessageText("❌ Failed to remove take profit.");
+      await ctx.editMessageText(formatTradeError(e, "Remove take profit"), { parse_mode: "HTML" });
     }
   });
 
@@ -116,7 +119,70 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
       logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (TP) failed");
-      await ctx.editMessageText("❌ Failed to set take profit.");
+      await ctx.editMessageText(formatTradeError(e, "Set take profit"), { parse_mode: "HTML" });
+    }
+  });
+
+  bot.callbackQuery(/^tp_ladder:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
+    const state = await getTraderState(ctx.user.walletAddress);
+    const pos = state.positions.find((p) => p.symbol === symbol);
+    if (!pos) {
+      await ctx.reply(`No open ${symbol} position.`);
+      return;
+    }
+
+    const markPrice = Number(pos.markPrice);
+    const pcts = [5, 10, 20];
+    const levels = pcts.map((pct, i) => ({
+      price: side === "long" ? markPrice * (1 + pct / 100) : markPrice * (1 - pct / 100),
+      fraction: LADDER_FRACTIONS[i],
+      pct,
+    }));
+
+    const lines = levels
+      .map(
+        (l) =>
+          `• ${side === "long" ? "+" : "-"}${l.pct}%  ~${fmtPrice(l.price)}  close ${(l.fraction * 100).toFixed(0)}%`,
+      )
+      .join("\n");
+
+    const pricesParam = levels.map((l) => l.price.toFixed(2)).join(",");
+    const kb = new InlineKeyboard()
+      .text("✅ Set ladder", `tp_ladder_exec:${symbol}:${side}:${pricesParam}`)
+      .text("✕ Cancel", "cancel");
+
+    const msg = fmt`🪜 ${FormattedString.b(`Ladder Take Profit — ${symbol}`)}\n\n${lines}\n\n${FormattedString.i("Each level closes a portion of your position.")}`;
+    await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^tp_ladder_exec:([A-Z0-9]+):(long|short):(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Setting ladder…");
+    if (!ctx.user) return;
+    const [symbol, side, pricesStr] = ctx.match.slice(1) as [string, "long" | "short", string];
+    const prices = pricesStr.split(",").map(Number);
+
+    try {
+      await setTpSl(
+        {
+          symbol,
+          walletAddress: ctx.user.walletAddress,
+          positionSide: side,
+          tpLevels: prices.map((p, i) => ({
+            price: p,
+            fraction: LADDER_FRACTIONS[i],
+            mode: "limit" as const,
+          })),
+        },
+        getKitSigner(ctx.user.walletAddress),
+      );
+      const msg = fmt`✅ ${FormattedString.b("Ladder take profit set")}\n\n${symbol} — ${prices.length} levels active`;
+      await ctx.editMessageText(msg.text, { entities: msg.entities });
+    } catch (e) {
+      logger.error({ err: e, symbol }, "tp_ladder_exec failed");
+      await ctx.editMessageText(formatTradeError(e, "Ladder TP"), { parse_mode: "HTML" });
     }
   });
 }
@@ -152,6 +218,8 @@ export async function sendTpPrompt(
   }
   kb.row()
     .text("Custom price", `tp_custom:${symbol}:${positionSide}`)
+    .row()
+    .text("🪜 Ladder exit (25/50/100%)", `tp_ladder:${symbol}:${positionSide}`)
     .row()
     .text("🗑 Remove take profit", `tp:remove:${symbol}:${positionSide}`)
     .text("✕ Cancel", "cancel");

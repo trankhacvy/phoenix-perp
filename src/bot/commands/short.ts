@@ -10,6 +10,7 @@ import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
+import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
 import { sendLeveragePicker, sendSizePicker, sendSymbolPicker, sendTradeConfirm } from "./long.js";
 
@@ -50,7 +51,7 @@ export function registerShort(bot: Bot<BotContext>) {
     await sendLeveragePicker(ctx, "short", ctx.match[1]);
   });
 
-  bot.callbackQuery(/^trade_lev:short:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_lev:short:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendSizePicker(ctx, "short", ctx.match[1], Number(ctx.match[2]));
@@ -66,13 +67,13 @@ export function registerShort(bot: Bot<BotContext>) {
     await setPending(ctx.from.id, `trade_leverage:short:${symbol}`);
   });
 
-  bot.callbackQuery(/^trade_size:short:([A-Z0-9]+):(\d+):([\d.]+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_size:short:([A-Z0-9]+):([\d.]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendTradeConfirm(ctx, "short", ctx.match[1], Number(ctx.match[2]), Number(ctx.match[3]));
   });
 
-  bot.callbackQuery(/^trade_size_custom:short:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+  bot.callbackQuery(/^trade_size_custom:short:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, levStr] = ctx.match.slice(1);
@@ -118,12 +119,13 @@ export function registerShort(bot: Bot<BotContext>) {
       });
     } catch (e) {
       logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
-      const errMsg = e instanceof Error ? e.message : "Unknown error";
       const kb = new InlineKeyboard()
         .text("Try again", `trade:short:${symbol}`)
         .text("← Back", "nav:positions");
-      const errFmt = fmt`❌ ${FormattedString.b("Trade failed")}\n\n${symbol} Short\nReason: ${FormattedString.code(errMsg)}`;
-      await ctx.editMessageText(errFmt.text, { entities: errFmt.entities, reply_markup: kb });
+      await ctx.editMessageText(formatTradeError(e, "Trade"), {
+        parse_mode: "HTML",
+        reply_markup: kb,
+      });
     }
   });
 }
