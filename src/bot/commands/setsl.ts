@@ -6,8 +6,8 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
 import { formatTradeError } from "../lib/errors.js";
+import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
 export function registerSetSl(bot: Bot<BotContext>) {

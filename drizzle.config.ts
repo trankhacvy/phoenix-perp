@@ -6,6 +6,7 @@ export default defineConfig({
     "./src/db/schema/alerts.ts",
     "./src/db/schema/referrals.ts",
     "./src/db/schema/settings.ts",
+    "./src/db/schema/wallet_monitors.ts",
   ],
   out: "./src/db/migrations",
   dialect: "postgresql",

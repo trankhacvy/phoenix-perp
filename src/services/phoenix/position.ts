@@ -107,14 +107,15 @@ export interface TradeHistoryResponse {
   nextCursor?: string;
 }
 
-export async function getTradeHistory(
+// biome-ignore lint/suspicious/noExplicitAny: cursor and raw response not in SDK types
+async function _fetchPage(
   walletAddress: string,
-  limit = 20,
+  limit: number,
+  cursor?: string,
 ): Promise<TradeHistoryResponse> {
-  const res = await getPhoenixClient()
-    .api.trades()
-    .getTraderTradesHistory(walletAddress, { limit });
-
+  // biome-ignore lint/suspicious/noExplicitAny: cursor param not in SDK type definitions
+  const opts: any = cursor ? { limit, cursor } : { limit };
+  const res = await getPhoenixClient().api.trades().getTraderTradesHistory(walletAddress, opts);
   const trades: TradeHistoryEntry[] = res.data.map((r) => ({
     symbol: r.marketSymbol,
     side: Number(r.baseLotsDelta) >= 0 ? "long" : "short",
@@ -127,10 +128,123 @@ export async function getTradeHistory(
     signature: r.signature ?? "",
     instructionType: r.instructionType,
   }));
+  return { trades, hasMore: res.hasMore, nextCursor: res.nextCursor ?? undefined };
+}
+
+export async function getTradeHistory(
+  walletAddress: string,
+  limit = 20,
+): Promise<TradeHistoryResponse> {
+  return _fetchPage(walletAddress, limit);
+}
+
+export async function fetchAllTradeHistory(
+  walletAddress: string,
+  maxFills = 500,
+): Promise<TradeHistoryEntry[]> {
+  const all: TradeHistoryEntry[] = [];
+  let cursor: string | undefined;
+  while (all.length < maxFills) {
+    const page = await _fetchPage(walletAddress, 100, cursor);
+    all.push(...page.trades);
+    if (!page.hasMore || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return all;
+}
+
+export interface MarketPnl {
+  symbol: string;
+  fills: number;
+  realizedPnl: number;
+  wins: number;
+  closes: number;
+  volume: number;
+}
+
+export interface WalletAnalytics {
+  totalFills: number;
+  marketsCount: number;
+  totalVolume: number;
+  realizedPnl: number;
+  closedTrades: number;
+  wins: number;
+  lastFillAt: number | null;
+  longCount: number;
+  shortCount: number;
+  makerCount: number;
+  bestTrade: { pnl: number; action: string; symbol: string } | null;
+  worstTrade: { pnl: number; action: string; symbol: string } | null;
+  perMarket: MarketPnl[];
+}
+
+export function computeWalletAnalytics(trades: TradeHistoryEntry[]): WalletAnalytics {
+  let totalVolume = 0;
+  let realizedPnl = 0;
+  let closedTrades = 0;
+  let wins = 0;
+  let longCount = 0;
+  let makerCount = 0;
+  let lastFillAt: number | null = null;
+  let bestTrade: WalletAnalytics["bestTrade"] = null;
+  let worstTrade: WalletAnalytics["worstTrade"] = null;
+  const marketMap = new Map<string, MarketPnl>();
+
+  for (const t of trades) {
+    const price = Number(t.price);
+    const size = Number(t.size);
+    const pnl = Number(t.realizedPnl);
+    const volume = price * size;
+    const isClose = Number(t.realizedPnl) !== 0;
+    const isMaker = t.instructionType === "UncrossCrank";
+
+    totalVolume += volume;
+    if (t.side === "long") longCount++;
+    if (isMaker) makerCount++;
+    if (lastFillAt === null || t.timestamp > lastFillAt) lastFillAt = t.timestamp;
+
+    if (isClose) {
+      realizedPnl += pnl;
+      closedTrades++;
+      if (pnl > 0) wins++;
+      // close direction is inverted: short fill = closing a long position
+      const action = t.side === "short" ? "LONG" : "SHORT";
+      if (bestTrade === null || pnl > bestTrade.pnl) bestTrade = { pnl, action, symbol: t.symbol };
+      if (worstTrade === null || pnl < worstTrade.pnl)
+        worstTrade = { pnl, action, symbol: t.symbol };
+    }
+
+    let mkt = marketMap.get(t.symbol);
+    if (!mkt) {
+      mkt = { symbol: t.symbol, fills: 0, realizedPnl: 0, wins: 0, closes: 0, volume: 0 };
+      marketMap.set(t.symbol, mkt);
+    }
+    mkt.fills++;
+    mkt.volume += volume;
+    if (isClose) {
+      mkt.realizedPnl += pnl;
+      mkt.closes++;
+      if (pnl > 0) mkt.wins++;
+    }
+  }
+
+  const perMarket = Array.from(marketMap.values()).sort(
+    (a, b) => Math.abs(b.realizedPnl) - Math.abs(a.realizedPnl),
+  );
 
   return {
-    trades,
-    hasMore: res.hasMore,
-    nextCursor: res.nextCursor ?? undefined,
+    totalFills: trades.length,
+    marketsCount: marketMap.size,
+    totalVolume,
+    realizedPnl,
+    closedTrades,
+    wins,
+    lastFillAt,
+    longCount,
+    shortCount: trades.length - longCount,
+    makerCount,
+    bestTrade,
+    worstTrade,
+    perMarket,
   };
 }

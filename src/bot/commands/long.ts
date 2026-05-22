@@ -13,6 +13,7 @@ import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
+import { formatTradeError } from "../lib/errors.js";
 import {
   price as fmtPrice,
   fundingApr,
@@ -22,7 +23,6 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
-import { formatTradeError } from "../lib/errors.js";
 import { setPending } from "../lib/pending.js";
 
 export function registerLong(bot: Bot<BotContext>) {

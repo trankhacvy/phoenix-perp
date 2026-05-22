@@ -1,19 +1,34 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { Redis } from "ioredis";
 import WebSocket from "ws";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
-import { alertSubscriptions, users } from "../db/schema/index.js";
+import { alertSubscriptions, users, walletMonitors } from "../db/schema/index.js";
 import { alertQueue } from "../jobs/queues.js";
+import { MONITOR_EVENTS_CHANNEL } from "../lib/constants.js";
 import { logger } from "../lib/logger.js";
 import { redis } from "../lib/redis.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { RiskTier, TraderStateEvent } from "../types/index.js";
 
+type MonitorEvent =
+  | { action: "subscribe"; wallet: string; telegramId: string }
+  | { action: "unsubscribe"; wallet: string; telegramId: string };
+
 const connections = new Map<string, WebSocket>();
-const userCache = new Map<string, string>();
 const reconnecting = new Set<string>();
 const reconnectFailures = new Map<string, number>();
 const MAX_RECONNECT_FAILURES = 3;
+
+// wallet → Set of telegramIds that want alerts for this wallet (all watchers)
+const watcherIndex = new Map<string, Set<string>>();
+
+// wallet → ownerTelegramId (the bot user whose embedded wallet this is)
+// Monitored-only wallets have no entry here.
+const ownerMap = new Map<string, string>();
+
+// wallet → userId (DB id, for referral accrual)
+const ownerUserIdCache = new Map<string, string>();
 
 const RISK_ALERT_TIERS: RiskTier[] = [
   "atRisk",
@@ -42,10 +57,18 @@ function buildRiskAlertMessage(event: TraderStateEvent): string | null {
   ].join("\n");
 }
 
-export async function subscribeUser(walletAddress: string, telegramId: string) {
+function addWatcher(walletAddress: string, telegramId: string) {
+  let set = watcherIndex.get(walletAddress);
+  if (!set) {
+    set = new Set();
+    watcherIndex.set(walletAddress, set);
+  }
+  set.add(telegramId);
+}
+
+async function ensureConnection(walletAddress: string) {
   if (connections.has(walletAddress)) return;
 
-  userCache.set(walletAddress, telegramId);
   const ws = new WebSocket(config.PHOENIX_WS_URL);
   connections.set(walletAddress, ws);
 
@@ -63,59 +86,7 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
   ws.on("message", async (raw) => {
     try {
       const event = JSON.parse(raw.toString()) as TraderStateEvent;
-
-      const prevKey = `ws:positions:${walletAddress}`;
-      const prev = await redis.get(prevKey);
-      if (prev) {
-        const prevPositions = JSON.parse(prev) as TraderStateEvent["positions"];
-        for (const pos of event.positions) {
-          const prevPos = prevPositions.find((p) => p.symbol === pos.symbol);
-          if (prevPos && prevPos.side !== pos.side) {
-            await alertQueue.add("tpsl-flip", {
-              telegramId,
-              type: "tpsl_flip",
-              symbol: pos.symbol,
-              message: [
-                `🔄 <b>Position Flipped: ${pos.symbol}</b>`,
-                "Your TP/SL orders were cancelled by the protocol.",
-                "Tap /positions to reattach TP/SL.",
-              ].join("\n"),
-            });
-          }
-        }
-      }
-      await redis.set(prevKey, JSON.stringify(event.positions), "EX", 3600);
-
-      const alertMsg = buildRiskAlertMessage(event);
-      if (alertMsg) {
-        await alertQueue.add("risk-tier", {
-          telegramId,
-          type: event.riskTier.toLowerCase(),
-          message: alertMsg,
-        });
-      }
-
-      for (const fill of event.fills ?? []) {
-        await alertQueue.add("fill", {
-          telegramId,
-          type: "fill",
-          symbol: fill.symbol,
-          message: [
-            `✅ <b>Order Filled: ${fill.symbol}</b>`,
-            `Side: ${fill.side.toUpperCase()}`,
-            `Size: ${fill.size} | Price: $${fill.price}`,
-            `Fee: $${fill.fee}`,
-          ].join("\n"),
-        });
-
-        const userId = await getUserId(walletAddress);
-        if (userId) {
-          const notional = Number(fill.size) * Number(fill.price);
-          await accrueReferralFee(userId, notional).catch((err) =>
-            logger.error({ err }, "Referral fee accrual failed"),
-          );
-        }
-      }
+      await handleTraderStateEvent(walletAddress, event);
     } catch (err) {
       logger.error({ err, walletAddress }, "WS message parse error");
     }
@@ -129,9 +100,13 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
     reconnecting.add(walletAddress);
     setTimeout(() => {
       reconnecting.delete(walletAddress);
-      subscribeUser(walletAddress, telegramId).catch((err) => {
-        logger.error({ err, walletAddress }, "WS reconnect failed");
-      });
+      const hasWatchers =
+        (watcherIndex.get(walletAddress)?.size ?? 0) > 0 || ownerMap.has(walletAddress);
+      if (hasWatchers) {
+        ensureConnection(walletAddress).catch((err) =>
+          logger.error({ err, walletAddress }, "WS reconnect failed"),
+        );
+      }
     }, 5000);
   });
 
@@ -142,11 +117,11 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
 
     if (failures >= MAX_RECONNECT_FAILURES) {
       reconnectFailures.delete(walletAddress);
-      const tid = userCache.get(walletAddress);
-      if (tid) {
+      const ownerTid = ownerMap.get(walletAddress);
+      if (ownerTid) {
         alertQueue
           .add("ws-error", {
-            telegramId: tid,
+            telegramId: ownerTid,
             type: "fill",
             symbol: undefined,
             message:
@@ -158,22 +133,190 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
   });
 }
 
-export function unsubscribeUser(walletAddress: string) {
-  const ws = connections.get(walletAddress);
-  if (ws) {
-    ws.close();
-    connections.delete(walletAddress);
-    userCache.delete(walletAddress);
+async function handleTraderStateEvent(walletAddress: string, event: TraderStateEvent) {
+  const ownerTid = ownerMap.get(walletAddress);
+  const watchers = watcherIndex.get(walletAddress) ?? new Set<string>();
+
+  if (ownerTid) {
+    await handleOwnAccountEvent(walletAddress, ownerTid, event);
+  }
+
+  const externalWatchers = [...watchers].filter((tid) => tid !== ownerTid);
+  if (externalWatchers.length > 0) {
+    await handleMonitoredWalletEvent(walletAddress, externalWatchers, event);
   }
 }
 
-async function getUserId(walletAddress: string): Promise<string | null> {
-  const cached = userCache.get(walletAddress);
+async function handleOwnAccountEvent(
+  walletAddress: string,
+  telegramId: string,
+  event: TraderStateEvent,
+) {
+  const prevKey = `ws:positions:${walletAddress}`;
+  const prev = await redis.get(prevKey);
+  if (prev) {
+    const prevPositions = JSON.parse(prev) as TraderStateEvent["positions"];
+    for (const pos of event.positions ?? []) {
+      const prevPos = prevPositions.find((p) => p.symbol === pos.symbol);
+      if (prevPos && prevPos.side !== pos.side) {
+        await alertQueue.add("tpsl-flip", {
+          telegramId,
+          type: "tpsl_flip",
+          symbol: pos.symbol,
+          message: [
+            `🔄 <b>Position Flipped: ${pos.symbol}</b>`,
+            "Your TP/SL orders were cancelled by the protocol.",
+            "Tap /positions to reattach TP/SL.",
+          ].join("\n"),
+        });
+      }
+    }
+  }
+  await redis.set(prevKey, JSON.stringify(event.positions ?? []), "EX", 3600);
+
+  const alertMsg = buildRiskAlertMessage(event);
+  if (alertMsg) {
+    await alertQueue.add("risk-tier", {
+      telegramId,
+      type: event.riskTier.toLowerCase(),
+      message: alertMsg,
+    });
+  }
+
+  for (const fill of event.fills ?? []) {
+    await alertQueue.add("fill", {
+      telegramId,
+      type: "fill",
+      symbol: fill.symbol,
+      message: [
+        `✅ <b>Order Filled: ${fill.symbol}</b>`,
+        `Side: ${fill.side.toUpperCase()}`,
+        `Size: ${fill.size} | Price: $${fill.price}`,
+        `Fee: $${fill.fee}`,
+      ].join("\n"),
+    });
+
+    const userId = await getOwnerUserId(walletAddress);
+    if (userId) {
+      const notional = Number(fill.size) * Number(fill.price);
+      await accrueReferralFee(userId, notional).catch((err) =>
+        logger.error({ err }, "Referral fee accrual failed"),
+      );
+    }
+  }
+}
+
+async function handleMonitoredWalletEvent(
+  walletAddress: string,
+  watcherTelegramIds: string[],
+  event: TraderStateEvent,
+) {
+  const short = `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`;
+
+  const prevKey = `ws:positions:${walletAddress}`;
+  const prev = await redis.get(prevKey);
+  const prevPositions: TraderStateEvent["positions"] = prev ? JSON.parse(prev) : [];
+
+  const positions = event.positions ?? [];
+
+  if (!ownerMap.has(walletAddress)) {
+    await redis.set(prevKey, JSON.stringify(positions), "EX", 3600);
+  }
+
+  const alerts: { type: string; symbol: string; message: string }[] = [];
+
+  for (const pos of positions) {
+    const existed = prevPositions.find((p) => p.symbol === pos.symbol);
+    if (!existed) {
+      const levPart = pos.leverage ? `\nLeverage: ${pos.leverage}x` : "";
+      alerts.push({
+        type: "monitor_open",
+        symbol: pos.symbol,
+        message: `👁 <b>${short} opened ${pos.symbol}</b>\n${pos.side.toUpperCase()} · ${pos.size} ${pos.symbol} @ $${pos.entryPrice}${levPart}`,
+      });
+    } else if (existed.side !== pos.side) {
+      alerts.push({
+        type: "monitor_flip",
+        symbol: pos.symbol,
+        message: `👁 <b>${short} flipped ${pos.symbol}</b>\n${existed.side.toUpperCase()} → ${pos.side.toUpperCase()}`,
+      });
+    }
+  }
+
+  for (const prevPos of prevPositions) {
+    const still = positions.find((p) => p.symbol === prevPos.symbol);
+    if (!still) {
+      alerts.push({
+        type: "monitor_close",
+        symbol: prevPos.symbol,
+        message: `👁 <b>${short} closed ${prevPos.symbol}</b>\nWas ${prevPos.side.toUpperCase()} · ${prevPos.size} ${prevPos.symbol}`,
+      });
+    }
+  }
+
+  for (const fill of event.fills ?? []) {
+    alerts.push({
+      type: "monitor_fill",
+      symbol: fill.symbol,
+      message: `👁 <b>${short} filled ${fill.symbol}</b>\n${fill.side.toUpperCase()} · ${fill.size} @ $${fill.price}`,
+    });
+  }
+
+  for (const telegramId of watcherTelegramIds) {
+    for (const alert of alerts) {
+      await alertQueue.add("monitor-alert", {
+        telegramId,
+        type: alert.type,
+        symbol: alert.symbol,
+        message: alert.message,
+      });
+    }
+  }
+}
+
+export async function subscribeUser(walletAddress: string, telegramId: string) {
+  ownerMap.set(walletAddress, telegramId);
+  addWatcher(walletAddress, telegramId);
+  await ensureConnection(walletAddress);
+}
+
+export async function subscribeMonitored(watchedWallet: string, telegramId: string) {
+  addWatcher(watchedWallet, telegramId);
+  await ensureConnection(watchedWallet);
+}
+
+export function unsubscribeMonitored(watchedWallet: string, telegramId: string) {
+  const watchers = watcherIndex.get(watchedWallet);
+  if (!watchers) return;
+  watchers.delete(telegramId);
+
+  if (watchers.size === 0 && !ownerMap.has(watchedWallet)) {
+    const ws = connections.get(watchedWallet);
+    ws?.close();
+    connections.delete(watchedWallet);
+    watcherIndex.delete(watchedWallet);
+  }
+}
+
+export function unsubscribeUser(walletAddress: string) {
+  ownerMap.delete(walletAddress);
+  ownerUserIdCache.delete(walletAddress);
+  const watchers = watcherIndex.get(walletAddress);
+  if (!watchers || watchers.size === 0) {
+    const ws = connections.get(walletAddress);
+    ws?.close();
+    connections.delete(walletAddress);
+    watcherIndex.delete(walletAddress);
+  }
+}
+
+async function getOwnerUserId(walletAddress: string): Promise<string | null> {
+  const cached = ownerUserIdCache.get(walletAddress);
   if (cached) return cached;
   const user = await db.query.users.findFirst({
     where: eq(users.walletAddress, walletAddress),
   });
-  if (user) userCache.set(walletAddress, user.id);
+  if (user) ownerUserIdCache.set(walletAddress, user.id);
   return user?.id ?? null;
 }
 
@@ -270,24 +413,63 @@ async function checkPriceAlerts(mids: Record<string, number>) {
 }
 
 async function bootstrap() {
-  const keys = await redis.keys("ws:positions:*");
-  if (keys.length === 0) {
-    logger.info({ count: 0 }, "WS worker bootstrapped");
-    subscribeAllMids();
-    return;
-  }
-
-  const walletAddresses = keys.map((k) => k.replace("ws:positions:", ""));
-  const dbUsers = await db
+  const ownWallets = await db
     .select({ walletAddress: users.walletAddress, telegramId: users.telegramId })
-    .from(users)
-    .where(inArray(users.walletAddress, walletAddresses));
+    .from(users);
 
-  for (const user of dbUsers) {
+  for (const user of ownWallets) {
     await subscribeUser(user.walletAddress, user.telegramId);
   }
-  logger.info({ count: dbUsers.length }, "WS worker bootstrapped");
+
+  const monitors = await db
+    .select({
+      watchedWallet: walletMonitors.watchedWallet,
+      telegramId: users.telegramId,
+    })
+    .from(walletMonitors)
+    .innerJoin(users, eq(walletMonitors.userId, users.id))
+    .where(eq(walletMonitors.enabled, true));
+
+  for (const m of monitors) {
+    await subscribeMonitored(m.watchedWallet, m.telegramId);
+  }
+
+  logger.info(
+    { ownWallets: ownWallets.length, monitors: monitors.length },
+    "WS worker bootstrapped",
+  );
+
+  subscribeMonitorEvents();
   subscribeAllMids();
+}
+
+function subscribeMonitorEvents() {
+  const sub = new Redis(config.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+  });
+
+  sub.subscribe(MONITOR_EVENTS_CHANNEL, (err) => {
+    if (err) logger.error({ err }, "monitor:events subscribe error");
+    else logger.info("Subscribed to monitor:events");
+  });
+
+  sub.on("message", (_channel: string, message: string) => {
+    try {
+      const event = JSON.parse(message) as MonitorEvent;
+      if (event.action === "subscribe") {
+        subscribeMonitored(event.wallet, event.telegramId).catch((err) =>
+          logger.error({ err }, "subscribeMonitored via pub/sub failed"),
+        );
+      } else if (event.action === "unsubscribe") {
+        unsubscribeMonitored(event.wallet, event.telegramId);
+      }
+    } catch (err) {
+      logger.error({ err }, "monitor:events parse error");
+    }
+  });
+
+  sub.on("error", (err: Error) => logger.error({ err }, "monitor:events Redis error"));
 }
 
 process.on("SIGTERM", () => {

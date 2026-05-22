@@ -27,7 +27,7 @@ function buildListRow(
   botUsername: string,
 ): FormattedString {
   const deepLink = `https://t.me/${botUsername}?start=mkt_${m.symbol}_${page}`;
-  const isoTag = m.isolatedOnly ? " [ISO]" : "";
+  const isoTag = isIsolatedOnly(m.symbol) ? " [ISO]" : "";
   const maxLev = snap?.maxLeverage ?? m.leverageTiers[0]?.maxLeverage ?? 20;
   const label = `${localIdx + 1}. ${m.symbol}${isoTag} · ${maxLev}x`;
 
@@ -48,7 +48,7 @@ async function sendMarketsPage(
 
   const snapshots = await Promise.allSettled(slice.map((m) => getMarketSnapshot(m.symbol)));
 
-  const botUsername = (ctx.me ?? (await ctx.api.getMe())).username ?? "bot";
+  const botUsername = ctx.me.username ?? "bot";
 
   const pageLabel =
     totalPages > 1 ? fmt`  ·  ${FormattedString.i(`Page ${safePage + 1}/${totalPages}`)}` : fmt``;

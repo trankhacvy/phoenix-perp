@@ -5,7 +5,8 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
-import { cryptoSize, price as fmtPrice, shortAddr, usd } from "../lib/fmt.js";
+import { pnlEmoji, shortAddr, signedUsd, usd } from "../lib/fmt.js";
+import { buildPositionRows } from "./positions.js";
 
 const solConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
 
@@ -20,6 +21,17 @@ const riskEmoji: Record<string, string> = {
   highRisk: "🔴",
 };
 
+const riskLabel: Record<string, string> = {
+  safe: "Safe",
+  healthy: "Healthy",
+  atRisk: "At risk",
+  at_risk: "At risk",
+  cancellable: "Orders may cancel",
+  liquidatable: "⚠️ Near liquidation",
+  backstopLiquidatable: "⚠️ Critical",
+  highRisk: "⚠️ High risk",
+};
+
 export function registerPortfolio(bot: Bot<BotContext>) {
   bot.command("portfolio", async (ctx) => {
     if (!ctx.user) {
@@ -30,51 +42,98 @@ export function registerPortfolio(bot: Bot<BotContext>) {
   });
 }
 
-export async function sendPortfolioScreen(ctx: BotContext): Promise<void> {
-  if (!ctx.user) return;
+export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: string): Promise<void> {
+  const targetWallet = walletAddress ?? ctx.user?.walletAddress;
+  if (!targetWallet) return;
+  const isOwn = !walletAddress || walletAddress === ctx.user?.walletAddress;
 
   const [state, solLamports] = await Promise.all([
-    getTraderState(ctx.user.walletAddress),
-    solConnection.getBalance(new PublicKey(ctx.user.walletAddress)).catch(() => 0),
+    getTraderState(targetWallet),
+    solConnection.getBalance(new PublicKey(targetWallet)).catch(() => 0),
   ]);
 
-  const sol = (solLamports / 1e9).toFixed(4);
+  const sol = solLamports / 1e9;
   const deposited = Number(state.depositedCollateral);
   const effective = Number(state.effectiveCollateral);
   const upnl = Number(state.unrealizedPnl);
   const funding = Number(state.unsettledFunding);
   const totalValue = effective + upnl + funding;
   const tier = String(state.riskTier ?? "safe");
+  const tierStr = `${riskEmoji[tier] ?? "⚪"} ${riskLabel[tier] ?? tier}`;
 
-  const accountSection = fmt`💰 ${FormattedString.b("Account")}\n\nDeposited         ${FormattedString.b(usd(deposited))}\nAvailable margin  ${FormattedString.b(usd(effective))}\nUnrealized P&L    ${FormattedString.b(usd(upnl))}\nPending funding   ${FormattedString.b(usd(funding))}\nTotal value       ${FormattedString.b(usd(totalValue))}\n\nGas (SOL)  ${FormattedString.b(`${sol} SOL`)}\nWallet     ${FormattedString.code(shortAddr(ctx.user.walletAddress))}\n${riskEmoji[tier] ?? "⚪"} ${tier}`;
+  const sections: FormattedString[] = [];
 
-  let positionsSection = fmt``;
-  if (state.positions.length > 0) {
-    const posLines = state.positions.map((pos) => {
-      const upnlPos = Number(pos.unrealizedPnl);
-      const pnlSign = upnlPos >= 0 ? "+" : "";
-      const emoji = pos.side === "long" ? "🟢" : "🔴";
-      const liqLabel =
-        pos.liquidationPrice === "N/A" ? "—" : fmtPrice(Number(pos.liquidationPrice));
-      return fmt`${emoji} ${FormattedString.b(pos.symbol)}  ${cryptoSize(Number(pos.size), pos.symbol)}\n   Entry: ${fmtPrice(Number(pos.entryPrice))}  Mark: ${fmtPrice(Number(pos.markPrice))}\n   P&L: ${FormattedString.b(`${pnlSign}${usd(upnlPos)}`)}  Liq: ${liqLabel}`;
-    });
-    positionsSection = FormattedString.join(
-      [fmt`\n\n📊 ${FormattedString.b(`Positions (${state.positions.length})`)}`, ...posLines],
+  // ── Account ──────────────────────────────────────────────────────────────────
+  sections.push(
+    FormattedString.join(
+      [
+        fmt`💼 ${FormattedString.b("Account")}`,
+        fmt`Collateral   ${FormattedString.b(usd(deposited))}`,
+        fmt`Available    ${FormattedString.b(usd(effective))}`,
+        fmt`Total value  ${FormattedString.b(usd(totalValue))}`,
+      ],
       "\n",
-    );
+    ),
+  );
+
+  // ── Open P&L ─────────────────────────────────────────────────────────────────
+  const net = upnl + funding;
+  sections.push(
+    FormattedString.join(
+      [
+        fmt`📈 ${FormattedString.b("Open P&L")}`,
+        fmt`Unrealized      ${FormattedString.b(signedUsd(upnl))} ${pnlEmoji(upnl)}`,
+        fmt`Pending funding ${FormattedString.b(signedUsd(funding))}`,
+        fmt`Net             ${FormattedString.b(signedUsd(net))} ${pnlEmoji(net)}`,
+      ],
+      "\n",
+    ),
+  );
+
+  // ── Positions ────────────────────────────────────────────────────────────────
+  const positions = state.positions ?? [];
+  const botUsername = ctx.me.username ?? "bot";
+  if (positions.length === 0) {
+    sections.push(fmt`📊 ${FormattedString.i("No open positions.")}`);
   } else {
-    positionsSection = fmt`\n\n📊 ${FormattedString.i("No open positions.")}`;
+    const shown = positions.slice(0, 5);
+    const rest = positions.length - shown.length;
+    const posLines: FormattedString[] = [
+      fmt`📊 ${FormattedString.b(`Positions (${positions.length})`)}`,
+      ...buildPositionRows(shown, botUsername),
+    ];
+    if (rest > 0) posLines.push(fmt`${FormattedString.i(`+ ${rest} more — use /positions`)}`);
+    sections.push(FormattedString.join(posLines, "\n\n"));
   }
 
-  const kb = new InlineKeyboard()
-    .text("📥 Deposit", "nav:deposit")
-    .text("📤 Withdraw", "nav:withdraw")
-    .row()
-    .text("🟢 Long", "nav:long")
-    .text("🔴 Short", "nav:short")
-    .row()
-    .text("📋 History", "nav:history");
+  // ── Footer ───────────────────────────────────────────────────────────────────
+  sections.push(
+    FormattedString.join(
+      [
+        fmt`⛽ ${FormattedString.b(`${sol.toFixed(4)} SOL`)}`,
+        fmt`${FormattedString.code(shortAddr(targetWallet))}`,
+        fmt`${tierStr}`,
+      ],
+      "\n",
+    ),
+  );
 
-  const msg = FormattedString.join([accountSection, positionsSection], "");
+  const msg = FormattedString.join(sections, "\n\n");
+
+  const kb = isOwn
+    ? new InlineKeyboard()
+        .text("📥 Deposit", "nav:deposit")
+        .text("📤 Withdraw", "nav:withdraw")
+        .row()
+        .text("🟢 Long", "nav:long")
+        .text("🔴 Short", "nav:short")
+        .row()
+        .text("📊 Positions", "nav:positions")
+        .text("📋 History", "nav:history")
+    : new InlineKeyboard()
+        .text("📋 Trade History", `walletinfo:hist:${targetWallet}:0`)
+        .row()
+        .text("👁 Monitor", `monitor:add:${targetWallet}`);
+
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

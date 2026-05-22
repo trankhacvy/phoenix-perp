@@ -9,8 +9,8 @@ import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
-import { parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
 import { formatTradeError } from "../lib/errors.js";
+import { parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 import { sendLeveragePicker, sendSizePicker, sendSymbolPicker, sendTradeConfirm } from "./long.js";
 

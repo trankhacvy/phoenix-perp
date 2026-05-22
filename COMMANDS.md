@@ -5,7 +5,7 @@
 | Command | Description |
 |---|---|
 | `/start [code]` | Onboarding: jurisdiction attestation, Privy wallet creation, Phoenix activation. Pass a referral code to link it. Also handles deep links from `/positions`, `/history`, and `/markets`. |
-| `/balance` | Deposited collateral, available margin, unrealized PnL, pending funding, SOL gas balance, wallet address, and risk tier. |
+| `/portfolio` | Full account snapshot — collateral, available margin, total value, open P&L (unrealized + pending funding), inline positions (up to 5), SOL gas, and risk tier. |
 | `/deposit` | Wallet address + QR code. Send USDC and ~0.01 SOL for gas. |
 | `/withdraw [amount]` | Withdraw USDC from the trading account. Two-step with a 5-minute security delay. |
 | `/export` | Instructions for exporting your private key via the Privy dashboard. |
@@ -27,8 +27,6 @@
 | Command | Description |
 |---|---|
 | `/history` | Paginated trade history (5 per page, last 30 trades). Each row shows size, fill price, and value (opens) or realized PnL (closes). Tap a row for full detail + Solscan link. |
-| `/pnl` | Unrealized PnL summary across all open positions plus pending funding. |
-| `/portfolio` | Full account snapshot — balance + all open positions in one view. |
 | `/share <symbol>` | Generate a shareable PnL card image (PNG) for a closed position. |
 
 ## Referral

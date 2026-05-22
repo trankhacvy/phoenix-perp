@@ -8,8 +8,10 @@ import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
 import { redis } from "../../lib/redis.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
+import { getOrderbook } from "../../services/phoenix/market.js";
 import { activatePhoenixAccount, createEmbeddedWallet } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { usd } from "../lib/fmt.js";
 import { sendHistoryDetail } from "./history.js";
 import { sendMarketDetail } from "./markets.js";
 import { sendPositionDetail } from "./positions.js";
@@ -54,17 +56,26 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
-      const solLamports = await new Connection(config.HELIUS_RPC_URL, "confirmed")
-        .getBalance(new PublicKey(ctx.user.walletAddress))
-        .catch(() => 0);
-      const sol = (solLamports / 1e9).toFixed(4);
+      const [solLamports, solBook] = await Promise.all([
+        new Connection(config.HELIUS_RPC_URL, "confirmed")
+          .getBalance(new PublicKey(ctx.user.walletAddress))
+          .catch(() => 0),
+        getOrderbook("SOL").catch(() => null),
+      ]);
+      const sol = solLamports / 1e9;
+      const solPrice = solBook?.mid ?? 0;
+      const solUsd = sol * solPrice;
+      const name = ctx.from.first_name ?? "trader";
       const kb = new InlineKeyboard()
-        .text("💰 Balance", "nav:balance")
+        .text("📊 Portfolio", "nav:balance")
         .text("📊 Positions", "nav:positions")
         .row()
         .text("🟢 Long", "nav:long")
-        .text("🔴 Short", "nav:short");
-      const msg = fmt`👋 ${FormattedString.b("Welcome back!")}\n\n${FormattedString.code(ctx.user.walletAddress)}\nSOL balance: ${FormattedString.b(`${sol} SOL`)}`;
+        .text("🔴 Short", "nav:short")
+        .row()
+        .text("📈 Markets", "nav:markets")
+        .text("📋 History", "nav:history");
+      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n💰 ${FormattedString.b("Wallet Balance")}\n${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt`  (${FormattedString.b(usd(solUsd))})` : fmt``}\n\n${FormattedString.code(ctx.user.walletAddress)}\n\nDeposit USDC to fund your account and start trading.`;
       await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
       return;
     }
@@ -138,7 +149,7 @@ export function registerStart(bot: Bot<BotContext>) {
       }
 
       if (msgId) {
-        const welcome = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\nYour wallet is ready.\n${FormattedString.code(walletAddress)}\n\nUse /deposit to fund your account, then /markets to start trading.`;
+        const welcome = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\nYour Phoenix account is ready to trade.\n\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account, then use /markets to explore all pairs.`;
         await ctx.api.editMessageText(ctx.chat?.id ?? 0, msgId, welcome.text, {
           entities: welcome.entities,
         });

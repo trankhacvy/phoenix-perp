@@ -3,37 +3,31 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { type TradeHistoryEntry, getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
-import { cryptoSize, price as fmtPrice, solscanUrl, usd } from "../lib/fmt.js";
+import { cryptoSize, price as fmtPrice, pnlEmoji, signedUsd, solscanUrl, usd } from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 
 const PAGE_SIZE = 5;
 const FETCH_LIMIT = 30;
 
-function tradeAction(instructionType: string, side: "long" | "short"): string {
-  if (instructionType === "ReduceOnly") {
-    return side === "short" ? "Close Long" : "Close Short";
-  }
-  return side === "long" ? "Open Long" : "Open Short";
-}
-
-function orderType(instructionType: string): string | null {
-  if (instructionType === "ReduceOnly") return null;
-  const lower = instructionType.toLowerCase();
-  if (lower.includes("market")) return "Market";
-  if (lower.includes("limit") || lower.includes("post")) return "Limit";
-  return null;
-}
-
 function isClose(t: TradeHistoryEntry): boolean {
-  return t.instructionType === "ReduceOnly";
+  return Number(t.realizedPnl) !== 0;
 }
 
-function pnlEmoji(n: number): string {
-  return n >= 0 ? "🟢" : "🔴";
+function tradeAction(t: TradeHistoryEntry): string {
+  if (isClose(t)) {
+    const base = t.side === "short" ? "Close Long" : "Close Short";
+    if (t.instructionType === "ExecuteStopLoss") return `${base} · SL`;
+    if (t.instructionType === "ExecuteTakeProfit") return `${base} · TP`;
+    return base;
+  }
+  return t.side === "long" ? "Open Long" : "Open Short";
 }
 
-function signedUsd(n: number): string {
-  return n >= 0 ? `+${usd(n)}` : usd(n);
+function orderType(t: TradeHistoryEntry): string | null {
+  if (isClose(t)) return null;
+  if (t.instructionType === "UncrossCrank") return "Limit";
+  if (t.instructionType === "PlaceMarketOrder") return "Market";
+  return null;
 }
 
 function formatTs(ts: number): string {
@@ -51,33 +45,33 @@ function formatTs(ts: number): string {
 
 function buildListText(
   pageItems: TradeHistoryEntry[],
-  allTrades: TradeHistoryEntry[],
+  totalRealizedPnl: number,
   page: number,
   totalPages: number,
   botUsername: string,
+  external: boolean,
 ): FormattedString {
-  const totalRealizedPnl = allTrades
-    .filter(isClose)
-    .reduce((sum, t) => sum + Number(t.realizedPnl), 0);
-
   const pageLabel =
     totalPages > 1 ? fmt`  ·  ${FormattedString.i(`Page ${page + 1}/${totalPages}`)}` : fmt``;
   const header = fmt`📋 ${FormattedString.b("Trade History")}${pageLabel}\nRealized PnL: ${FormattedString.b(signedUsd(totalRealizedPnl))} ${pnlEmoji(totalRealizedPnl)}`;
 
   const rows = pageItems.map((t, localIdx) => {
     const globalIdx = page * PAGE_SIZE + localIdx;
-    const action = tradeAction(t.instructionType, t.side);
-    const ot = orderType(t.instructionType);
+    const action = tradeAction(t);
+    const ot = orderType(t);
     const otPart = ot ? ` · ${ot}` : "";
     const size = cryptoSize(Number(t.size), t.symbol);
     const tradeValue = Number(t.price) * Number(t.size);
-    const deepLink = `https://t.me/${botUsername}?start=hist_${globalIdx}_${page}`;
+    const deepLink = external
+      ? undefined
+      : `https://t.me/${botUsername}?start=hist_${globalIdx}_${page}`;
 
-    // Link text: "1. SOL · Open Long · Market"  timestamp floats to the right on the same line
-    const titleLine = fmt`${FormattedString.link(`${localIdx + 1}. ${t.symbol} · ${action}${otPart}`, deepLink)} \t\t\t\t\t\t${FormattedString.i(formatTs(t.timestamp))}`;
+    const titleText = `${localIdx + 1}. ${t.symbol} · ${action}${otPart}`;
+    const titleLine = deepLink
+      ? fmt`${FormattedString.link(titleText, deepLink)}\n${FormattedString.i(formatTs(t.timestamp))}`
+      : fmt`${FormattedString.b(titleText)}\n${FormattedString.i(formatTs(t.timestamp))}`;
 
     const pnl = Number(t.realizedPnl);
-    // Opens: show value (bet size). Closes: show P&L — the number traders care about.
     const metricPart = isClose(t)
       ? fmt`P&L: ${FormattedString.b(signedUsd(pnl))} ${pnlEmoji(pnl)}`
       : fmt`Value: ${FormattedString.b(usd(tradeValue))}`;
@@ -90,18 +84,25 @@ function buildListText(
   return FormattedString.join([header, ...rows], "\n\n");
 }
 
-function buildListKeyboard(page: number, totalPages: number): InlineKeyboard {
+function buildListKeyboard(
+  page: number,
+  totalPages: number,
+  prefix: string,
+  external: boolean,
+): InlineKeyboard {
   const kb = new InlineKeyboard();
-  addPaginationRow(kb, "hist:list", page, totalPages);
-  kb.text("📊 Positions", "nav:positions").text("💰 Balance", "nav:balance");
+  addPaginationRow(kb, prefix, page, totalPages);
+  if (!external) {
+    kb.text("📊 Positions", "nav:positions").text("📊 Portfolio", "nav:balance");
+  }
   return kb;
 }
 
 // ─── Detail view ─────────────────────────────────────────────────────────────
 
 function buildDetailText(t: TradeHistoryEntry): FormattedString {
-  const action = tradeAction(t.instructionType, t.side);
-  const ot = orderType(t.instructionType);
+  const action = tradeAction(t);
+  const ot = orderType(t);
   const size = cryptoSize(Number(t.size), t.symbol);
   const tradeValue = Number(t.price) * Number(t.size);
   const pnl = Number(t.realizedPnl);
@@ -138,9 +139,17 @@ function buildDetailKeyboard(sig: string, fromPage: number): InlineKeyboard {
 
 // ─── Exported screen handlers ─────────────────────────────────────────────────
 
-export async function sendHistoryScreen(ctx: BotContext, page = 0, edit = false): Promise<void> {
-  if (!ctx.user) return;
-  const history = await getTradeHistory(ctx.user.walletAddress, FETCH_LIMIT);
+export async function sendHistoryScreen(
+  ctx: BotContext,
+  page = 0,
+  edit = false,
+  walletAddress?: string,
+): Promise<void> {
+  const targetWallet = walletAddress ?? ctx.user?.walletAddress;
+  if (!targetWallet) return;
+  const external = !!walletAddress && walletAddress !== ctx.user?.walletAddress;
+
+  const history = await getTradeHistory(targetWallet, FETCH_LIMIT);
 
   if (history.trades.length === 0) {
     const text = "No trades yet.";
@@ -154,8 +163,12 @@ export async function sendHistoryScreen(ctx: BotContext, page = 0, edit = false)
 
   const { items, page: safePage, totalPages } = paginate(history.trades, page, PAGE_SIZE);
   const botUsername = ctx.me.username ?? "bot";
-  const msg = buildListText(items, history.trades, safePage, totalPages, botUsername);
-  const kb = buildListKeyboard(safePage, totalPages);
+  const prefix = external ? `walletinfo:hist:${walletAddress}` : "hist:list";
+  const totalRealizedPnl = history.trades
+    .filter(isClose)
+    .reduce((sum, t) => sum + Number(t.realizedPnl), 0);
+  const msg = buildListText(items, totalRealizedPnl, safePage, totalPages, botUsername, external);
+  const kb = buildListKeyboard(safePage, totalPages, prefix, external);
   const opts = {
     entities: msg.entities,
     reply_markup: kb,
@@ -213,9 +226,5 @@ export function registerHistory(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendHistoryScreen(ctx, Number(ctx.match[1]), true);
-  });
-
-  bot.callbackQuery("noop", async (ctx) => {
-    await ctx.answerCallbackQuery();
   });
 }

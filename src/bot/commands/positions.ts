@@ -9,7 +9,16 @@ import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { formatTradeError } from "../lib/errors.js";
-import { cryptoSize, price as fmtPrice, num, solscanUrl, usd } from "../lib/fmt.js";
+import {
+  cryptoSize,
+  price as fmtPrice,
+  num,
+  pct,
+  pnlEmoji,
+  signedUsd,
+  solscanUrl,
+  usd,
+} from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
@@ -18,18 +27,6 @@ const CIRCLE_NUMS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "�
 
 function circleNum(i: number): string {
   return CIRCLE_NUMS[i] ?? `${i + 1}.`;
-}
-
-function pnlColor(n: number): string {
-  return n >= 0 ? "🟢" : "🔴";
-}
-
-function signedUsd(n: number): string {
-  return n >= 0 ? `+${usd(n)}` : usd(n);
-}
-
-function signedPct(n: number, decimals = 2): string {
-  return n >= 0 ? `+${num(n, decimals, decimals)}%` : `${num(n, decimals, decimals)}%`;
 }
 
 function calcPnlPct(pos: PhoenixPosition): number | null {
@@ -42,44 +39,29 @@ function calcPnlPct(pos: PhoenixPosition): number | null {
   return margin > 0 ? (upnl / margin) * 100 : null;
 }
 
-interface LiqInfo {
-  distPct: number;
-  warn: boolean;
-}
-
-function calcLiqInfo(pos: PhoenixPosition): LiqInfo | null {
-  if (pos.liquidationPrice === "N/A") return null;
+function formatLiqValue(pos: PhoenixPosition): { text: string; warn: boolean } {
+  if (pos.liquidationPrice === "N/A") return { text: "Safe ✅", warn: false };
   const liq = Number(pos.liquidationPrice);
   const mark = Number(pos.markPrice);
-  if (Number.isNaN(liq) || Number.isNaN(mark) || mark === 0 || liq <= 0) return null;
+  if (Number.isNaN(liq) || Number.isNaN(mark) || mark === 0 || liq <= 0) {
+    return { text: "Safe ✅", warn: false };
+  }
   const dist = pos.side === "long" ? ((mark - liq) / mark) * 100 : ((liq - mark) / mark) * 100;
-  return { distPct: dist, warn: dist < 5 };
-}
-
-function formatLiqValue(pos: PhoenixPosition): { text: string; warn: boolean } {
-  const info = calcLiqInfo(pos);
-  if (!info) return { text: "Safe ✅", warn: false };
   return {
-    text: `${fmtPrice(Number(pos.liquidationPrice))}  (–${num(info.distPct, 1, 1)}%)`,
-    warn: info.warn,
+    text: `${fmtPrice(liq)}  (–${num(dist, 1, 1)}%)`,
+    warn: dist < 5,
   };
 }
 
 // ─── List view ────────────────────────────────────────────────────────────────
 
-function buildListText(
-  positions: PhoenixPosition[],
-  totalUpnl: number,
-  botUsername: string,
-): FormattedString {
-  const header = fmt`📊 ${FormattedString.b(`Open Positions (${positions.length})`)}   Total uPnL: ${FormattedString.b(signedUsd(totalUpnl))} ${pnlColor(totalUpnl)}`;
-
-  const rows = positions.map((pos, i) => {
+export function buildPositionRows(positions: PhoenixPosition[], botUsername: string): FormattedString[] {
+  return positions.map((pos, i) => {
     const upnl = Number(pos.unrealizedPnl);
     const upnlPct = calcPnlPct(pos);
     const sideLabel = pos.side === "long" ? "LONG" : "SHORT";
     const levLabel = pos.leverage ? ` ${pos.leverage}x` : "";
-    const pnlStr = upnlPct != null ? `${signedUsd(upnl)} (${signedPct(upnlPct)})` : signedUsd(upnl);
+    const pnlStr = upnlPct != null ? `${signedUsd(upnl)} (${pct(upnlPct)})` : signedUsd(upnl);
     const deepLink = `https://t.me/${botUsername}?start=pos_${pos.symbol}_${pos.side}`;
     const liq = formatLiqValue(pos);
     const warnTag = liq.warn ? " ⚠️" : "";
@@ -87,13 +69,20 @@ function buildListText(
     return FormattedString.join(
       [
         FormattedString.link(`${circleNum(i)}  ${pos.symbol} - ${sideLabel}${levLabel}`, deepLink),
-        fmt`   ${FormattedString.b(pnlStr)} ${pnlColor(upnl)}  |  Liq ${FormattedString.b(liq.text)}${warnTag}`,
+        fmt`   ${FormattedString.b(pnlStr)} ${pnlEmoji(upnl)}  |  Liq ${FormattedString.b(liq.text)}${warnTag}`,
       ],
       "\n",
     );
   });
+}
 
-  return FormattedString.join([header, ...rows], "\n\n");
+function buildListText(
+  positions: PhoenixPosition[],
+  totalUpnl: number,
+  botUsername: string,
+): FormattedString {
+  const header = fmt`📊 ${FormattedString.b(`Open Positions (${positions.length})`)}   Total uPnL: ${FormattedString.b(signedUsd(totalUpnl))} ${pnlEmoji(totalUpnl)}`;
+  return FormattedString.join([header, ...buildPositionRows(positions, botUsername)], "\n\n");
 }
 
 function buildListKeyboard(): InlineKeyboard {
@@ -151,7 +140,7 @@ function buildDetailText(pos: PhoenixPosition, unsettledFunding: number): Format
   const levLabel = pos.leverage ? ` · ${pos.leverage}x` : "";
   const marginLabel = pos.marginMode === "cross" ? "Cross" : "Isolated";
   const posValue = Number(pos.markPrice) * Number(pos.size);
-  const pnlStr = upnlPct != null ? `${signedUsd(upnl)}  (${signedPct(upnlPct)})` : signedUsd(upnl);
+  const pnlStr = upnlPct != null ? `${signedUsd(upnl)}  (${pct(upnlPct)})` : signedUsd(upnl);
   const liq = formatLiqValue(pos);
   const liqLine = fmt`${FormattedString.b(liq.text)}${liq.warn ? " ⚠️" : ""}`;
 
@@ -161,7 +150,7 @@ function buildDetailText(pos: PhoenixPosition, unsettledFunding: number): Format
   const lines: FormattedString[] = [
     fmt`${FormattedString.b(`${pos.symbol} · ${sideLabel}${levLabel}`)}  (${marginLabel})`,
     fmt`━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    fmt`Unrealized PnL   ${FormattedString.b(pnlStr)} ${pnlColor(upnl)}`,
+    fmt`Unrealized PnL   ${FormattedString.b(pnlStr)} ${pnlEmoji(upnl)}`,
     fmt``,
     fmt`Position size   ${FormattedString.b(`${cryptoSize(Number(pos.size), pos.symbol)}  (${usd(posValue)})`)}`,
     fmt`Entry price   ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}`,
@@ -307,7 +296,6 @@ export function registerPositions(bot: Bot<BotContext>) {
           const leverage = pos.leverage ?? 1;
           const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
           const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
-          const botInfo = await ctx.api.getMe();
           const card = await generatePnlCard({
             symbol,
             side: pos.side,
@@ -315,7 +303,7 @@ export function registerPositions(bot: Bot<BotContext>) {
             exitPrice: pos.markPrice,
             roiPercent: roiPct,
             pnlUsdc: String(pnl.toFixed(2)),
-            botHandle: `@${botInfo.username ?? "PhoenixPerpBot"}`,
+            botHandle: `@${ctx.me.username ?? "PhoenixPerpBot"}`,
           });
           const captionMsg = fmt`${side === "long" ? "🟢" : "🔴"} ${FormattedString.b(`${symbol} ${side === "long" ? "Long" : "Short"}`)}\nP&L: ${FormattedString.b(usd(pnl))}  ROI: ${FormattedString.b(`${roiPct}%`)}`;
           await ctx.replyWithPhoto(new InputFile(card, "pnl.png"), {

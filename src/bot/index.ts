@@ -9,9 +9,11 @@ import { sendSizePicker, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
 import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
 import { sendRemoveTpConfirm, sendTpModePicker } from "./commands/settp.js";
+import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import { sendWithdrawConfirm } from "./commands/withdraw.js";
 import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
 import { clearPending, getPending } from "./lib/pending.js";
+import { BASE58_RE } from "./lib/validate.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
 
@@ -24,6 +26,10 @@ bot.command("long", orderRateLimitMiddleware);
 bot.command("short", orderRateLimitMiddleware);
 
 registerCommands(bot);
+
+bot.callbackQuery("noop", async (ctx) => {
+  await ctx.answerCallbackQuery();
+});
 
 bot.on("message:text", async (ctx) => {
   if (!ctx.user) return;
@@ -126,6 +132,16 @@ bot.on("message:text", async (ctx) => {
       return;
     }
     await sendTpModePicker(ctx, symbol, positionSide, triggerPrice);
+    return;
+  }
+
+  if (pending === "monitor_add") {
+    const address = text.trim();
+    if (!BASE58_RE.test(address)) {
+      await ctx.reply("Invalid address. Send a valid Solana wallet address.");
+      return;
+    }
+    await handleAddMonitor(ctx, address);
     return;
   }
 });

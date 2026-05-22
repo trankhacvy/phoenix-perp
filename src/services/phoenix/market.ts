@@ -22,8 +22,14 @@ export interface MarketSnapshot {
   leverageTiers: Array<{ maxLeverage: number; maxNotionalUsdc: number }>;
 }
 
+let _marketsCache: { data: ExchangeMarketConfig[]; ts: number } | null = null;
+const MARKETS_TTL_MS = 60_000;
+
 export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
-  return getPhoenixClient().api.markets().getMarkets();
+  if (_marketsCache && Date.now() - _marketsCache.ts < MARKETS_TTL_MS) return _marketsCache.data;
+  const data = await getPhoenixClient().api.markets().getMarkets();
+  _marketsCache = { data, ts: Date.now() };
+  return data;
 }
 
 export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
@@ -49,7 +55,7 @@ async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
     ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
     : 0;
   const markPrice = orderbook.mid ?? 0;
-  const lotToBase = Math.pow(10, -market.baseLotsDecimals);
+  const lotToBase = 10 ** -market.baseLotsDecimals;
   const leverageTiers = market.leverageTiers.map((t) => ({
     maxLeverage: t.maxLeverage,
     maxNotionalUsdc: t.maxSizeBaseLots * lotToBase * markPrice,

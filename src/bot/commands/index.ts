@@ -2,7 +2,6 @@ import type { Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
 import { clearPending } from "../lib/pending.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
-import { registerBalance, sendBalanceScreen } from "./balance.js";
 import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
 import { registerExport } from "./export.js";
@@ -10,8 +9,7 @@ import { registerFunding } from "./funding.js";
 import { registerHistory, sendHistoryScreen } from "./history.js";
 import { registerLong, sendSymbolPicker } from "./long.js";
 import { registerMarkets } from "./markets.js";
-import { registerPnl } from "./pnl.js";
-import { registerPortfolio } from "./portfolio.js";
+import { registerPortfolio, sendPortfolioScreen } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
 import { registerPriceAlert } from "./pricealert.js";
 import { registerReferral } from "./referral.js";
@@ -21,11 +19,12 @@ import { registerSetTp } from "./settp.js";
 import { registerShare } from "./share.js";
 import { registerShort } from "./short.js";
 import { registerStart } from "./start.js";
+import { registerWalletMonitor } from "./wallet-monitor.js";
+import { registerWallet } from "./wallet.js";
 import { registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
 
 export function registerCommands(bot: Bot<BotContext>) {
   registerStart(bot);
-  registerBalance(bot);
   registerDeposit(bot);
   registerWithdraw(bot);
   registerMarkets(bot);
@@ -33,7 +32,6 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerShort(bot);
   registerPositions(bot);
   registerHistory(bot);
-  registerPnl(bot);
   registerAlerts(bot);
   registerSettings(bot);
   registerReferral(bot);
@@ -45,11 +43,13 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerExport(bot);
   registerClaim(bot);
   registerPriceAlert(bot);
+  registerWalletMonitor(bot);
+  registerWallet(bot);
 
   bot.callbackQuery("nav:balance", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
-    await sendBalanceScreen(ctx);
+    await sendPortfolioScreen(ctx);
   });
 
   bot.callbackQuery("nav:deposit", async (ctx) => {

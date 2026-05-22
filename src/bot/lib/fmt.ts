@@ -39,6 +39,14 @@ export function fundingApr(rateDecimal: number): string {
   return `${apr >= 0 ? "+" : ""}${num(apr, 2, 2)}% / yr`;
 }
 
+export function pnlEmoji(n: number): string {
+  return n >= 0 ? "🟢" : "🔴";
+}
+
+export function signedUsd(n: number): string {
+  return n >= 0 ? `+${usd(n)}` : usd(n);
+}
+
 export function fundingDir(rateDecimal: number): string {
   return rateDecimal >= 0 ? "Longs pay shorts" : "Shorts pay longs";
 }
@@ -65,6 +73,23 @@ export function parseLeverage(raw: string): number {
 
 export function solscanUrl(sig: string): string {
   return `https://solscan.io/tx/${sig}`;
+}
+
+export function timeAgo(ts: number): string {
+  const tsMs = ts > 1e12 ? ts : ts * 1000;
+  const s = (Date.now() - tsMs) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+export function compactUsd(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 100_000) return `${sign}$${Math.round(abs / 1_000)}K`;
+  return usd(n, 0, 0);
 }
 
 export function fundingTrend(rates: number[]): string {

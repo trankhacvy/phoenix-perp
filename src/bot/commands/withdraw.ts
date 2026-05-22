@@ -7,8 +7,8 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { withdrawCollateral } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { formatTradeError } from "../lib/errors.js";
+import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
 const SECURITY_DELAY_SECONDS = 300;

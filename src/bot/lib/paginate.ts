@@ -21,10 +21,6 @@ export function paginate<T>(all: T[], page: number, pageSize: number): Paginated
   };
 }
 
-/**
- * Appends ← Prev · N/Total · Next → buttons to an existing keyboard row.
- * Adds nothing if there is only one page.
- */
 export function addPaginationRow(
   kb: InlineKeyboard,
   callbackPrefix: string,
