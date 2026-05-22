@@ -1,14 +1,14 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { getKitSigner } from "../../services/wallet.js";
-import { withdrawCollateral } from "../../services/phoenix/trade.js";
-import { getTraderState } from "../../services/phoenix/position.js";
-import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
-import { parseAmount, usd, shortAddr, solscanUrl } from "../lib/fmt.js";
-import { setPending } from "../lib/pending.js";
+import { redis } from "../../lib/redis.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { withdrawCollateral } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
 
 const SECURITY_DELAY_SECONDS = 300;
 

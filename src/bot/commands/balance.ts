@@ -3,8 +3,8 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
-import type { BotContext } from "../../types/index.js";
 import { getTraderState } from "../../services/phoenix/position.js";
+import type { BotContext } from "../../types/index.js";
 import { shortAddr, usd } from "../lib/fmt.js";
 
 const solConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");

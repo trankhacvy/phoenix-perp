@@ -5,7 +5,7 @@ import { db } from "../../db/index.js";
 import { alertSubscriptions } from "../../db/schema/index.js";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
 import type { BotContext } from "../../types/index.js";
-import { parseAmount, price as fmtPrice } from "../lib/fmt.js";
+import { price as fmtPrice, parseAmount } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
 export async function sendPriceAlertPrompt(ctx: BotContext, symbol: string): Promise<void> {

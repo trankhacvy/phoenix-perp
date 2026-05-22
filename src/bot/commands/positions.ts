@@ -1,15 +1,15 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard, InputFile } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { closePosition, addMargin } from "../../services/phoenix/trade.js";
-import { getKitSigner } from "../../services/wallet.js";
-import { getTraderState } from "../../services/phoenix/position.js";
-import { generatePnlCard } from "../../services/image.js";
-import { positionKeyboard } from "../keyboards/position.js";
-import { setPending } from "../lib/pending.js";
-import { usd, price as fmtPrice, cryptoSize, solscanUrl } from "../lib/fmt.js";
-import type { BotContext } from "../../types/index.js";
 import { logger } from "../../lib/logger.js";
+import { generatePnlCard } from "../../services/image.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { addMargin, closePosition } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
+import type { BotContext } from "../../types/index.js";
+import { positionKeyboard } from "../keyboards/position.js";
+import { cryptoSize, price as fmtPrice, solscanUrl, usd } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
 

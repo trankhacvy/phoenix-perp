@@ -1,7 +1,7 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
 import type { BotContext } from "../../types/index.js";

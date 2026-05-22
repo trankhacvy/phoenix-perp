@@ -47,11 +47,11 @@ export function shortAddr(addr: string): string {
 
 export function parseAmount(raw: string): number {
   const cleaned = raw.replace(/[$,\s]/g, "");
-  return parseFloat(cleaned);
+  return Number.parseFloat(cleaned);
 }
 
 export function parseLeverage(raw: string): number {
-  return Math.round(parseFloat(raw.replace(/[xX]/g, "")));
+  return Math.round(Number.parseFloat(raw.replace(/[xX]/g, "")));
 }
 
 export function solscanUrl(sig: string): string {

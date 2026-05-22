@@ -1,5 +1,5 @@
+import { type KeyPairSigner, createKeyPairSignerFromBytes } from "@solana/signers";
 import type { Transaction, VersionedTransaction } from "@solana/web3.js";
-import { createKeyPairSignerFromBytes, type KeyPairSigner } from "@solana/signers";
 import bs58 from "bs58";
 import { config } from "../config/index.js";
 import { privy } from "../lib/privy.js";

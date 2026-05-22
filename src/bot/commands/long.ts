@@ -6,19 +6,19 @@ import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
-import type { BotContext } from "../../types/index.js";
 import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
+import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
 import {
+  price as fmtPrice,
   fundingApr,
   fundingDir,
   parseAmount,
   parseLeverage,
-  price as fmtPrice,
   solscanUrl,
   usd,
 } from "../lib/fmt.js";

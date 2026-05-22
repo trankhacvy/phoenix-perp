@@ -1,21 +1,16 @@
 import {
+  type Authority,
   Direction,
+  type ImmediateOrCancelOrderPacket,
   OrderFlags,
   SelfTradeBehavior,
   Side,
   StopLossOrderKind,
   baseLots,
-  quoteLots,
   priceUsdToTicks,
+  quoteLots,
   symbol as riseSymbol,
-  type Authority,
-  type ImmediateOrCancelOrderPacket,
 } from "@ellipsis-labs/rise";
-import {
-  addSignersToInstruction,
-  signTransactionMessageWithSigners,
-  type KeyPairSigner,
-} from "@solana/signers";
 import {
   appendTransactionMessageInstructions,
   createSolanaRpc,
@@ -27,10 +22,15 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
+import {
+  type KeyPairSigner,
+  addSignersToInstruction,
+  signTransactionMessageWithSigners,
+} from "@solana/signers";
+import { config } from "../../config/index.js";
 import { getTradingClient } from "./client.js";
 import { getMarket } from "./market.js";
 import { getTraderStateSnapshot } from "./position.js";
-import { config } from "../../config/index.js";
 
 export interface MarketOrderParams {
   symbol: string;

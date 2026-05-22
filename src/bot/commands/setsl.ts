@@ -1,13 +1,13 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { setTpSl, cancelStopLoss } from "../../services/phoenix/trade.js";
-import { getTraderState } from "../../services/phoenix/position.js";
-import { getKitSigner } from "../../services/wallet.js";
-import { setPending } from "../lib/pending.js";
-import { price as fmtPrice, usd, parseAmount } from "../lib/fmt.js";
-import type { BotContext } from "../../types/index.js";
 import { logger } from "../../lib/logger.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
+import { getKitSigner } from "../../services/wallet.js";
+import type { BotContext } from "../../types/index.js";
+import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
 
 export function registerSetSl(bot: Bot<BotContext>) {
   bot.command("setsl", async (ctx) => {

@@ -1,4 +1,4 @@
-import { createPhoenixClient, type Authority, type PhoenixClient } from "@ellipsis-labs/rise";
+import { type Authority, type PhoenixClient, createPhoenixClient } from "@ellipsis-labs/rise";
 import { config } from "../../config/index.js";
 
 export type PhoenixRiseClient = PhoenixClient; //ReturnType<typeof createPhoenixClient>;

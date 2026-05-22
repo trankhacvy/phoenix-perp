@@ -1,13 +1,13 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot, CallbackQueryContext } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import {
   ISOLATED_ONLY_MARKETS,
-  getMarkets,
   getMarketSnapshot,
+  getMarkets,
 } from "../../services/phoenix/market.js";
-import { price as fmtPrice, fundingApr } from "../lib/fmt.js";
 import type { BotContext } from "../../types/index.js";
+import { price as fmtPrice, fundingApr } from "../lib/fmt.js";
 
 const PAGE_SIZE = 10;
 

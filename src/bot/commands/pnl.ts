@@ -1,9 +1,9 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { getTraderState } from "../../services/phoenix/position.js";
-import { usd } from "../lib/fmt.js";
 import type { BotContext } from "../../types/index.js";
+import { usd } from "../lib/fmt.js";
 
 export function registerPnl(bot: Bot<BotContext>) {
   bot.command("pnl", async (ctx) => {

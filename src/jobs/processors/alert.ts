@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { bot } from "../../bot/index.js";
-import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import type { AlertJobData } from "../queues.js";
 
 export const alertWorker = new Worker<AlertJobData>(

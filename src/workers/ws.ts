@@ -1,11 +1,11 @@
-import WebSocket from "ws";
 import { and, eq, inArray } from "drizzle-orm";
+import WebSocket from "ws";
+import { config } from "../config/index.js";
 import { db } from "../db/index.js";
 import { alertSubscriptions, users } from "../db/schema/index.js";
 import { alertQueue } from "../jobs/queues.js";
-import { redis } from "../lib/redis.js";
 import { logger } from "../lib/logger.js";
-import { config } from "../config/index.js";
+import { redis } from "../lib/redis.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { RiskTier, TraderStateEvent } from "../types/index.js";
 

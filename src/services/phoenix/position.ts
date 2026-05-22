@@ -1,5 +1,5 @@
-import { getPhoenixClient } from "./client.js";
 import type { TraderStateEvent } from "../../types/index.js";
+import { getPhoenixClient } from "./client.js";
 
 function uiStr(field: unknown): string {
   if (field && typeof field === "object" && "ui" in (field as object)) {

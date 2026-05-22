@@ -1,19 +1,19 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { Bot, webhookCallback } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import type { BotContext } from "../types/index.js";
 import { registerCommands } from "./commands/index.js";
-import { authMiddleware } from "./middleware/auth.js";
-import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
-import { getPending, clearPending } from "./lib/pending.js";
-import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
-import { sendWithdrawConfirm } from "./commands/withdraw.js";
 import { sendSizePicker, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
-import { sendSlModePicker, sendRemoveSlConfirm } from "./commands/setsl.js";
-import { sendTpModePicker, sendRemoveTpConfirm } from "./commands/settp.js";
+import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
+import { sendRemoveTpConfirm, sendTpModePicker } from "./commands/settp.js";
+import { sendWithdrawConfirm } from "./commands/withdraw.js";
+import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
+import { clearPending, getPending } from "./lib/pending.js";
+import { authMiddleware } from "./middleware/auth.js";
+import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
 
 export const bot = new Bot<BotContext>(config.TELEGRAM_BOT_TOKEN);
 

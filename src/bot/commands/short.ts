@@ -1,17 +1,17 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
+import { config } from "../../config/index.js";
+import { logger } from "../../lib/logger.js";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
-import { subscribeUser } from "../../workers/ws.js";
-import { setPending } from "../lib/pending.js";
-import { usd, parseAmount, parseLeverage, solscanUrl } from "../lib/fmt.js";
-import { sendSymbolPicker, sendLeveragePicker, sendSizePicker, sendTradeConfirm } from "./long.js";
 import type { BotContext } from "../../types/index.js";
-import { config } from "../../config/index.js";
-import { logger } from "../../lib/logger.js";
+import { subscribeUser } from "../../workers/ws.js";
+import { parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
+import { sendLeveragePicker, sendSizePicker, sendSymbolPicker, sendTradeConfirm } from "./long.js";
 
 export function registerShort(bot: Bot<BotContext>) {
   bot.command("short", async (ctx) => {

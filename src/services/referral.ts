@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
+import { config } from "../config/index.js";
 import { db } from "../db/index.js";
 import { referrals, users } from "../db/schema/index.js";
-import { config } from "../config/index.js";
 
 const T1_RATIO = 0.2;
 const T2_RATIO = 0.1;

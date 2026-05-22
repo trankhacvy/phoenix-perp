@@ -1,16 +1,16 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
-import { config } from "../../config/index.js";
 import { redis } from "../../lib/redis.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
 import { activatePhoenixAccount, createEmbeddedWallet } from "../../services/wallet.js";
-import { sendPositionDetail } from "./positions.js";
 import type { BotContext } from "../../types/index.js";
+import { sendPositionDetail } from "./positions.js";
 
 export function registerStart(bot: Bot<BotContext>) {
   bot.command("start", async (ctx) => {
