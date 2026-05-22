@@ -1,9 +1,13 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { getKitSigner } from "../../services/wallet.js";
 import { withdrawCollateral } from "../../services/phoenix/trade.js";
+import { getTraderState } from "../../services/phoenix/position.js";
 import { redis } from "../../lib/redis.js";
 import { logger } from "../../lib/logger.js";
+import { parseAmount, usd, shortAddr, solscanUrl } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
 import type { BotContext } from "../../types/index.js";
 
 const SECURITY_DELAY_SECONDS = 300;
@@ -11,69 +15,49 @@ const SECURITY_DELAY_SECONDS = 300;
 export function registerWithdraw(bot: Bot<BotContext>) {
   bot.command("withdraw", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Type /start first.");
       return;
     }
-
-    const args = ctx.match?.trim().split(" ");
-    if (!args || args.length < 1 || !args[0]) {
-      await ctx.reply("Usage: /withdraw <amount>\nExample: /withdraw 100\n\nFunds are returned to your linked wallet.");
+    const raw = ctx.match?.trim();
+    if (!raw) {
+      await sendWithdrawAmountPrompt(ctx);
       return;
     }
-
-    const amount = Number(args[0]);
-
-    if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.reply("Invalid amount.");
+    const amount = parseAmount(raw);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Enter an amount greater than $0.");
       return;
     }
-
-    const kb = new InlineKeyboard()
-      .text("✅ Confirm", `withdraw:confirm:${amount}`)
-      .text("❌ Cancel", "cancel");
-
-    await ctx.reply(
-      [
-        `⚠️ <b>Confirm Withdrawal</b>`,
-        ``,
-        `Amount: <code>${amount} USDC</code>`,
-        `To: <code>${ctx.user.walletAddress}</code>`,
-        ``,
-        `Note: Phoenix processes withdrawals via a global queue. Large withdrawals may take time. You'll be notified when complete.`,
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: kb },
-    );
+    await sendWithdrawConfirm(ctx, amount);
   });
 
   bot.callbackQuery(/^withdraw:confirm:([\d.]+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Processing...");
-    if (!ctx.user) return;
+    if (!ctx.user) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
 
     const amount = Number(ctx.match[1]);
-
-    // Two-step security: first click records a timestamp; second click (after delay) executes.
     const pendingKey = `withdraw:pending:${ctx.user.id}`;
     const pendingTs = await redis.get(pendingKey);
+
     if (!pendingTs) {
+      await ctx.answerCallbackQuery();
       await redis.set(pendingKey, String(Date.now()), "EX", SECURITY_DELAY_SECONDS + 60);
-      await ctx.editMessageText(
-        [
-          `⏳ <b>Withdrawal pending — security delay</b>`,
-          ``,
-          `For security, please wait <b>${SECURITY_DELAY_SECONDS / 60} minutes</b> then tap Confirm again.`,
-        ].join("\n"),
-        { parse_mode: "HTML" },
-      );
+      const kb = new InlineKeyboard().text("✕ Cancel withdrawal", "withdraw:cancel");
+      const msg = fmt`🔒 ${FormattedString.b("Withdrawal pending")}\n\n${usd(amount)} USDC\n\nConfirm again in ${FormattedString.b("5 minutes")} to complete.\nTap confirm again: /withdraw ${amount}`;
+      await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
       return;
     }
 
     const elapsed = (Date.now() - Number(pendingTs)) / 1000;
     if (elapsed < SECURITY_DELAY_SECONDS) {
       const remaining = Math.ceil(SECURITY_DELAY_SECONDS - elapsed);
-      await ctx.answerCallbackQuery({ text: `Please wait ${remaining}s more before confirming.`, show_alert: true });
+      await ctx.answerCallbackQuery({ text: `Wait ${remaining}s more.`, show_alert: true });
       return;
     }
 
+    await ctx.answerCallbackQuery("Processing...");
     await redis.del(pendingKey);
 
     try {
@@ -83,21 +67,54 @@ export function registerWithdraw(bot: Bot<BotContext>) {
         amountNative,
         getKitSigner(ctx.user.walletAddress),
       );
-
-      await ctx.editMessageText(
-        [
-          `✅ <b>Withdrawal submitted</b>`,
-          `Amount: <code>${amount} USDC</code>`,
-          `To: <code>${ctx.user.walletAddress}</code>`,
-          `Tx: <code>${sig}</code>`,
-          ``,
-          `Note: Funds may take a few minutes if the Phoenix withdrawal queue is busy.`,
-        ].join("\n"),
-        { parse_mode: "HTML" },
-      );
+      const msg = fmt`✅ ${FormattedString.b("Withdrawal submitted")}\n\n${FormattedString.b(usd(amount))} sent to your wallet.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nLarge withdrawals may take a few minutes due to the on-chain queue.`;
+      await ctx.editMessageText(msg.text, {
+        entities: msg.entities,
+        link_preview_options: { is_disabled: true },
+      });
     } catch (err) {
       logger.error({ err }, "Withdrawal failed");
-      await ctx.editMessageText("❌ Withdrawal failed. Check your balance and try again.");
+      await ctx.editMessageText(
+        "❌ Withdrawal failed. Check your balance with /balance and try again.",
+      );
     }
   });
+
+  bot.callbackQuery("withdraw:cancel", async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    if (ctx.user) {
+      await redis.del(`withdraw:pending:${ctx.user.id}`);
+    }
+    await ctx.editMessageText("✕ Withdrawal cancelled.");
+  });
+}
+
+export async function sendWithdrawAmountPrompt(ctx: BotContext): Promise<void> {
+  const state = await getTraderState(ctx.user!.walletAddress);
+  const available = Number(state.effectiveCollateral);
+
+  const msg = fmt`📤 ${FormattedString.b("Withdraw Funds")}\n\nAvailable: ${FormattedString.code(usd(available))}\n\nReply with the amount you want to withdraw:`;
+  await ctx.reply(msg.text, { entities: msg.entities });
+  await setPending(ctx.from!.id, "withdraw_amount");
+}
+
+export async function sendWithdrawConfirm(ctx: BotContext, amount: number): Promise<void> {
+  const state = await getTraderState(ctx.user!.walletAddress);
+  const available = Number(state.effectiveCollateral);
+
+  if (amount < 1) {
+    await ctx.reply("Minimum withdrawal is $1.00.");
+    return;
+  }
+  if (amount > available) {
+    await ctx.reply(`You only have ${usd(available)} available. Enter a smaller amount.`);
+    return;
+  }
+
+  const kb = new InlineKeyboard()
+    .text("✅ Start withdrawal", `withdraw:confirm:${amount}`)
+    .text("✕ Cancel", "cancel");
+
+  const msg = fmt`📤 ${FormattedString.b(`Withdraw ${usd(amount)}`)}\n\nTo: ${FormattedString.code(shortAddr(ctx.user!.walletAddress))}\n\n⚠️ For security, you'll need to confirm again after 5 minutes.`;
+  await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

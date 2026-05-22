@@ -1,10 +1,14 @@
 import type { Bot } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { getPhoenixClient } from "../../services/phoenix/client.js";
 import type { BotContext } from "../../types/index.js";
 
 export function registerFunding(bot: Bot<BotContext>) {
   bot.command("funding", async (ctx) => {
-    const overview = await getPhoenixClient().api.funding().getFundingOverview().catch(() => null);
+    const overview = await getPhoenixClient()
+      .api.funding()
+      .getFundingOverview()
+      .catch(() => null);
     const series = overview?.series ?? [];
 
     const rows = series
@@ -16,15 +20,21 @@ export function registerFunding(bot: Bot<BotContext>) {
       .sort((a, b) => Math.abs(b.rate) - Math.abs(a.rate))
       .slice(0, 10);
 
+    if (rows.length === 0) {
+      const msg = fmt`💸 ${FormattedString.b("Top Funding Rates")}\n\nNo significant funding rates right now.`;
+      await ctx.reply(msg.text, { entities: msg.entities });
+      return;
+    }
+
     const lines = rows.map((r, i) => {
       const sign = r.rate > 0 ? "📈 Longs pay" : "📉 Shorts pay";
-      return `${i + 1}. <b>${r.symbol}</b> ${(r.rate * 100).toFixed(4)}% apr — ${sign}`;
+      return fmt`${i + 1}. ${FormattedString.b(r.symbol)} ${(r.rate * 100).toFixed(4)}% apr — ${sign}`;
     });
 
-    const body = lines.length > 0
-      ? [`💸 <b>Top Funding Rates</b>`, ``, ...lines].join("\n")
-      : `💸 <b>Top Funding Rates</b>\n\nNo significant funding rates right now.`;
-
-    await ctx.reply(body, { parse_mode: "HTML" });
+    const msg = FormattedString.join(
+      [fmt`💸 ${FormattedString.b("Top Funding Rates")}`, fmt``, ...lines],
+      "\n",
+    );
+    await ctx.reply(msg.text, { entities: msg.entities });
   });
 }

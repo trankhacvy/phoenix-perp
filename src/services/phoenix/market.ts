@@ -32,7 +32,10 @@ export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot>
   const [market, orderbook, fundingHistory] = await Promise.all([
     getMarket(symbol),
     getOrderbook(symbol),
-    getPhoenixClient().api.funding().getFundingRateHistory(symbol.toUpperCase(), { limit: 1 }).catch(() => null),
+    getPhoenixClient()
+      .api.funding()
+      .getFundingRateHistory(symbol.toUpperCase(), { limit: 1 })
+      .catch(() => null),
   ]);
 
   const maxLeverage = market.leverageTiers.length > 0 ? market.leverageTiers[0].maxLeverage : 20;
@@ -63,5 +66,8 @@ export async function getFundingRateHistory(symbol: string, limit = 24) {
 }
 
 export async function getMarketStatsHistory(symbol: string, limit = 1) {
-  return getPhoenixClient().api.markets().getMarketStatsHistory(symbol.toUpperCase(), { limit }).catch(() => null);
+  return getPhoenixClient()
+    .api.markets()
+    .getMarketStatsHistory(symbol.toUpperCase(), { limit })
+    .catch(() => null);
 }

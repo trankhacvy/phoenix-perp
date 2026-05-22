@@ -1,8 +1,4 @@
-import {
-  createPhoenixClient,
-  type Authority,
-  type PhoenixClient,
-} from "@ellipsis-labs/rise";
+import { createPhoenixClient, type Authority, type PhoenixClient } from "@ellipsis-labs/rise";
 import { config } from "../../config/index.js";
 
 export type PhoenixRiseClient = PhoenixClient; //ReturnType<typeof createPhoenixClient>;
@@ -43,4 +39,3 @@ export function getTradingClient(): PhoenixRiseClient {
   }
   return _tradingClient;
 }
-

@@ -1,55 +1,64 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { and, eq } from "drizzle-orm";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { alertSubscriptions } from "../../db/schema/index.js";
 import type { BotContext } from "../../types/index.js";
 
-const DEFAULT_ALERTS = [
-  { type: "at_risk", label: "AtRisk warning", default: true },
-  { type: "cancellable", label: "Cancellable warning", default: true },
-  { type: "liquidatable", label: "Liquidation warning", default: true },
-  { type: "fill", label: "Fill notification", default: true },
-  { type: "tpsl_flip", label: "TP/SL flip", default: true },
-  { type: "funding_flip", label: "Funding flip", default: false },
-  { type: "large_funding", label: "Large funding (>50% APR)", default: false },
+const ALERT_DEFS = [
+  { type: "fill", label: "Order filled", default: true },
+  { type: "at_risk", label: "Account at risk", default: true },
+  { type: "cancellable", label: "Orders may cancel", default: true },
+  { type: "liquidatable", label: "Near liquidation", default: true },
+  { type: "tpsl_flip", label: "TP/SL triggered", default: true },
+  { type: "funding_flip", label: "Funding direction change", default: false },
+  { type: "large_funding", label: "High funding rate (>50% APR)", default: false },
 ] as const;
 
-async function buildAlertsKeyboard(userId: string) {
+type AlertType = (typeof ALERT_DEFS)[number]["type"];
+
+async function buildAlertsKeyboard(userId: string): Promise<InlineKeyboard> {
   const subs = await db.query.alertSubscriptions.findMany({
     where: eq(alertSubscriptions.userId, userId),
   });
 
   const kb = new InlineKeyboard();
-  for (const a of DEFAULT_ALERTS) {
-    const sub = subs.find((s) => s.type === a.type);
-    const enabled = sub ? sub.enabled : a.default;
-    kb.text(`${enabled ? "✅" : "❌"} ${a.label}`, `alert:toggle:${a.type}`).row();
+  for (const def of ALERT_DEFS) {
+    const sub = subs.find((s) => s.type === def.type && s.symbol === null);
+    const enabled = sub ? sub.enabled : def.default;
+    kb.text(`${enabled ? "✅" : "❌"} ${def.label}`, `alert:toggle:${def.type}`).row();
   }
   return kb;
+}
+
+const ALERTS_MSG = fmt`🔔 ${FormattedString.b("Alert Settings")}\n\nToggle which notifications you'd like to receive.`;
+
+export async function sendAlertsScreen(ctx: BotContext): Promise<void> {
+  const kb = await buildAlertsKeyboard(ctx.user!.id);
+  await ctx.reply(ALERTS_MSG.text, { entities: ALERTS_MSG.entities, reply_markup: kb });
 }
 
 export function registerAlerts(bot: Bot<BotContext>) {
   bot.command("alerts", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Type /start first.");
       return;
     }
-
-    const kb = await buildAlertsKeyboard(ctx.user.id);
-    await ctx.reply("<b>Alert Settings</b>", { parse_mode: "HTML", reply_markup: kb });
+    await sendAlertsScreen(ctx);
   });
 
   bot.callbackQuery(/^alert:toggle:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
 
-    const type = ctx.match[1] as (typeof DEFAULT_ALERTS)[number]["type"];
+    const type = ctx.match[1] as AlertType;
 
     const existing = await db.query.alertSubscriptions.findFirst({
       where: and(
         eq(alertSubscriptions.userId, ctx.user.id),
         eq(alertSubscriptions.type, type),
+        isNull(alertSubscriptions.symbol),
       ),
     });
 
@@ -59,16 +68,17 @@ export function registerAlerts(bot: Bot<BotContext>) {
         .set({ enabled: !existing.enabled })
         .where(eq(alertSubscriptions.id, existing.id));
     } else {
-      const def = DEFAULT_ALERTS.find((a) => a.type === type);
+      const def = ALERT_DEFS.find((a) => a.type === type);
       await db.insert(alertSubscriptions).values({
         id: crypto.randomUUID(),
         userId: ctx.user.id,
         type,
+        symbol: null,
         enabled: !(def?.default ?? true),
       });
     }
 
     const kb = await buildAlertsKeyboard(ctx.user.id);
-    await ctx.editMessageText("<b>Alert Settings</b>", { parse_mode: "HTML", reply_markup: kb });
+    await ctx.editMessageText(ALERTS_MSG.text, { entities: ALERTS_MSG.entities, reply_markup: kb });
   });
 }

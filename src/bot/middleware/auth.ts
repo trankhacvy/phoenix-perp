@@ -17,19 +17,23 @@ export async function authMiddleware(ctx: BotContext, next: NextFunction) {
   // Dev shortcut: auto-register with TEST_KEYPAIR wallet, no Privy needed
   if (!user && process.env.TEST_KEYPAIR) {
     const walletAddress = await initTestSigner();
-    const [inserted] = await db.insert(users).values({
-      id: telegramId,
-      telegramId,
-      username: ctx.from.username,
-      firstName: ctx.from.first_name,
-      privyUserId: "test_privy_id",
-      walletAddress,
-      phoenixActivated: true,
-      referralCode: `TEST${telegramId.slice(-4)}`,
-    }).onConflictDoUpdate({
-      target: users.id,
-      set: { walletAddress, updatedAt: new Date() },
-    }).returning();
+    const [inserted] = await db
+      .insert(users)
+      .values({
+        id: telegramId,
+        telegramId,
+        username: ctx.from.username,
+        firstName: ctx.from.first_name,
+        privyUserId: "test_privy_id",
+        walletAddress,
+        phoenixActivated: true,
+        referralCode: `TEST${telegramId.slice(-4)}`,
+      })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: { walletAddress, updatedAt: new Date() },
+      })
+      .returning();
     user = inserted;
   }
 

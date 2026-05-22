@@ -1,23 +1,44 @@
 import { InlineKeyboard } from "grammy";
+import { usd } from "../lib/fmt.js";
 
-export function sizeKeyboard() {
-  return new InlineKeyboard()
-    .text("25%", "size:25")
-    .text("50%", "size:50")
-    .text("75%", "size:75")
-    .text("100%", "size:100");
-}
-
-// Leverage options are dynamically capped per market — caller must pass maxLeverage
-export function leverageKeyboard(maxLeverage: number) {
-  const options = [2, 5, 10, 25].filter((l) => l <= maxLeverage);
+export function leveragePickerKeyboard(
+  side: "long" | "short",
+  symbol: string,
+  maxLeverage: number,
+  defaultLeverage: number,
+): InlineKeyboard {
+  const options = [2, 3, 5, 10, 20, 50].filter((l) => l <= maxLeverage);
   const kb = new InlineKeyboard();
-  for (const l of options) kb.text(`${l}x`, `leverage:${l}`);
+  let count = 0;
+  for (const l of options) {
+    const label = l === defaultLeverage ? `★${l}x` : `${l}x`;
+    kb.text(label, `trade_lev:${side}:${symbol}:${l}`);
+    count++;
+    if (count % 3 === 0) kb.row();
+  }
+  kb.row().text("Custom", `trade_lev_custom:${side}:${symbol}`).text("✕ Cancel", "cancel");
   return kb;
 }
 
-export function confirmKeyboard(action: string) {
-  return new InlineKeyboard()
-    .text("✅ Confirm", `confirm:${action}`)
-    .text("❌ Cancel", "cancel");
+export function sizePickerKeyboard(
+  side: "long" | "short",
+  symbol: string,
+  lev: number,
+  availableMargin: number,
+): InlineKeyboard {
+  const pcts = [10, 25, 50, 100];
+  const kb = new InlineKeyboard();
+  for (const p of pcts) {
+    const amt = (availableMargin * p) / 100;
+    kb.text(`${p}%  ${usd(amt)}`, `trade_size:${side}:${symbol}:${lev}:${amt.toFixed(2)}`).row();
+  }
+  kb.text("Custom amount", `trade_size_custom:${side}:${symbol}:${lev}`)
+    .row()
+    .text("← Back", `trade:${side}:${symbol}`)
+    .text("✕ Cancel", "cancel");
+  return kb;
+}
+
+export function confirmKeyboard(action: string): InlineKeyboard {
+  return new InlineKeyboard().text("✅ Confirm", `confirm:${action}`).text("✕ Cancel", "cancel");
 }

@@ -1,9 +1,10 @@
 import { InlineKeyboard } from "grammy";
 
-export function marketActionKeyboard(symbol: string) {
+export function marketActionKeyboard(symbol: string): InlineKeyboard {
   return new InlineKeyboard()
-    .text("Long", `trade:long:${symbol}`)
-    .text("Short", `trade:short:${symbol}`)
-    .text("Alert", `alert:${symbol}`)
-    .text("Price", `price:${symbol}`);
+    .text("🟢 Buy / Long", `trade:long:${symbol}`)
+    .text("🔴 Sell / Short", `trade:short:${symbol}`)
+    .row()
+    .text("🔔 Price alert", `pricealert:${symbol}`)
+    .text("📊 Info", `price:${symbol}`);
 }

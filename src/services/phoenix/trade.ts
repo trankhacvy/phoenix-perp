@@ -110,7 +110,10 @@ function toMarketSymbol(s: string) {
   return riseSymbol(s.toUpperCase().replace(/-PERP$/i, ""));
 }
 
-function priceToTicks(priceUsd: number, market: { tickSize: number; baseLotsDecimals: number }): bigint {
+function priceToTicks(
+  priceUsd: number,
+  market: { tickSize: number; baseLotsDecimals: number },
+): bigint {
   return BigInt(
     priceUsdToTicks(priceUsd, {
       tickSizeInQuoteLotsPerBaseLot: market.tickSize,
@@ -176,7 +179,7 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
   await client.exchange.ready();
 
   const marketSymbol = toMarketSymbol(params.symbol);
-  const market = await getMarket(params.symbol) as { tickSize: number; baseLotsDecimals: number };
+  const market = (await getMarket(params.symbol)) as { tickSize: number; baseLotsDecimals: number };
   const closeSide = params.positionSide === "long" ? Side.Ask : Side.Bid;
 
   const sends: Promise<string>[] = [];
@@ -187,9 +190,8 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
       authority: params.walletAddress as Authority,
       symbol: marketSymbol,
       tradeSide: closeSide,
-      executionDirection: params.positionSide === "long"
-        ? Direction.LessThan
-        : Direction.GreaterThan,
+      executionDirection:
+        params.positionSide === "long" ? Direction.LessThan : Direction.GreaterThan,
       orderKind: params.slMode === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
       triggerPrice: triggerTicks,
     });
@@ -202,9 +204,8 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
       authority: params.walletAddress as Authority,
       symbol: marketSymbol,
       tradeSide: closeSide,
-      executionDirection: params.positionSide === "long"
-        ? Direction.GreaterThan
-        : Direction.LessThan,
+      executionDirection:
+        params.positionSide === "long" ? Direction.GreaterThan : Direction.LessThan,
       orderKind: params.tpMode === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
       triggerPrice: triggerTicks,
     });

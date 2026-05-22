@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import type { BotContext } from "../../types/index.js";
 
 export function registerExport(bot: Bot<BotContext>) {
@@ -14,39 +15,17 @@ export function registerExport(bot: Bot<BotContext>) {
       .row()
       .text("Cancel", "cancel");
 
-    await ctx.reply(
-      [
-        `🔐 <b>Export Private Key</b>`,
-        ``,
-        `⚠️ <b>DANGER:</b> Anyone with your private key can steal all funds.`,
-        `Never share it. Store it offline.`,
-        ``,
-        `This bot uses a server-custodial wallet via Privy.`,
-        `Key export is available through the Privy dashboard:`,
-        `<b>https://dashboard.privy.io</b>`,
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: kb },
-    );
+    const msg = fmt`🔐 ${FormattedString.b("Export Private Key")}\n\n⚠️ ${FormattedString.b("DANGER:")} Anyone with your private key can steal all funds.\nNever share it. Store it offline.\n\nThis bot uses a server-custodial wallet via Privy.\nKey export is available through the Privy dashboard:\n${FormattedString.b("https://dashboard.privy.io")}`;
+
+    await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
   });
 
   bot.callbackQuery("export:confirm", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
 
-    await ctx.editMessageText(
-      [
-        `🔐 <b>Export Private Key</b>`,
-        ``,
-        `Private key export requires direct Privy dashboard access.`,
-        ``,
-        `1. Go to <b>https://dashboard.privy.io</b>`,
-        `2. Sign in with your operator credentials`,
-        `3. Find your wallet: <code>${ctx.user.walletAddress}</code>`,
-        `4. Use the export function in the dashboard`,
-        ``,
-        `<i>Server-side key export is not available for security reasons.</i>`,
-      ].join("\n"),
-      { parse_mode: "HTML" },
-    );
+    const msg = fmt`🔐 ${FormattedString.b("Export Private Key")}\n\nPrivate key export requires direct Privy dashboard access.\n\n1. Go to ${FormattedString.b("https://dashboard.privy.io")}\n2. Sign in with your operator credentials\n3. Find your wallet: ${FormattedString.code(ctx.user.walletAddress)}\n4. Use the export function in the dashboard\n\n${FormattedString.i("Server-side key export is not available for security reasons.")}`;
+
+    await ctx.editMessageText(msg.text, { entities: msg.entities });
   });
 }

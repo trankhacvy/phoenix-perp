@@ -1,14 +1,14 @@
 import { InlineKeyboard } from "grammy";
 
-export function positionKeyboard(symbol: string) {
+export function positionKeyboard(symbol: string, side: "long" | "short"): InlineKeyboard {
   return new InlineKeyboard()
-    .text("Close 25%", `close:${symbol}:25`)
-    .text("Close 50%", `close:${symbol}:50`)
+    .text("Close 25%", `close:${symbol}:25:${side}`)
+    .text("Close 50%", `close:${symbol}:50:${side}`)
     .row()
-    .text("Close 75%", `close:${symbol}:75`)
-    .text("Close 100%", `close:${symbol}:100`)
+    .text("Close 75%", `close:${symbol}:75:${side}`)
+    .text("Close all", `close:${symbol}:100:${side}`)
     .row()
-    .text("Add Margin", `margin:${symbol}`)
-    .text("Edit SL", `editsl:${symbol}`)
-    .text("Edit TP", `edittp:${symbol}`);
+    .text("Add margin", `margin:${symbol}`)
+    .text("Edit SL", `editsl:${symbol}:${side}`)
+    .text("Edit TP", `edittp:${symbol}:${side}`);
 }

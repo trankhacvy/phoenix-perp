@@ -1,5 +1,6 @@
-import type { Bot } from "grammy";
 import { eq } from "drizzle-orm";
+import type { Bot } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { db } from "../../db/index.js";
 import { referrals } from "../../db/schema/index.js";
 import { getClaimableReferrals } from "../../services/referral.js";
@@ -20,7 +21,7 @@ export function registerClaim(bot: Bot<BotContext>) {
 
     if (claimable < 1) {
       await ctx.reply(
-        `No claimable rebate yet (minimum $1 USDC).\n\nKeep referring users to earn! Use /referral to see your stats.`,
+        "No claimable rebate yet (minimum $1 USDC).\n\nKeep referring users to earn! Use /referral to see your stats.",
       );
       return;
     }
@@ -34,9 +35,7 @@ export function registerClaim(bot: Bot<BotContext>) {
       ),
     );
 
-    await ctx.reply(
-      `✅ Claimed <code>${claimable.toFixed(6)} USDC</code> referral rebate.\n\nFunds will arrive in your wallet within 24 hours.`,
-      { parse_mode: "HTML" },
-    );
+    const msg = fmt`✅ Claimed ${FormattedString.code(`${claimable.toFixed(6)} USDC`)} referral rebate.\n\nFunds will arrive in your wallet within 24 hours.`;
+    await ctx.reply(msg.text, { entities: msg.entities });
   });
 }

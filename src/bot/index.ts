@@ -1,13 +1,19 @@
 import { Bot, webhookCallback } from "grammy";
+import { InlineKeyboard } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
-import { redis } from "../lib/redis.js";
-import { addMargin, setTpSl } from "../services/phoenix/trade.js";
-import { getKitSigner } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
 import { registerCommands } from "./commands/index.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
+import { getPending, clearPending } from "./lib/pending.js";
+import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
+import { sendWithdrawConfirm } from "./commands/withdraw.js";
+import { sendSizePicker, sendTradeConfirm } from "./commands/long.js";
+import { sendPriceAlertConfirm } from "./commands/pricealert.js";
+import { sendSlModePicker, sendRemoveSlConfirm } from "./commands/setsl.js";
+import { sendTpModePicker, sendRemoveTpConfirm } from "./commands/settp.js";
 
 export const bot = new Bot<BotContext>(config.TELEGRAM_BOT_TOKEN);
 
@@ -22,37 +28,105 @@ registerCommands(bot);
 bot.on("message:text", async (ctx) => {
   if (!ctx.user) return;
 
-  const pendingKey = `pending:${ctx.from.id}`;
-  const pending = await redis.get(pendingKey);
+  const pending = await getPending(ctx.from.id);
   if (!pending) return;
 
-  await redis.del(pendingKey);
+  await clearPending(ctx.from.id);
 
+  const text = ctx.message.text.trim();
   const parts = pending.split(":");
-  const action = parts[0];
-  const symbol = parts[1];
-  const positionSide: "long" | "short" = parts[2] === "short" ? "short" : "long";
-  const value = Number(ctx.message.text.trim());
 
-  if (Number.isNaN(value) || value <= 0) {
-    await ctx.reply("Invalid value. Action cancelled.");
+  if (pending === "withdraw_amount") {
+    const amount = parseAmount(text);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Invalid amount. Try /withdraw again.");
+      return;
+    }
+    await sendWithdrawConfirm(ctx, amount);
     return;
   }
 
-  try {
-    const signer = getKitSigner(ctx.user.walletAddress);
-    if (action === "addmargin") {
-      await addMargin(symbol, ctx.user.walletAddress, value, signer);
-      await ctx.reply(`✅ Added $${value} USDC margin to ${symbol}.`);
-    } else if (action === "editsl") {
-      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, positionSide, slPrice: value }, signer);
-      await ctx.reply(`✅ Stop-loss for ${symbol} set to $${value}.`);
-    } else if (action === "edittp") {
-      await setTpSl({ symbol, walletAddress: ctx.user.walletAddress, positionSide, tpPrice: value }, signer);
-      await ctx.reply(`✅ Take-profit for ${symbol} set to $${value}.`);
+  if (parts[0] === "trade_leverage") {
+    const side = parts[1] as "long" | "short";
+    const symbol = parts[2];
+    const lev = parseLeverage(text);
+    if (isNaN(lev) || lev < 1) {
+      await ctx.reply("Invalid leverage. Enter a number like 10 or 10x.");
+      return;
     }
-  } catch {
-    await ctx.reply("❌ Failed. Please try again.");
+    await sendSizePicker(ctx, side, symbol, lev);
+    return;
+  }
+
+  if (parts[0] === "trade_size") {
+    const side = parts[1] as "long" | "short";
+    const symbol = parts[2];
+    const lev = Number(parts[3]);
+    const size = parseAmount(text);
+    if (isNaN(size) || size <= 0) {
+      await ctx.reply("Invalid amount. Enter a USD value like 500.");
+      return;
+    }
+    await sendTradeConfirm(ctx, side, symbol, lev, size);
+    return;
+  }
+
+  if (parts[0] === "pricealert") {
+    const symbol = parts[1];
+    const triggerPrice = parseAmount(text);
+    if (isNaN(triggerPrice) || triggerPrice <= 0) {
+      await ctx.reply("Invalid price. Enter a positive number.");
+      return;
+    }
+    await sendPriceAlertConfirm(ctx, symbol, triggerPrice);
+    return;
+  }
+
+  if (parts[0] === "addmargin") {
+    const symbol = parts[1];
+    const amount = parseAmount(text);
+    if (isNaN(amount) || amount < 1) {
+      await ctx.reply("Minimum margin to add is $1.");
+      return;
+    }
+    const kb = new InlineKeyboard()
+      .text(`✅ Add ${usd(amount)}`, `addmargin:exec:${symbol}:${amount}`)
+      .text("✕ Cancel", "cancel");
+    const confirmMsg = fmt`Add ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}?`;
+    await ctx.reply(confirmMsg.text, { entities: confirmMsg.entities, reply_markup: kb });
+    return;
+  }
+
+  if (parts[0] === "editsl") {
+    const symbol = parts[1];
+    const positionSide = parts[2] as "long" | "short";
+    const triggerPrice = parseAmount(text);
+    if (isNaN(triggerPrice) || triggerPrice < 0) {
+      await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
+      return;
+    }
+    if (triggerPrice === 0) {
+      await sendRemoveSlConfirm(ctx, symbol, positionSide);
+      return;
+    }
+    await sendSlModePicker(ctx, symbol, positionSide, triggerPrice);
+    return;
+  }
+
+  if (parts[0] === "edittp") {
+    const symbol = parts[1];
+    const positionSide = parts[2] as "long" | "short";
+    const triggerPrice = parseAmount(text);
+    if (isNaN(triggerPrice) || triggerPrice < 0) {
+      await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
+      return;
+    }
+    if (triggerPrice === 0) {
+      await sendRemoveTpConfirm(ctx, symbol, positionSide);
+      return;
+    }
+    await sendTpModePicker(ctx, symbol, positionSide, triggerPrice);
+    return;
   }
 });
 

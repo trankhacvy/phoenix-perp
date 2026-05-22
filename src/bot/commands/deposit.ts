@@ -1,31 +1,28 @@
+import { type Bot, InlineKeyboard, InputFile } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import QRCode from "qrcode";
-import { InputFile, type Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
-
-const WALLET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 export function registerDeposit(bot: Bot<BotContext>) {
   bot.command("deposit", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Type /start first.");
       return;
     }
+    await sendDepositScreen(ctx);
+  });
+}
 
-    const { walletAddress } = ctx.user;
-    const qr = await QRCode.toBuffer(walletAddress, { type: "png", width: 256 });
+export async function sendDepositScreen(ctx: BotContext): Promise<void> {
+  const { walletAddress } = ctx.user!;
+  const qr = await QRCode.toBuffer(walletAddress, { type: "png", width: 256 });
+  const kb = new InlineKeyboard().text("← Back", "nav:balance");
 
-    await ctx.replyWithPhoto(new InputFile(qr, "deposit-qr.png"), {
-      caption: [
-        `📥 <b>Deposit</b>`,
-        ``,
-        `Send <b>SOL</b> (for gas) and <b>USDC</b> to:`,
-        `<code>${walletAddress}</code>`,
-        ``,
-        `USDC mint: <code>${WALLET_USDC_MINT}</code>`,
-        ``,
-        `Deposits are processed via Ember (1:1 wrap) and credited to your Phoenix account automatically.`,
-      ].join("\n"),
-      parse_mode: "HTML",
-    });
+  const msg = fmt`📥 ${FormattedString.b("Add Funds")}\n\nSend ${FormattedString.b("USDC")} to your wallet:\n${FormattedString.code(walletAddress)}\n\nOnly send standard USDC (${FormattedString.code("EPjF...Dt1v")}).\nAlso send ${FormattedString.b("≈0.01 SOL")} to cover transaction fees.\n\nFunds arrive automatically — no extra steps needed.`;
+
+  await ctx.replyWithPhoto(new InputFile(qr, "deposit-qr.png"), {
+    caption: msg.caption,
+    caption_entities: msg.caption_entities,
+    reply_markup: kb,
   });
 }

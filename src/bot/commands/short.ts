@@ -1,97 +1,93 @@
 import type { Bot } from "grammy";
-import { eq } from "drizzle-orm";
-import { db } from "../../db/index.js";
-import { userSettings } from "../../db/schema/index.js";
-import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
+import { InlineKeyboard } from "grammy";
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
+import { getMarketSnapshot } from "../../services/phoenix/market.js";
+import { getTraderState } from "../../services/phoenix/position.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import { subscribeUser } from "../../workers/ws.js";
-import { confirmKeyboard } from "../keyboards/trade.js";
+import { setPending } from "../lib/pending.js";
+import { usd, parseAmount, parseLeverage, solscanUrl } from "../lib/fmt.js";
+import { sendSymbolPicker, sendLeveragePicker, sendSizePicker, sendTradeConfirm } from "./long.js";
 import type { BotContext } from "../../types/index.js";
 import { config } from "../../config/index.js";
+import { logger } from "../../lib/logger.js";
 
 export function registerShort(bot: Bot<BotContext>) {
   bot.command("short", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Type /start first.");
       return;
     }
+    const parts = ctx.match?.trim().split(/\s+/) ?? [];
+    const symbol = parts[0]?.toUpperCase().replace("/USD", "").replace("/USDT", "");
 
-    const parts = ctx.match?.trim().split(" ");
-    if (!parts || parts.length < 3) {
-      await ctx.reply("Usage: /short <symbol> <leverage>x <size_usdc>\nExample: /short BTC 3x 500");
+    if (!symbol) {
+      await sendSymbolPicker(ctx, "short");
       return;
     }
-
-    const symbol = parts[0].toUpperCase();
-    const leverage = Number(parts[1].replace("x", ""));
-    const sizeUsdc = Number(parts[2]);
-
-    if (Number.isNaN(leverage) || Number.isNaN(sizeUsdc) || leverage <= 0 || sizeUsdc <= 0) {
-      await ctx.reply("Invalid leverage or size.");
+    if (parts.length >= 3) {
+      const lev = parseLeverage(parts[1]);
+      const size = parseAmount(parts[2]);
+      if (isNaN(lev) || lev < 1 || isNaN(size) || size <= 0) {
+        await ctx.reply(
+          "Invalid format. Example: /short BTC 10x 500\nOr just type /short BTC to use the guided flow.",
+        );
+        return;
+      }
+      await sendTradeConfirm(ctx, "short", symbol, lev, size);
       return;
     }
+    await sendLeveragePicker(ctx, "short", symbol);
+  });
 
-    if (isIsolatedOnly(symbol)) {
-      await ctx.reply(
-        `⚠️ <b>${symbol}</b> is an isolated-margin-only market. Coming soon.`,
-        { parse_mode: "HTML" },
-      );
+  bot.callbackQuery(/^trade:short:([A-Z0-9]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) {
+      await ctx.reply("Type /start first.");
       return;
     }
+    await sendLeveragePicker(ctx, "short", ctx.match[1]);
+  });
 
-    const settings = (await db.query.userSettings.findFirst({
-      where: eq(userSettings.userId, ctx.user.id),
-    })) ?? { slippageBps: 50, defaultLeverage: 5 };
+  bot.callbackQuery(/^trade_lev:short:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendSizePicker(ctx, "short", ctx.match[1], Number(ctx.match[2]));
+  });
 
-    let snapshot;
-    try {
-      snapshot = await getMarketSnapshot(symbol);
-    } catch {
-      await ctx.reply(`❌ Could not fetch market data for ${symbol}. Check the symbol and try again.`);
-      return;
-    }
+  bot.callbackQuery(/^trade_lev_custom:short:([A-Z0-9]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    const symbol = ctx.match[1];
+    const snap = await getMarketSnapshot(symbol).catch(() => null);
+    const maxLev = snap?.maxLeverage ?? 100;
+    await ctx.reply(`Enter your leverage for ${symbol} (1–${maxLev}x):`);
+    await setPending(ctx.from.id, `trade_leverage:short:${symbol}`);
+  });
 
-    const effectiveLeverage = Math.min(leverage, snapshot.maxLeverage);
-    const notional = sizeUsdc * effectiveLeverage;
-    const estimatedEntry = snapshot.markPrice;
-    const estimatedLiq = estimatedEntry * (1 + 1 / effectiveLeverage);
-    const phoenixFee = (notional * 3.5) / 10000;
-    const builderFee = (notional * config.BUILDER_FEE_BPS) / 10000;
+  bot.callbackQuery(/^trade_size:short:([A-Z0-9]+):(\d+):([\d.]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendTradeConfirm(ctx, "short", ctx.match[1], Number(ctx.match[2]), Number(ctx.match[3]));
+  });
 
-    const warning =
-      leverage > snapshot.maxLeverage
-        ? `\n⚠️ Leverage capped to max <b>${snapshot.maxLeverage}x</b> for ${symbol}.\n`
-        : "";
-
-    // markPrice encoded so the callback can compute correct base units without a re-fetch
-    const kb = confirmKeyboard(`short:${symbol}:${effectiveLeverage}:${sizeUsdc}:${estimatedEntry.toFixed(6)}`);
-
-    await ctx.reply(
-      [
-        `🔴 <b>Short ${symbol}</b>`,
-        warning,
-        `Leverage: <code>${effectiveLeverage}x</code>`,
-        `Size: <code>$${sizeUsdc} USDC</code>  |  Notional: <code>$${notional.toFixed(2)}</code>`,
-        `Entry (est.): <code>$${estimatedEntry.toFixed(4)}</code>`,
-        `Liq price (est.): <code>$${estimatedLiq.toFixed(4)}</code>`,
-        `Slippage: <code>${settings.slippageBps / 100}%</code>`,
-        ``,
-        `Phoenix fee: <code>$${phoenixFee.toFixed(4)}</code> (3.5 bps)`,
-        `Builder fee: <code>$${builderFee.toFixed(4)}</code> (${config.BUILDER_FEE_BPS} bps)`,
-        ``,
-        `⚠️ SL executes as IOC with 10% slippage buffer if set to Market mode.`,
-      ].join("\n"),
-      { parse_mode: "HTML", reply_markup: kb },
-    );
+  bot.callbackQuery(/^trade_size_custom:short:([A-Z0-9]+):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    const [symbol, levStr] = ctx.match.slice(1);
+    const state = await getTraderState(ctx.user.walletAddress);
+    const available = Number(state.effectiveCollateral);
+    const msg = fmt`Enter the margin amount in USD:\n(Available: ${FormattedString.code(usd(available))})`;
+    await ctx.reply(msg.text, { entities: msg.entities });
+    await setPending(ctx.from.id, `trade_size:short:${symbol}:${levStr}`);
   });
 
   bot.callbackQuery(/^confirm:short:([A-Z0-9]+):([\d.]+):([\d.]+):([\d.]+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Placing order...");
+    await ctx.answerCallbackQuery("Opening trade…");
     if (!ctx.user) return;
-
     const [symbol, leverageStr, sizeStr, markPriceStr] = ctx.match.slice(1);
-    const leverage = Number(leverageStr);
+    const lev = Number(leverageStr);
     const sizeUsdc = Number(sizeStr);
     const markPrice = Number(markPriceStr);
 
@@ -100,18 +96,34 @@ export function registerShort(bot: Bot<BotContext>) {
         {
           symbol,
           side: "short",
-          baseUnits: String((sizeUsdc * leverage) / markPrice),
+          baseUnits: String((sizeUsdc * lev) / markPrice),
           walletAddress: ctx.user.walletAddress,
         },
         getKitSigner(ctx.user.walletAddress),
       );
       await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);
-      await ctx.editMessageText(
-        `✅ <b>Short ${symbol} opened!</b>\n\nTx: <code>${sig}</code>`,
-        { parse_mode: "HTML" },
-      );
-    } catch {
-      await ctx.editMessageText("❌ Order failed. Please try again.");
+
+      const kb = new InlineKeyboard()
+        .text("📊 View positions", "nav:positions")
+        .row()
+        .text("🛑 Set stop loss", `editsl:${symbol}:short`)
+        .text("🎯 Set take profit", `edittp:${symbol}:short`);
+
+      const totalFee = (sizeUsdc * lev * (3.5 + config.BUILDER_FEE_BPS)) / 10000;
+      const msg = fmt`✅ ${FormattedString.b("Trade opened!")}\n\n🔴 ${symbol}/USD — Short ${lev}x\nPosition: ${FormattedString.b(usd(sizeUsdc * lev))}\nFee paid: ${FormattedString.b(usd(totalFee))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      await ctx.editMessageText(msg.text, {
+        entities: msg.entities,
+        reply_markup: kb,
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (e) {
+      logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
+      const errMsg = e instanceof Error ? e.message : "Unknown error";
+      const kb = new InlineKeyboard()
+        .text("Try again", `trade:short:${symbol}`)
+        .text("← Back", "nav:positions");
+      const errFmt = fmt`❌ ${FormattedString.b("Trade failed")}\n\n${symbol} Short\nReason: ${FormattedString.code(errMsg)}`;
+      await ctx.editMessageText(errFmt.text, { entities: errFmt.entities, reply_markup: kb });
     }
   });
 }

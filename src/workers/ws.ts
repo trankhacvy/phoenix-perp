@@ -177,7 +177,13 @@ function subscribeAllMids() {
   });
 }
 
-type PriceAlertSub = { id: string; userId: string; symbol: string | null; triggerPrice: string | null; telegramId: string };
+type PriceAlertSub = {
+  id: string;
+  userId: string;
+  symbol: string | null;
+  triggerPrice: string | null;
+  telegramId: string;
+};
 let _priceAlertCache: PriceAlertSub[] | null = null;
 let _priceAlertCacheTs = 0;
 const PRICE_ALERT_CACHE_TTL_MS = 30_000;

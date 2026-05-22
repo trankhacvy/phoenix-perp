@@ -31,7 +31,9 @@ export async function createEmbeddedWallet(telegramUserId: string) {
 }
 
 export function getWalletSigner(walletAddress: string) {
-  return async (transaction: Transaction | VersionedTransaction): Promise<Transaction | VersionedTransaction> => {
+  return async (
+    transaction: Transaction | VersionedTransaction,
+  ): Promise<Transaction | VersionedTransaction> => {
     const { signedTransaction } = await privy.walletApi.solana.signTransaction({
       address: walletAddress,
       chainType: "solana",
@@ -46,7 +48,7 @@ export function getKitSigner(_walletAddress: string): KeyPairSigner {
   if (_testSigner) return _testSigner;
   throw new Error(
     "Privy → @solana/kit signer bridge not yet implemented. " +
-    "Call initTestSigner() first (test scripts) or implement the Privy adapter.",
+      "Call initTestSigner() first (test scripts) or implement the Privy adapter.",
   );
 }
 

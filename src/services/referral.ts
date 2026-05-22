@@ -25,10 +25,7 @@ export async function linkReferral(refereeId: string, referralCode: string) {
   });
 
   const referrerRecord = await db.query.referrals.findFirst({
-    where: and(
-      eq(referrals.refereeId, referrer.id),
-      eq(referrals.tier, "t1"),
-    ),
+    where: and(eq(referrals.refereeId, referrer.id), eq(referrals.tier, "t1")),
   });
   if (referrerRecord) {
     await db.insert(referrals).values({
@@ -92,9 +89,6 @@ export async function accrueReferralFee(userId: string, notionalUsdc: number) {
 
 export async function getClaimableReferrals(userId: string) {
   return db.query.referrals.findMany({
-    where: and(
-      eq(referrals.referrerId, userId),
-      gt(referrals.accruedUsdc, "0"),
-    ),
+    where: and(eq(referrals.referrerId, userId), gt(referrals.accruedUsdc, "0")),
   });
 }

@@ -8,23 +8,15 @@ function uiStr(field: unknown): string {
   return String(field ?? "0");
 }
 
-export async function getTraderState(
-  walletAddress: string,
-): Promise<TraderStateEvent> {
+export async function getTraderState(walletAddress: string): Promise<TraderStateEvent> {
   const res = await getPhoenixClient().api.traders().getTraderState(walletAddress);
   const traders = (res as { traders?: unknown[] }).traders;
-  const t = (Array.isArray(traders) ? traders[0] : res) as Record<
-    string,
-    unknown
-  >;
+  const t = (Array.isArray(traders) ? traders[0] : res) as Record<string, unknown>;
 
-  const rawPositions = Array.isArray(t.positions)
-    ? (t.positions as Record<string, unknown>[])
-    : [];
+  const rawPositions = Array.isArray(t.positions) ? (t.positions as Record<string, unknown>[]) : [];
 
   const positions: TraderStateEvent["positions"] = rawPositions.map((p) => {
-    const vq =
-      (p.virtualQuotePosition as { value?: number } | undefined)?.value ?? 0;
+    const vq = (p.virtualQuotePosition as { value?: number } | undefined)?.value ?? 0;
     const size = uiStr(p.positionSize);
     const posValue = Number(uiStr(p.positionValue));
     const posSize = Number(size) || 1;
@@ -58,7 +50,9 @@ export async function getTraderState(
 }
 
 export async function getTraderStateSnapshot(walletAddress: string) {
-  return getPhoenixClient().api.traders().getTraderStateSnapshot(walletAddress, { traderPdaIndex: 0 });
+  return getPhoenixClient()
+    .api.traders()
+    .getTraderStateSnapshot(walletAddress, { traderPdaIndex: 0 });
 }
 
 export interface TradeHistoryEntry {
@@ -82,7 +76,9 @@ export async function getTradeHistory(
   walletAddress: string,
   limit = 20,
 ): Promise<TradeHistoryResponse> {
-  const res = await getPhoenixClient().api.trades().getTraderTradesHistory(walletAddress, { limit });
+  const res = await getPhoenixClient()
+    .api.trades()
+    .getTraderTradesHistory(walletAddress, { limit });
 
   const trades: TradeHistoryEntry[] = res.data.map((r) => ({
     symbol: r.marketSymbol,
