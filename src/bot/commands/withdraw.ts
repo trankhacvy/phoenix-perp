@@ -24,7 +24,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       return;
     }
     const amount = parseAmount(raw);
-    if (isNaN(amount) || amount <= 0) {
+    if (Number.isNaN(amount) || amount <= 0) {
       await ctx.reply("Enter an amount greater than $0.");
       return;
     }
@@ -90,16 +90,18 @@ export function registerWithdraw(bot: Bot<BotContext>) {
 }
 
 export async function sendWithdrawAmountPrompt(ctx: BotContext): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user || !ctx.from) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const available = Number(state.effectiveCollateral);
 
   const msg = fmt`📤 ${FormattedString.b("Withdraw Funds")}\n\nAvailable: ${FormattedString.code(usd(available))}\n\nReply with the amount you want to withdraw:`;
   await ctx.reply(msg.text, { entities: msg.entities });
-  await setPending(ctx.from!.id, "withdraw_amount");
+  await setPending(ctx.from.id, "withdraw_amount");
 }
 
 export async function sendWithdrawConfirm(ctx: BotContext, amount: number): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const available = Number(state.effectiveCollateral);
 
   if (amount < 1) {
@@ -115,6 +117,6 @@ export async function sendWithdrawConfirm(ctx: BotContext, amount: number): Prom
     .text("✅ Start withdrawal", `withdraw:confirm:${amount}`)
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📤 ${FormattedString.b(`Withdraw ${usd(amount)}`)}\n\nTo: ${FormattedString.code(shortAddr(ctx.user!.walletAddress))}\n\n⚠️ For security, you'll need to confirm again after 5 minutes.`;
+  const msg = fmt`📤 ${FormattedString.b(`Withdraw ${usd(amount)}`)}\n\nTo: ${FormattedString.code(shortAddr(ctx.user.walletAddress))}\n\n⚠️ For security, you'll need to confirm again after 5 minutes.`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

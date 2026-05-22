@@ -29,7 +29,7 @@ export function registerShort(bot: Bot<BotContext>) {
     if (parts.length >= 3) {
       const lev = parseLeverage(parts[1]);
       const size = parseAmount(parts[2]);
-      if (isNaN(lev) || lev < 1 || isNaN(size) || size <= 0) {
+      if (Number.isNaN(lev) || lev < 1 || Number.isNaN(size) || size <= 0) {
         await ctx.reply(
           "Invalid format. Example: /short BTC 10x 500\nOr just type /short BTC to use the guided flow.",
         );

@@ -14,7 +14,8 @@ import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
 
 export async function sendPositionsScreen(ctx: BotContext): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const positions = state.positions ?? [];
 
   if (positions.length === 0) {
@@ -56,7 +57,8 @@ export async function sendPositionDetail(
   symbol: string,
   side: "long" | "short",
 ): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
 
   if (!pos) {

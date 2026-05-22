@@ -29,7 +29,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
     }
     if (parts.length >= 2) {
       const p = parseAmount(parts[1]);
-      if (isNaN(p)) {
+      if (Number.isNaN(p)) {
         await ctx.reply("Invalid price.");
         return;
       }
@@ -221,7 +221,8 @@ async function sendTpFinalConfirm(
   mode: "market" | "limit",
   positionSide: "long" | "short",
 ): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const pos = state.positions.find((p) => p.symbol === symbol);
   const fromEntry = pos ? Math.abs(Number(pos.entryPrice) - triggerPrice) * Number(pos.size) : null;
   const gainStr =

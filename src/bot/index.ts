@@ -38,7 +38,7 @@ bot.on("message:text", async (ctx) => {
 
   if (pending === "withdraw_amount") {
     const amount = parseAmount(text);
-    if (isNaN(amount) || amount <= 0) {
+    if (Number.isNaN(amount) || amount <= 0) {
       await ctx.reply("Invalid amount. Try /withdraw again.");
       return;
     }
@@ -50,7 +50,7 @@ bot.on("message:text", async (ctx) => {
     const side = parts[1] as "long" | "short";
     const symbol = parts[2];
     const lev = parseLeverage(text);
-    if (isNaN(lev) || lev < 1) {
+    if (Number.isNaN(lev) || lev < 1) {
       await ctx.reply("Invalid leverage. Enter a number like 10 or 10x.");
       return;
     }
@@ -63,7 +63,7 @@ bot.on("message:text", async (ctx) => {
     const symbol = parts[2];
     const lev = Number(parts[3]);
     const size = parseAmount(text);
-    if (isNaN(size) || size <= 0) {
+    if (Number.isNaN(size) || size <= 0) {
       await ctx.reply("Invalid amount. Enter a USD value like 500.");
       return;
     }
@@ -74,7 +74,7 @@ bot.on("message:text", async (ctx) => {
   if (parts[0] === "pricealert") {
     const symbol = parts[1];
     const triggerPrice = parseAmount(text);
-    if (isNaN(triggerPrice) || triggerPrice <= 0) {
+    if (Number.isNaN(triggerPrice) || triggerPrice <= 0) {
       await ctx.reply("Invalid price. Enter a positive number.");
       return;
     }
@@ -85,7 +85,7 @@ bot.on("message:text", async (ctx) => {
   if (parts[0] === "addmargin") {
     const symbol = parts[1];
     const amount = parseAmount(text);
-    if (isNaN(amount) || amount < 1) {
+    if (Number.isNaN(amount) || amount < 1) {
       await ctx.reply("Minimum margin to add is $1.");
       return;
     }
@@ -101,7 +101,7 @@ bot.on("message:text", async (ctx) => {
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
-    if (isNaN(triggerPrice) || triggerPrice < 0) {
+    if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
       await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
       return;
     }
@@ -117,7 +117,7 @@ bot.on("message:text", async (ctx) => {
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
-    if (isNaN(triggerPrice) || triggerPrice < 0) {
+    if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
       await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
       return;
     }

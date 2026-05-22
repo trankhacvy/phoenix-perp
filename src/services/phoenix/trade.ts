@@ -75,7 +75,8 @@ function getRpc() {
     const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
     _sendAndConfirm = sendAndConfirmTransactionFactory({ rpc: _rpc, rpcSubscriptions });
   }
-  return { rpc: _rpc, sendAndConfirm: _sendAndConfirm! };
+  if (!_sendAndConfirm) throw new Error("sendAndConfirm failed to initialize");
+  return { rpc: _rpc, sendAndConfirm: _sendAndConfirm };
 }
 
 async function sendInstruction(ix: AnyInstruction, signer: KeyPairSigner): Promise<string> {

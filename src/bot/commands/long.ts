@@ -196,9 +196,10 @@ export async function sendSizePicker(
   symbol: string,
   lev: number,
 ): Promise<void> {
+  if (!ctx.user) return;
   const [snapshot, state] = await Promise.all([
     getMarketSnapshot(symbol),
-    getTraderState(ctx.user!.walletAddress),
+    getTraderState(ctx.user.walletAddress),
   ]);
 
   const available = Number(state.effectiveCollateral);
@@ -232,9 +233,10 @@ export async function sendTradeConfirm(
   lev: number,
   sizeUsdc: number,
 ): Promise<void> {
+  if (!ctx.user) return;
   const [snapshot, state] = await Promise.all([
     getMarketSnapshot(symbol).catch(() => null),
-    getTraderState(ctx.user!.walletAddress),
+    getTraderState(ctx.user.walletAddress),
   ]);
 
   if (!snapshot) {
