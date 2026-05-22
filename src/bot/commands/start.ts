@@ -10,6 +10,8 @@ import { redis } from "../../lib/redis.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
 import { activatePhoenixAccount, createEmbeddedWallet } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { sendHistoryDetail } from "./history.js";
+import { sendMarketDetail } from "./markets.js";
 import { sendPositionDetail } from "./positions.js";
 
 export function registerStart(bot: Bot<BotContext>) {
@@ -26,6 +28,28 @@ export function registerStart(bot: Bot<BotContext>) {
         const side = parts[1] as "long" | "short" | undefined;
         if (symbol && (side === "long" || side === "short")) {
           await sendPositionDetail(ctx, symbol, side);
+          return;
+        }
+      }
+
+      // Deep link from history list: ?start=hist_<globalIdx>_<page>
+      if (payload.startsWith("hist_")) {
+        const parts = payload.slice(5).split("_");
+        const globalIdx = Number(parts[0]);
+        const fromPage = Number(parts[1] ?? "0");
+        if (!Number.isNaN(globalIdx)) {
+          await sendHistoryDetail(ctx, globalIdx, fromPage);
+          return;
+        }
+      }
+
+      // Deep link from markets list: ?start=mkt_<symbol>_<page>
+      if (payload.startsWith("mkt_")) {
+        const parts = payload.slice(4).split("_");
+        const symbol = parts[0]?.toUpperCase();
+        const fromPage = Number(parts[1] ?? "0");
+        if (symbol) {
+          await sendMarketDetail(ctx, symbol, Number.isNaN(fromPage) ? 0 : fromPage);
           return;
         }
       }

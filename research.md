@@ -96,15 +96,16 @@ Alert types: `at_risk`, `cancellable`, `liquidatable`, `fill`, `tpsl_flip`, `pri
 
 ---
 
-## 6. Command Inventory (25 commands)
+## 6. Command Inventory (22 commands)
 
 ### Account
 | Command | Description |
 |---|---|
-| `/start [code]` | Onboarding: jurisdiction attestation, Privy wallet creation, Phoenix activation, referral link |
+| `/start [code]` | Onboarding: jurisdiction attestation, Privy wallet creation, Phoenix activation, referral link. Also handles deep links from `/positions` (`pos_<symbol>_<side>`) and `/history` (`hist_<idx>_<page>`). |
 | `/balance` | Deposited USDC, available margin, unrealized PnL, unsettled funding, SOL gas, risk tier |
 | `/deposit` | QR code to embedded wallet address |
 | `/withdraw [amount]` | Two-step with 5-minute security delay |
+| `/export` | Private key export notice (Privy dashboard link) |
 
 ### Trading
 | Command | Description |
@@ -112,36 +113,36 @@ Alert types: `at_risk`, `cancellable`, `liquidatable`, `fill`, `tpsl_flip`, `pri
 | `/long [symbol] [lev] [size]` | Open long; guided flow or one-liner |
 | `/short [symbol] [lev] [size]` | Open short |
 | `/positions` | List open positions; deep-link to detail with close/margin/SL-TP actions |
-| `/markets [page]` | Browse all markets, paginated |
-| `/price <symbol>` | Mark price, funding APR, OI, fees, actions |
-| `/setsl <symbol>` | Set stop loss (presets 2–20%, custom, market/limit mode) |
-| `/settp <symbol>` | Set take profit (presets 5–50%, custom, market/limit) |
+| `/markets` | Browse all markets paginated (10/page) with price and funding APR |
+| `/price <symbol>` | Mark price, funding APR, OI, fees, technical indicators, long/short actions |
+| `/setsl <symbol>` | Set stop loss (presets −2% to −20%, custom, market/limit mode) |
+| `/settp <symbol>` | Set take profit (presets +5% to +50%, custom, ladder exit) |
 
 ### History & Analytics
 | Command | Description |
 |---|---|
-| `/history` | Last 20 fills with P&L |
-| `/pnl` | Unrealized PnL + pending funding |
+| `/history` | Paginated trade history (5/page, last 30 trades). Each row: size, fill price, trade value (opens) or realized PnL (closes). Deep-link per row to full detail + Solscan. |
+| `/pnl` | Unrealized PnL + pending funding across all positions |
+| `/portfolio` | Full account snapshot — balance + all open positions in one view |
 | `/share <symbol>` | Generates PNG P&L card via satori/sharp |
 
 ### Referral
 | Command | Description |
 |---|---|
-| `/referral` | T1/T2 counts, total accrued, claimable USDC, link |
+| `/referral` | T1/T2 counts, total accrued, claimable USDC, referral link |
 | `/claim` | Claims accrued rebate (min $1) |
 
 ### Alerts
 | Command | Description |
 |---|---|
-| `/alerts` | Toggle 7 alert types per-user |
-| `/alert <symbol>` | Set price alert with guided threshold entry |
+| `/alerts` | Toggle 7 alert types per-user (at-risk, cancellable, liquidatable, fill, TP/SL flip, funding flip, large funding) |
+| `/alert <symbol>` | Set price alert; fires once when price crosses target |
 
 ### Settings & Info
 | Command | Description |
 |---|---|
-| `/settings` | Slippage (5 presets) + default leverage (5 presets) |
-| `/funding` | Top 10 funding rates by magnitude |
-| `/export` | Private key export notice (Privy dashboard link) |
+| `/settings` | Slippage (0.1–2%) + default leverage (2x–50x) presets |
+| `/funding` | Top 10 markets by funding rate magnitude with APR |
 
 ---
 
@@ -162,6 +163,8 @@ Two singletons from `@ellipsis-labs/rise`:
   - Side derived from sign of `virtualQuotePosition`
   - markPrice derived from `positionValue / size`
 - `getTradeHistory(walletAddress, limit)` — fills with realized P&L, cursor-based pagination
+  - `TradeHistoryEntry` fields: `symbol`, `side`, `realizedPnl`, `price`, `size`, `fee?` (mapped defensively as `(r as any).fee`), `timestamp`, `signature`, `instructionType`
+  - `instructionType === "ReduceOnly"` identifies closing trades; open trades may carry `"Market"` / `"Limit"` / `"PostOnly"` (detected by substring match in `history.ts`)
 
 ### Trades (`src/services/phoenix/trade.ts`)
 - `placeMarketOrder()`, `placeLimitOrder()` — via `@ellipsis-labs/rise`
@@ -258,6 +261,17 @@ BullMQ consumer (concurrency 10):
 | `parseLeverage(raw)` | Strips `x`/`X` → float |
 | `solscanUrl(sig)` | Solscan transaction link |
 
+## 12a. Pagination Utility (`src/bot/lib/paginate.ts`)
+
+Shared helper used wherever a command paginates a list (currently `/history`; designed for reuse in `/markets`, etc.).
+
+| Export | Signature | Description |
+|---|---|---|
+| `paginate<T>` | `(all, page, pageSize) → Paginated<T>` | Slices an array for the requested page; clamps `page` to valid range; returns `{ items, page, totalPages, hasPrev, hasNext }` |
+| `addPaginationRow` | `(kb, prefix, page, totalPages) → void` | Appends `← Prev · N/Total · Next →` buttons to an existing `InlineKeyboard`; no-op when `totalPages ≤ 1` |
+
+Callback convention: `<prefix>:<page>` (e.g. `hist:list:0`). The `N/Total` centre button uses the `noop` callback.
+
 ---
 
 ## 13. Test Coverage
@@ -286,6 +300,7 @@ Test setup (`tests/setup.ts`) overrides env vars with safe test values. `vitest.
 | 5 | `package.json` | `ws` and `@types/ws` missing; imported in `src/workers/ws.ts` |
 | 6 | `src/services/wallet.ts` | Privy → `@solana/kit` signer bridge not implemented — all production transactions fail |
 | 7 | Type system | `RiskTier` defines both `"at_risk"` and `"atRisk"` — inconsistent casing between WS messages and internal types |
+| 8 | `src/bot/commands/history.ts` | `realizedPnl` in the list header always shows $0.00 if the Rise SDK does not populate that field for closing trades — needs verification against live API response |
 
 ---
 

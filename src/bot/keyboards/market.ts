@@ -6,5 +6,5 @@ export function marketActionKeyboard(symbol: string): InlineKeyboard {
     .text("🔴 Sell / Short", `trade:short:${symbol}`)
     .row()
     .text("🔔 Price alert", `pricealert:${symbol}`)
-    .text("📊 Info", `price:${symbol}`);
+    .text("📊 Info", `market:detail:${symbol}:0`);
 }

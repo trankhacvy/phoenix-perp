@@ -1,21 +1,13 @@
-import type {
-  Position,
-  TraderStateResponse,
-  TraderView,
-} from "@ellipsis-labs/rise";
+import type { Position, TraderStateResponse, TraderView } from "@ellipsis-labs/rise";
 import { withRetry } from "../../lib/retry.js";
 import type { TraderStateEvent } from "../../types/index.js";
 import { getPhoenixClient } from "./client.js";
 
-export async function getTraderState(
-  walletAddress: string,
-): Promise<TraderStateEvent> {
+export async function getTraderState(walletAddress: string): Promise<TraderStateEvent> {
   return withRetry(() => _getTraderState(walletAddress));
 }
 
-async function _getTraderState(
-  walletAddress: string,
-): Promise<TraderStateEvent> {
+async function _getTraderState(walletAddress: string): Promise<TraderStateEvent> {
   const res = (await getPhoenixClient()
     .api.traders()
     .getTraderState(walletAddress)) as TraderStateResponse;
@@ -44,14 +36,15 @@ async function _getTraderState(
     (trader.positions ?? []).map((p: Position) => {
       const vq = p.virtualQuotePosition.value;
       const size = p.positionSize.ui;
-      const posValue = p.positionValue.value;
+      const posValue = Number(p.positionValue.ui);
       const posSize = Number(size) || 1;
-      const markPriceComputed = (posValue / posSize).toFixed(4);
-      const liqPriceRaw = p.liquidationPrice.value;
-      const liqPrice = liqPriceRaw > 0 ? liqPriceRaw.toFixed(4) : "N/A";
-      const marginApprox = p.initialMargin.value;
-      const leverageApprox =
-        marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
+      const markPriceComputed = String(posValue / posSize);
+      const liqPriceRaw = Number(p.liquidationPrice.ui);
+      const liqPrice = liqPriceRaw > 0 ? String(liqPriceRaw) : "N/A";
+      const marginApprox = Number(p.initialMargin.ui);
+      const leverageApprox = marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
+      const tpRaw = p.takeProfitPrice?.ui;
+      const slRaw = p.stopLossPrice?.ui;
       return {
         symbol: String(p.symbol),
         side: vq <= 0 ? "long" : "short",
@@ -63,6 +56,8 @@ async function _getTraderState(
         marginMode: trader.traderSubaccountIndex === 0 ? ("cross" as const) : ("isolated" as const),
         subaccountIndex: trader.traderSubaccountIndex,
         leverage: leverageApprox,
+        takeProfit: tpRaw && Number(tpRaw) > 0 ? String(tpRaw) : undefined,
+        stopLoss: slRaw && Number(slRaw) > 0 ? String(slRaw) : undefined,
       };
     }),
   );
@@ -100,6 +95,7 @@ export interface TradeHistoryEntry {
   realizedPnl: string;
   price: string;
   size: string;
+  fee?: string;
   timestamp: number;
   signature: string;
   instructionType: string;
@@ -125,6 +121,8 @@ export async function getTradeHistory(
     realizedPnl: r.realizedPnl,
     price: r.price,
     size: String(Math.abs(Number(r.baseLotsDelta))),
+    // biome-ignore lint/suspicious/noExplicitAny: fee field not in SDK types yet
+    fee: (r as any).fee ?? undefined,
     timestamp: r.timestamp,
     signature: r.signature ?? "",
     instructionType: r.instructionType,

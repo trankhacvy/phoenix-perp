@@ -39,6 +39,8 @@ export interface PhoenixPosition {
   marginMode: "cross" | "isolated";
   subaccountIndex: number;
   leverage?: number;
+  takeProfit?: string;
+  stopLoss?: string;
 }
 
 export interface PhoenixFill {

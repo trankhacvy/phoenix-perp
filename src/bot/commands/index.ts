@@ -13,7 +13,6 @@ import { registerMarkets } from "./markets.js";
 import { registerPnl } from "./pnl.js";
 import { registerPortfolio } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
-import { registerPrice } from "./price.js";
 import { registerPriceAlert } from "./pricealert.js";
 import { registerReferral } from "./referral.js";
 import { registerSetSl } from "./setsl.js";
@@ -30,7 +29,6 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerDeposit(bot);
   registerWithdraw(bot);
   registerMarkets(bot);
-  registerPrice(bot);
   registerLong(bot);
   registerShort(bot);
   registerPositions(bot);

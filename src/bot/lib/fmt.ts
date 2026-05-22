@@ -1,11 +1,20 @@
-export function usd(n: number | string): string {
+export function num(n: number | string, minDec = 0, maxDec = 2): string {
+  const v = Number(n);
+  if (Number.isNaN(v)) return "—";
+  return v.toLocaleString("en-US", {
+    minimumFractionDigits: minDec,
+    maximumFractionDigits: maxDec,
+  });
+}
+
+export function usd(n: number | string, minDec = 2, maxDec = 2): string {
   const v = Number(n);
   if (Number.isNaN(v)) return "$—";
   return v.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: minDec,
+    maximumFractionDigits: maxDec,
   });
 }
 
@@ -13,31 +22,31 @@ export function price(n: number | string): string {
   const v = Number(n);
   if (Number.isNaN(v)) return "$—";
   if (v >= 1000) return usd(v);
-  if (v >= 1) return `$${v.toFixed(2)}`;
-  if (v >= 0.01) return `$${v.toFixed(4)}`;
-  return `$${v.toFixed(6)}`;
+  if (v >= 1) return `$${num(v, 2, 2)}`;
+  if (v >= 0.01) return `$${num(v, 4, 4)}`;
+  return `$${num(v, 6, 6)}`;
 }
 
 export function pct(n: number | string, decimals = 2): string {
   const v = Number(n);
   if (Number.isNaN(v)) return "—%";
   const sign = v >= 0 ? "+" : "";
-  return `${sign}${v.toFixed(decimals)}%`;
+  return `${sign}${num(v, decimals, decimals)}%`;
 }
 
 export function fundingApr(rateDecimal: number): string {
   const apr = rateDecimal * 1095 * 100;
-  return `${apr >= 0 ? "+" : ""}${apr.toFixed(2)}% / yr`;
+  return `${apr >= 0 ? "+" : ""}${num(apr, 2, 2)}% / yr`;
 }
 
 export function fundingDir(rateDecimal: number): string {
   return rateDecimal >= 0 ? "Longs pay shorts" : "Shorts pay longs";
 }
 
-export function cryptoSize(n: number | string, symbol: string): string {
+export function cryptoSize(n: number | string, symbol: string, minDec = 2, maxDec = 6): string {
   const v = Number(n);
   if (Number.isNaN(v)) return `— ${symbol}`;
-  return `${v.toFixed(4)} ${symbol}`;
+  return `${num(v, minDec, maxDec)} ${symbol}`;
 }
 
 export function shortAddr(addr: string): string {

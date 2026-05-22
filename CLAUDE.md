@@ -93,6 +93,42 @@ Drizzle ORM with postgres.js. Schema files in `src/db/schema/`. All types use `$
 - `alert_subscriptions` — per-user alert type toggles (pgEnum)
 - `referrals` — bot-native T1/T2 chain; independent of Phoenix's native referral program (which requires $10K volume)
 
+### Message formatting
+
+**Always use `@grammyjs/parse-mode` for all bot messages with formatting. Never use raw HTML strings or `parse_mode: "HTML"`.**
+
+```typescript
+import { fmt, FormattedString } from "@grammyjs/parse-mode";
+
+// Compose with tagged template — handles entity offsets automatically
+const msg = fmt`${FormattedString.b("SOL · LONG")}  (Cross)
+Entry  ${FormattedString.b("$87.00")}`;
+
+// Send — use .text + .entities, NOT parse_mode
+await ctx.reply(msg.text, { entities: msg.entities });
+
+// For captions (photos/files)
+await ctx.replyWithPhoto(file, {
+  caption: msg.caption,
+  caption_entities: msg.caption_entities,
+});
+
+// Join multiple FormattedStrings
+const lines = [header, ...rows];
+const full = FormattedString.join(lines, "\n");
+
+// Hyperlinks
+const link = FormattedString.link("View on Solscan →", url);
+
+// Inline formatting helpers: .b() .i() .u() .code() .link()
+```
+
+Key rules:
+- `fmt` tagged template literal is the primary composition tool — embed `FormattedString` values directly
+- Pass `{ entities: msg.entities }` to `ctx.reply` / `ctx.editMessageText`, never `{ parse_mode: "HTML" }`
+- Use `FormattedString.join(arr, separator)` to build lists from an array of `FormattedString`
+- `link_preview_options: { is_disabled: true }` whenever the message contains URLs
+
 ### ESM / import rules
 
 `"type": "module"` + `"moduleResolution": "NodeNext"`. All imports must use `.js` extensions even for `.ts` source files. Never use CommonJS `require()`.
