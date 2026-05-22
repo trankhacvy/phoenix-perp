@@ -18,29 +18,38 @@ export function registerShare(bot: Bot<BotContext>) {
     }
 
     const history = await getTradeHistory(ctx.user.walletAddress, 20);
-    const trade = history.trades.find((t) => t.symbol === symbol);
+    // Find the most recent closing fill for this symbol (realizedPnl != 0)
+    const trade = history.trades.find(
+      (t) => t.symbol === symbol && Number(t.realizedPnl) !== 0,
+    );
 
     if (!trade) {
-      await ctx.reply(`No ${symbol} trades found.`);
+      await ctx.reply(`No closed ${symbol} trades found.`);
       return;
     }
 
-    const botInfo = await bot.api.getMe();
-    const pnl = Number(trade.realizedPnl ?? 0);
-    const notional = Number(trade.size) * Number(trade.price);
-    const roiPct = notional > 0 ? ((pnl / notional) * 100).toFixed(2) : "0";
+    const pnl = Number(trade.realizedPnl);
+    const price = Number(trade.price);
+    const size = Number(trade.size);
+    const notional = price * size;
+    const roiPercent = notional > 0 ? (pnl / notional) * 100 : 0;
+    // Close fill side is inverted vs position side (short fill = closing a long)
+    const positionSide = trade.side === "short" ? "long" : "short";
+    const baseToken = symbol.replace("-PERP", "").replace(/USD.*/, "");
+
     const card = await generatePnlCard({
       symbol,
-      side: trade.side,
+      side: positionSide,
       entryPrice: trade.price,
       exitPrice: trade.price,
-      roiPercent: roiPct,
-      pnlUsdc: trade.realizedPnl,
-      botHandle: `@${botInfo.username}`,
+      roiPercent,
+      pnlUsdc: pnl,
+      size: `${size.toFixed(4)} ${baseToken}`,
     });
 
+    const emoji = pnl >= 0 ? "🟢" : "🔴";
     await ctx.replyWithPhoto(new InputFile(card, "pnl.png"), {
-      caption: `${trade.side === "long" ? "🟢" : "🔴"} ${symbol} on @${botInfo.username} 🔥`,
+      caption: `${emoji} ${symbol} · ${pnl >= 0 ? "+" : ""}$${Math.abs(pnl).toFixed(2)} USDC`,
     });
   });
 }

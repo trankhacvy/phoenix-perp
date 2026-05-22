@@ -1,11 +1,12 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import type { Bot } from "grammy";
+import { type Bot, InputFile } from "grammy";
 import { InlineKeyboard } from "grammy";
 import {
   computeWalletAnalytics,
   fetchAllTradeHistory,
   getTraderState,
 } from "../../services/phoenix/position.js";
+import { generateWalletCard } from "../../services/image.js";
 import type { BotContext } from "../../types/index.js";
 import { compactUsd, pnlEmoji, shortAddr, signedUsd, timeAgo, usd } from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
@@ -120,10 +121,14 @@ async function sendWalletScreen(
         .text("📤 Withdraw", "nav:withdraw")
         .row()
         .text("📋 History", "nav:history")
+        .row()
+        .text("🖼 Generate Card", `wc:gen:${walletAddress}`)
     : new InlineKeyboard()
         .text("📋 Trade History", `walletinfo:hist:${walletAddress}:0`)
         .row()
-        .text("👁 Monitor", `monitor:add:${walletAddress}`);
+        .text("👁 Monitor", `monitor:add:${walletAddress}`)
+        .row()
+        .text("🖼 Generate Card", `wc:gen:${walletAddress}`);
 
   await ctx.api.editMessageText(chatId, loadingMsgId, msg.text, {
     entities: msg.entities,
@@ -165,5 +170,40 @@ export function registerWallet(bot: Bot<BotContext>) {
     const address = ctx.match[1];
     const page = Number(ctx.match[2]);
     await sendHistoryScreen(ctx, page, true, address);
+  });
+
+  bot.callbackQuery(/^wc:gen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Generating card…");
+    const walletAddress = ctx.match[1];
+
+    try {
+      const allTrades = await fetchAllTradeHistory(walletAddress);
+      const analytics = computeWalletAnalytics(allTrades);
+
+      const winRate =
+        analytics.closedTrades > 0
+          ? (analytics.wins / analytics.closedTrades) * 100
+          : null;
+
+      const card = await generateWalletCard({
+        walletAddress,
+        realizedPnl: analytics.realizedPnl,
+        winRate,
+        totalFills: analytics.totalFills,
+        totalVolume: analytics.totalVolume,
+        bestTrade: analytics.bestTrade
+          ? { pnl: analytics.bestTrade.pnl, symbol: analytics.bestTrade.symbol }
+          : null,
+        worstTrade: analytics.worstTrade
+          ? { pnl: analytics.worstTrade.pnl, symbol: analytics.worstTrade.symbol }
+          : null,
+      });
+
+      await ctx.replyWithPhoto(new InputFile(card, "wallet.png"), {
+        caption: `📊 ${shortAddr(walletAddress)} · ${analytics.totalFills} fills · ${signedUsd(analytics.realizedPnl)} realized`,
+      });
+    } catch {
+      await ctx.reply("Failed to generate card. Try again.");
+    }
   });
 }
