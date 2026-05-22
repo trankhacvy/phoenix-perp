@@ -84,7 +84,7 @@ export function registerStart(bot: Bot<BotContext>) {
       if (existing) {
         if (msgId) {
           await ctx.api.editMessageText(
-            ctx.chat!.id,
+            ctx.chat?.id ?? 0,
             msgId,
             "Account already exists. Use /balance to check your account.",
           );
@@ -115,14 +115,14 @@ export function registerStart(bot: Bot<BotContext>) {
 
       if (msgId) {
         const welcome = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\nYour wallet is ready.\n${FormattedString.code(walletAddress)}\n\nUse /deposit to fund your account, then /markets to start trading.`;
-        await ctx.api.editMessageText(ctx.chat!.id, msgId, welcome.text, {
+        await ctx.api.editMessageText(ctx.chat?.id ?? 0, msgId, welcome.text, {
           entities: welcome.entities,
         });
       }
     } catch (err) {
       if (msgId) {
         await ctx.api.editMessageText(
-          ctx.chat!.id,
+          ctx.chat?.id ?? 0,
           msgId,
           "❌ Setup failed. Please try again or contact support.",
         );

@@ -154,7 +154,7 @@ function subscribeAllMids() {
   allMidsWs = new WebSocket(config.PHOENIX_WS_URL);
 
   allMidsWs.on("open", () => {
-    allMidsWs!.send(JSON.stringify({ type: "subscribe", subscription: { channel: "allMids" } }));
+    allMidsWs?.send(JSON.stringify({ type: "subscribe", subscription: { channel: "allMids" } }));
     logger.info("WS subscribed: allMids");
   });
 

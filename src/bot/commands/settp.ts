@@ -126,7 +126,8 @@ export async function sendTpPrompt(
   symbol: string,
   positionSide: "long" | "short",
 ): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const pos = state.positions.find((p) => p.symbol === symbol);
   if (!pos) {
     await ctx.reply(`No open ${symbol} position found.`);
@@ -165,7 +166,8 @@ export async function sendTpModePicker(
   positionSide: "long" | "short",
   triggerPrice: number,
 ): Promise<void> {
-  const state = await getTraderState(ctx.user!.walletAddress);
+  if (!ctx.user) return;
+  const state = await getTraderState(ctx.user.walletAddress);
   const pos = state.positions.find((p) => p.symbol === symbol);
   if (!pos) {
     await ctx.reply(`No open ${symbol} position found.`);

@@ -171,8 +171,9 @@ export async function sendLeveragePicker(
     return;
   }
 
+  if (!ctx.user) return;
   const settings = (await db.query.userSettings.findFirst({
-    where: eq(userSettings.userId, ctx.user!.id),
+    where: eq(userSettings.userId, ctx.user.id),
   })) ?? { slippageBps: 50, defaultLeverage: 5 };
 
   const emoji = side === "long" ? "🟢" : "🔴";
