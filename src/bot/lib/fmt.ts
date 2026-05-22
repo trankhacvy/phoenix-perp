@@ -1,6 +1,6 @@
 export function usd(n: number | string): string {
   const v = Number(n);
-  if (isNaN(v)) return "$—";
+  if (Number.isNaN(v)) return "$—";
   return v.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
@@ -11,7 +11,7 @@ export function usd(n: number | string): string {
 
 export function price(n: number | string): string {
   const v = Number(n);
-  if (isNaN(v)) return "$—";
+  if (Number.isNaN(v)) return "$—";
   if (v >= 1000) return usd(v);
   if (v >= 1) return `$${v.toFixed(2)}`;
   if (v >= 0.01) return `$${v.toFixed(4)}`;
@@ -20,7 +20,7 @@ export function price(n: number | string): string {
 
 export function pct(n: number | string, decimals = 2): string {
   const v = Number(n);
-  if (isNaN(v)) return "—%";
+  if (Number.isNaN(v)) return "—%";
   const sign = v >= 0 ? "+" : "";
   return `${sign}${v.toFixed(decimals)}%`;
 }
@@ -36,7 +36,7 @@ export function fundingDir(rateDecimal: number): string {
 
 export function cryptoSize(n: number | string, symbol: string): string {
   const v = Number(n);
-  if (isNaN(v)) return `— ${symbol}`;
+  if (Number.isNaN(v)) return `— ${symbol}`;
   return `${v.toFixed(4)} ${symbol}`;
 }
 
