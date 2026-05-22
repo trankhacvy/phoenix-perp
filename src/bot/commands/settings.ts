@@ -83,7 +83,10 @@ export function registerSettings(bot: Bot<BotContext>) {
     const bps = Number(ctx.match[1]);
     const s = await saveSettings(ctx.user.id, { slippageBps: bps });
     const msg = settingsMsg(s);
-    await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: settingsKeyboard() });
+    await ctx.editMessageText(msg.text, {
+      entities: msg.entities,
+      reply_markup: settingsKeyboard(),
+    });
   });
 
   bot.callbackQuery("settings:leverage", async (ctx) => {
@@ -105,7 +108,10 @@ export function registerSettings(bot: Bot<BotContext>) {
     const lev = Number(ctx.match[1]);
     const s = await saveSettings(ctx.user.id, { defaultLeverage: lev });
     const msg = settingsMsg(s);
-    await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: settingsKeyboard() });
+    await ctx.editMessageText(msg.text, {
+      entities: msg.entities,
+      reply_markup: settingsKeyboard(),
+    });
   });
 
   bot.callbackQuery("settings:back", async (ctx) => {
@@ -113,6 +119,9 @@ export function registerSettings(bot: Bot<BotContext>) {
     if (!ctx.user) return;
     const s = await getSettings(ctx.user.id);
     const msg = settingsMsg(s);
-    await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: settingsKeyboard() });
+    await ctx.editMessageText(msg.text, {
+      entities: msg.entities,
+      reply_markup: settingsKeyboard(),
+    });
   });
 }

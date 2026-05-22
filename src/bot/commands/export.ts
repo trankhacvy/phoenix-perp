@@ -1,6 +1,6 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import type { BotContext } from "../../types/index.js";
 
 export function registerExport(bot: Bot<BotContext>) {

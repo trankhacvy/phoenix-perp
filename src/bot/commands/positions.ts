@@ -38,9 +38,7 @@ export async function sendPositionsScreen(ctx: BotContext): Promise<void> {
     return fmt`${FormattedString.link(`${emoji} ${pos.symbol} ${label}`, deepLink)}  ${size}  ·  @${fmtPrice(Number(pos.markPrice))}  ·  P&L: ${FormattedString.b(`${pnlSign}${usd(upnl)}`)}`;
   });
 
-  const kb = new InlineKeyboard()
-    .text("🟢 New Long", "nav:long")
-    .text("🔴 New Short", "nav:short");
+  const kb = new InlineKeyboard().text("🟢 New Long", "nav:long").text("🔴 New Short", "nav:short");
 
   const header = fmt`📊 ${FormattedString.b(`Positions (${positions.length})`)}`;
   const footer = fmt`${FormattedString.i("Tap a position name to manage it.")}`;
@@ -53,7 +51,11 @@ export async function sendPositionsScreen(ctx: BotContext): Promise<void> {
   });
 }
 
-export async function sendPositionDetail(ctx: BotContext, symbol: string, side: "long" | "short"): Promise<void> {
+export async function sendPositionDetail(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+): Promise<void> {
   const state = await getTraderState(ctx.user!.walletAddress);
   const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
 

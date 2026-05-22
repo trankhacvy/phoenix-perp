@@ -29,18 +29,22 @@ export function registerSetSl(bot: Bot<BotContext>) {
     }
     if (parts.length >= 2) {
       const p = parseAmount(parts[1]);
-      if (isNaN(p)) {
+      if (Number.isNaN(p)) {
         await ctx.reply("Invalid price.");
         return;
       }
       const mode = parts[2] === "limit" ? "limit" : "market";
       const markPrice = Number(pos.markPrice);
       if (pos.side === "long" && p >= markPrice) {
-        await ctx.reply(`Stop loss for a long must be below current price (${fmtPrice(markPrice)}).`);
+        await ctx.reply(
+          `Stop loss for a long must be below current price (${fmtPrice(markPrice)}).`,
+        );
         return;
       }
       if (pos.side === "short" && p <= markPrice) {
-        await ctx.reply(`Stop loss for a short must be above current price (${fmtPrice(markPrice)}).`);
+        await ctx.reply(
+          `Stop loss for a short must be above current price (${fmtPrice(markPrice)}).`,
+        );
         return;
       }
       await sendSlFinalConfirm(ctx, symbol, p, mode, pos.side);

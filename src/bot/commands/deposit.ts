@@ -1,5 +1,5 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { type Bot, InlineKeyboard, InputFile } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import QRCode from "qrcode";
 import type { BotContext } from "../../types/index.js";
 
@@ -14,7 +14,8 @@ export function registerDeposit(bot: Bot<BotContext>) {
 }
 
 export async function sendDepositScreen(ctx: BotContext): Promise<void> {
-  const { walletAddress } = ctx.user!;
+  if (!ctx.user) return;
+  const { walletAddress } = ctx.user;
   const qr = await QRCode.toBuffer(walletAddress, { type: "png", width: 256 });
   const kb = new InlineKeyboard().text("← Back", "nav:balance");
 

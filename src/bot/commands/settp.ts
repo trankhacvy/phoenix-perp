@@ -36,11 +36,15 @@ export function registerSetTp(bot: Bot<BotContext>) {
       const mode = parts[2] === "limit" ? "limit" : "market";
       const markPrice = Number(pos.markPrice);
       if (pos.side === "long" && p <= markPrice) {
-        await ctx.reply(`Take profit for a long must be above current price (${fmtPrice(markPrice)}).`);
+        await ctx.reply(
+          `Take profit for a long must be above current price (${fmtPrice(markPrice)}).`,
+        );
         return;
       }
       if (pos.side === "short" && p >= markPrice) {
-        await ctx.reply(`Take profit for a short must be below current price (${fmtPrice(markPrice)}).`);
+        await ctx.reply(
+          `Take profit for a short must be below current price (${fmtPrice(markPrice)}).`,
+        );
         return;
       }
       await sendTpFinalConfirm(ctx, symbol, p, mode, pos.side);

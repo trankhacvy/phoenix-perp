@@ -13,7 +13,10 @@ export function registerPnl(bot: Bot<BotContext>) {
     }
 
     const state = await getTraderState(ctx.user.walletAddress);
-    const upnl = (state.positions ?? []).reduce((sum, pos) => sum + Number(pos.unrealizedPnl ?? 0), 0);
+    const upnl = (state.positions ?? []).reduce(
+      (sum, pos) => sum + Number(pos.unrealizedPnl ?? 0),
+      0,
+    );
     const funding = Number(state.unsettledFunding ?? 0);
     const combined = upnl + funding;
 

@@ -1,28 +1,28 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { eq } from "drizzle-orm";
+import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
+import { logger } from "../../lib/logger.js";
+import type { BotContext } from "../../types/index.js";
 import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { getKitSigner } from "../../services/wallet.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
-import { setPending } from "../lib/pending.js";
 import {
-  usd,
-  price as fmtPrice,
   fundingApr,
   fundingDir,
   parseAmount,
   parseLeverage,
+  price as fmtPrice,
   solscanUrl,
+  usd,
 } from "../lib/fmt.js";
-import type { BotContext } from "../../types/index.js";
-import { config } from "../../config/index.js";
-import { logger } from "../../lib/logger.js";
+import { setPending } from "../lib/pending.js";
 
 export function registerLong(bot: Bot<BotContext>) {
   bot.command("long", async (ctx) => {
@@ -40,7 +40,7 @@ export function registerLong(bot: Bot<BotContext>) {
     if (parts.length >= 3) {
       const lev = parseLeverage(parts[1]);
       const size = parseAmount(parts[2]);
-      if (isNaN(lev) || lev < 1 || isNaN(size) || size <= 0) {
+      if (Number.isNaN(lev) || lev < 1 || Number.isNaN(size) || size <= 0) {
         await ctx.reply(
           "Invalid format. Example: /long BTC 10x 500\nOr just type /long BTC to use the guided flow.",
         );

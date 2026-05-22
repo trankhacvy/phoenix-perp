@@ -1,12 +1,12 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { db } from "../../db/index.js";
 import { alertSubscriptions } from "../../db/schema/index.js";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
-import { setPending } from "../lib/pending.js";
-import { price as fmtPrice, parseAmount } from "../lib/fmt.js";
 import type { BotContext } from "../../types/index.js";
+import { parseAmount, price as fmtPrice } from "../lib/fmt.js";
+import { setPending } from "../lib/pending.js";
 
 export async function sendPriceAlertPrompt(ctx: BotContext, symbol: string): Promise<void> {
   let markPrice: number | null = null;
@@ -18,14 +18,13 @@ export async function sendPriceAlertPrompt(ctx: BotContext, symbol: string): Pro
   }
 
   const priceNote =
-    markPrice !== null
-      ? fmt`\nCurrent price: ${FormattedString.code(fmtPrice(markPrice))}`
-      : fmt``;
+    markPrice !== null ? fmt`\nCurrent price: ${FormattedString.code(fmtPrice(markPrice))}` : fmt``;
 
   const msg = fmt`🔔 ${FormattedString.b(`Price Alert — ${symbol}`)}${priceNote}\n\nEnter the price you want to be alerted at.\n\nExample: ${FormattedString.code("150")}  (alert when price reaches $150)`;
 
   await ctx.reply(msg.text, { entities: msg.entities });
-  await setPending(ctx.from!.id, `pricealert:${symbol}`);
+  if (!ctx.from) return;
+  await setPending(ctx.from.id, `pricealert:${symbol}`);
 }
 
 export async function sendPriceAlertConfirm(
@@ -78,7 +77,7 @@ export function registerPriceAlert(bot: Bot<BotContext>) {
     }
 
     const triggerPrice = parseAmount(parts[1]);
-    if (isNaN(triggerPrice) || triggerPrice <= 0) {
+    if (Number.isNaN(triggerPrice) || triggerPrice <= 0) {
       await ctx.reply("Invalid price. Enter a positive number.");
       return;
     }

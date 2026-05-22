@@ -73,8 +73,8 @@ export async function subscribeUser(walletAddress: string, telegramId: string) {
               symbol: pos.symbol,
               message: [
                 `🔄 <b>Position Flipped: ${pos.symbol}</b>`,
-                `Your TP/SL orders were cancelled by the protocol.`,
-                `Tap /positions to reattach TP/SL.`,
+                "Your TP/SL orders were cancelled by the protocol.",
+                "Tap /positions to reattach TP/SL.",
               ].join("\n"),
             });
           }

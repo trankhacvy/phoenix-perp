@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
+import { clearPending } from "../lib/pending.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
 import { registerBalance, sendBalanceScreen } from "./balance.js";
 import { registerClaim } from "./claim.js";
@@ -15,13 +16,12 @@ import { registerPrice } from "./price.js";
 import { registerPriceAlert } from "./pricealert.js";
 import { registerReferral } from "./referral.js";
 import { registerSetSl } from "./setsl.js";
-import { registerSetTp } from "./settp.js";
 import { registerSettings } from "./settings.js";
+import { registerSetTp } from "./settp.js";
 import { registerShare } from "./share.js";
 import { registerShort } from "./short.js";
 import { registerStart } from "./start.js";
 import { registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
-import { clearPending } from "../lib/pending.js";
 
 export function registerCommands(bot: Bot<BotContext>) {
   registerStart(bot);

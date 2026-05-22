@@ -1,7 +1,7 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { alertSubscriptions } from "../../db/schema/index.js";
 import type { BotContext } from "../../types/index.js";
@@ -35,7 +35,8 @@ async function buildAlertsKeyboard(userId: string): Promise<InlineKeyboard> {
 const ALERTS_MSG = fmt`🔔 ${FormattedString.b("Alert Settings")}\n\nToggle which notifications you'd like to receive.`;
 
 export async function sendAlertsScreen(ctx: BotContext): Promise<void> {
-  const kb = await buildAlertsKeyboard(ctx.user!.id);
+  if (!ctx.user) return;
+  const kb = await buildAlertsKeyboard(ctx.user.id);
   await ctx.reply(ALERTS_MSG.text, { entities: ALERTS_MSG.entities, reply_markup: kb });
 }
 

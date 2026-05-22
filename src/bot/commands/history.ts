@@ -1,9 +1,9 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
 import { getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
-import { price as fmtPrice, usd, cryptoSize } from "../lib/fmt.js";
+import { cryptoSize, price as fmtPrice, usd } from "../lib/fmt.js";
 
 // ReduceOnly = closing a position; side = fill direction (long=bought, short=sold)
 function tradeAction(instructionType: string, side: "long" | "short"): string {
@@ -25,7 +25,8 @@ function formatTs(ts: number): string {
 }
 
 export async function sendHistoryScreen(ctx: BotContext): Promise<void> {
-  const history = await getTradeHistory(ctx.user!.walletAddress, 20);
+  if (!ctx.user) return;
+  const history = await getTradeHistory(ctx.user.walletAddress, 20);
   const trades = history.trades;
 
   if (trades.length === 0) {

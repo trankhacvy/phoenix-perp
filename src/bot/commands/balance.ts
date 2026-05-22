@@ -1,11 +1,11 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { Connection, PublicKey } from "@solana/web3.js";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { fmt, FormattedString } from "@grammyjs/parse-mode";
-import { Connection, PublicKey } from "@solana/web3.js";
 import { config } from "../../config/index.js";
-import { getTraderState } from "../../services/phoenix/position.js";
-import { usd, shortAddr } from "../lib/fmt.js";
 import type { BotContext } from "../../types/index.js";
+import { getTraderState } from "../../services/phoenix/position.js";
+import { shortAddr, usd } from "../lib/fmt.js";
 
 const solConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
 
@@ -42,9 +42,10 @@ export function registerBalance(bot: Bot<BotContext>) {
 }
 
 export async function sendBalanceScreen(ctx: BotContext): Promise<void> {
+  if (!ctx.user) return;
   const [state, solLamports] = await Promise.all([
-    getTraderState(ctx.user!.walletAddress),
-    solConnection.getBalance(new PublicKey(ctx.user!.walletAddress)).catch(() => 0),
+    getTraderState(ctx.user.walletAddress),
+    solConnection.getBalance(new PublicKey(ctx.user.walletAddress)).catch(() => 0),
   ]);
 
   const sol = (solLamports / 1e9).toFixed(4);
@@ -64,7 +65,7 @@ export async function sendBalanceScreen(ctx: BotContext): Promise<void> {
     .text("📊 Positions", "nav:positions")
     .text("📋 History", "nav:history");
 
-  const msg = fmt`💰 ${FormattedString.b("Your Account")}\n\nDeposited         ${FormattedString.b(usd(deposited))}\nAvailable margin  ${FormattedString.b(usd(effective))}\n\nUnrealized P&L    ${FormattedString.b(usd(upnl))}\nPending funding   ${FormattedString.b(usd(funding))}\n\nTotal value       ${FormattedString.b(usd(totalValue))}\n\nGas (SOL)  ${FormattedString.b(`${sol} SOL`)}\nWallet     ${FormattedString.code(shortAddr(ctx.user!.walletAddress))}\n\n${tierLine}`;
+  const msg = fmt`💰 ${FormattedString.b("Your Account")}\n\nDeposited         ${FormattedString.b(usd(deposited))}\nAvailable margin  ${FormattedString.b(usd(effective))}\n\nUnrealized P&L    ${FormattedString.b(usd(upnl))}\nPending funding   ${FormattedString.b(usd(funding))}\n\nTotal value       ${FormattedString.b(usd(totalValue))}\n\nGas (SOL)  ${FormattedString.b(`${sol} SOL`)}\nWallet     ${FormattedString.code(shortAddr(ctx.user.walletAddress))}\n\n${tierLine}`;
 
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
