@@ -8,6 +8,7 @@ on:
 
 jobs:
   ci:
+    name: Lint, build, test
     runs-on: ubuntu-latest
 
     services:
@@ -38,22 +39,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint & format check
-        run: npm run check
+        run: pnpm run check
 
       - name: Type check + build
-        run: npm run build
+        run: pnpm run build
 
       - name: Run tests
-        run: npm run test:coverage
+        run: pnpm run test:coverage
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://test:test@localhost:5432/phoenix_perp_test
@@ -64,3 +69,33 @@ jobs:
           BUILDER_AUTHORITY_PUBKEY: 11111111111111111111111111111111
           BUILDER_ACCESS_CODE: test_code
           HELIUS_RPC_URL: https://mainnet.helius-rpc.com/?api-key=test
+
+  deploy:
+    name: Deploy to Coolify
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: bot
+            webhook_secret: COOLIFY_WEBHOOK_BOT
+          - name: ws-worker
+            webhook_secret: COOLIFY_WEBHOOK_WS_WORKER
+          - name: alert-worker
+            webhook_secret: COOLIFY_WEBHOOK_ALERT_WORKER
+    steps:
+      - name: Trigger Coolify deploy (${{ matrix.service.name }})
+        env:
+          WEBHOOK_URL: ${{ secrets[matrix.service.webhook_secret] }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::error::Missing secret ${{ matrix.service.webhook_secret }}"
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --request GET \
+            --header "Authorization: Bearer $COOLIFY_TOKEN" \
+            "$WEBHOOK_URL"

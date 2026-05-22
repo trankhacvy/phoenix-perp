@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "dev:worker:ws": "tsx watch src/workers/ws.ts",
@@ -27,11 +28,13 @@
     "@fastify/cors": "^10.0.0",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/inter": "^5.2.8",
+    "@grammyjs/parse-mode": "^2.3.0",
     "@privy-io/server-auth": "^1.20.0",
     "@resvg/resvg-js": "^2.6.2",
     "@solana/kit": "^6.9.0",
     "@solana/signers": "^6.9.0",
     "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
     "bullmq": "^5.34.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.38.0",
@@ -57,5 +60,12 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "esbuild",
+      "sharp"
+    ]
   }
 }

@@ -4,31 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+This project uses **pnpm** as its package manager. Install with `brew install pnpm` if missing.
+
 ```bash
+# Install dependencies
+pnpm install
+
 # Development (run each in a separate terminal)
-npm run dev                  # bot + webhook server (long-polling in dev)
-npm run dev:worker:ws        # WebSocket worker (Phoenix traderState subscriptions)
-npm run dev:worker:alert     # BullMQ alert dispatcher
+pnpm dev                     # bot + webhook server (long-polling in dev)
+pnpm dev:worker:ws           # WebSocket worker (Phoenix traderState subscriptions)
+pnpm dev:worker:alert        # BullMQ alert dispatcher
 
 # Build & type-check
-npm run build                # tsc --noEmit then emit to dist/
+pnpm build                   # tsc --noEmit then emit to dist/
 
 # Lint & format
-npm run check                # biome check (lint + format)
-npm run format               # biome format --write
+pnpm check                   # biome check (lint + format)
+pnpm format                  # biome format --write
 
 # Database
-npm run db:generate          # generate Drizzle migration from schema changes
-npm run db:migrate           # apply migrations
-npm run db:studio            # Drizzle Studio UI
+pnpm db:generate             # generate Drizzle migration from schema changes
+pnpm db:migrate              # apply migrations
+pnpm db:studio               # Drizzle Studio UI
 
 # Tests
-npm test                     # vitest run (single pass)
-npm run test:watch           # vitest in watch mode
-npm run test:coverage        # vitest with v8 coverage
+pnpm test                    # vitest run (single pass)
+pnpm test:watch              # vitest in watch mode
+pnpm test:coverage           # vitest with v8 coverage
 ```
 
-To run a single test file: `npx vitest run tests/unit/services/referral.test.ts`
+To run a single test file: `pnpm exec vitest run tests/unit/services/referral.test.ts`
 
 ## Architecture
 
