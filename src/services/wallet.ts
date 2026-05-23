@@ -1,10 +1,49 @@
+import { type AuthorizationContext } from "@privy-io/node";
+import { createSolanaKitSigner, type SolanaKitSigner } from "@privy-io/node/solana-kit";
+import { type Address } from "@solana/kit";
 import { type KeyPairSigner, createKeyPairSignerFromBytes } from "@solana/signers";
-import type { Transaction, VersionedTransaction } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
+import * as crypto from "node:crypto";
+import { eq } from "drizzle-orm";
 import { config } from "../config/index.js";
+import { db } from "../db/index.js";
+import { users } from "../db/schema/index.js";
 import { privy } from "../lib/privy.js";
 
+const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+const _usdcConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
+
+/**
+ * Returns the wallet's idle standard USDC balance (in dollars, decimal).
+ * This is the USDC sitting in the user's Privy wallet token account —
+ * NOT the Phoenix trader PDA collateral.
+ */
+export async function getWalletUsdcBalance(walletAddress: string): Promise<number> {
+  const owner = new PublicKey(walletAddress);
+  const res = await _usdcConnection.getParsedTokenAccountsByOwner(owner, {
+    mint: USDC_MINT,
+  });
+  let total = 0;
+  for (const { account } of res.value) {
+    const amount = account.data.parsed?.info?.tokenAmount?.uiAmount;
+    if (typeof amount === "number") total += amount;
+  }
+  return total;
+}
+
 let _testSigner: KeyPairSigner | null = null;
+
+/** Derives SPKI/DER/base64 public key from the Privy authorization private key. */
+function getAppPublicKey(): string {
+  const raw = config.PRIVY_AUTHORIZATION_PRIVATE_KEY;
+  if (!raw) throw new Error("PRIVY_AUTHORIZATION_PRIVATE_KEY not set");
+  const stripped = raw.replace("wallet-auth:", "").replace("wallet-api:", "");
+  const pkcs8 = Buffer.from(stripped, "base64");
+  const privKey = crypto.createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
+  const pubKey = crypto.createPublicKey(privKey);
+  return Buffer.from(pubKey.export({ type: "spki", format: "der" })).toString("base64");
+}
 
 /** Call once at startup to wire TEST_KEYPAIR into getKitSigner. Idempotent. */
 export async function initTestSigner(): Promise<string> {
@@ -17,43 +56,66 @@ export async function initTestSigner(): Promise<string> {
 }
 
 export async function createEmbeddedWallet(telegramUserId: string) {
-  // Step 1: create Privy user linked to Telegram identity
-  const user = await privy.importUser({
-    linkedAccounts: [{ type: "telegram", telegramUserId }],
+  const user = await privy.users().create({
+    linked_accounts: [{ type: "telegram", telegram_user_id: telegramUserId }],
   });
 
-  // Step 2: create Solana wallet owned by user, with bot as authorized signer so
-  // the server can sign transactions on the user's behalf without user presence.
-  const wallet = await privy.walletApi.createWallet({
-    chainType: "solana",
-    owner: { userId: user.id },
-    ...(config.PRIVY_AUTHORIZATION_KEY_ID && {
-      additionalSigners: [{ signerId: config.PRIVY_AUTHORIZATION_KEY_ID }],
-    }),
+  const wallet = await privy.wallets().create({
+    chain_type: "solana",
+    // App-owned wallet: the authorization key is the owner, so signing and export
+    // both work server-side without requiring a user JWT.
+    owner: { public_key: getAppPublicKey() } as any,
   });
 
-  return { privyUserId: user.id, walletAddress: wallet.address };
-}
-
-export function getWalletSigner(walletAddress: string) {
-  return async (
-    transaction: Transaction | VersionedTransaction,
-  ): Promise<Transaction | VersionedTransaction> => {
-    const { signedTransaction } = await privy.walletApi.solana.signTransaction({
-      address: walletAddress,
-      chainType: "solana",
-      transaction,
-    });
-    return signedTransaction;
+  return {
+    privyUserId: user.id,
+    privyWalletId: wallet.id,
+    walletAddress: wallet.address,
   };
 }
 
-// TODO: implement Privy → @solana/kit signer bridge; see scripts/test-onchain.ts for on-chain testing
-export function getKitSigner(_walletAddress: string): KeyPairSigner {
-  if (_testSigner) return _testSigner;
-  throw new Error(
-    "Privy → @solana/kit signer bridge not yet implemented. " +
-      "Call initTestSigner() first (test scripts) or implement the Privy adapter.",
-  );
+export function getKitSigner(walletAddress: string): KeyPairSigner {
+  if (!_testSigner) {
+    throw new Error("TEST_KEYPAIR not initialized — call initTestSigner() first.");
+  }
+  if (_testSigner.address !== walletAddress) {
+    throw new Error(
+      `Test signer mismatch: signer is ${_testSigner.address}, requested ${walletAddress}`,
+    );
+  }
+  return _testSigner;
 }
 
+/**
+ * Returns the Privy wallet UUID for a given wallet address.
+ * The ID is persisted at wallet-creation time, so a missing value indicates an
+ * inconsistent DB row (no on-the-fly backfill).
+ */
+export async function resolvePrivyWalletId(walletAddress: string): Promise<string> {
+  const user = await db.query.users.findFirst({
+    where: eq(users.walletAddress, walletAddress),
+    columns: { privyWalletId: true },
+  });
+  if (!user) throw new Error(`No user found for wallet address ${walletAddress}`);
+  if (!user.privyWalletId) {
+    throw new Error(
+      `Wallet not initialized for ${walletAddress} — missing privyWalletId. Account may be corrupted; contact support.`,
+    );
+  }
+  return user.privyWalletId;
+}
+
+export async function getPrivyKitSigner(walletAddress: string): Promise<SolanaKitSigner> {
+  const walletId = await resolvePrivyWalletId(walletAddress);
+
+  const authorizationContext: AuthorizationContext | undefined =
+    config.PRIVY_AUTHORIZATION_PRIVATE_KEY
+      ? { authorization_private_keys: [config.PRIVY_AUTHORIZATION_PRIVATE_KEY] }
+      : undefined;
+
+  return createSolanaKitSigner(privy, {
+    walletId,
+    address: walletAddress as Address,
+    authorizationContext,
+  });
+}

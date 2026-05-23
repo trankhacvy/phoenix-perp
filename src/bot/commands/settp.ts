@@ -4,7 +4,6 @@ import { InlineKeyboard } from "grammy";
 import { logger } from "../../lib/logger.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
-import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
@@ -86,7 +85,6 @@ export function registerSetTp(bot: Bot<BotContext>) {
         symbol,
         ctx.user.walletAddress,
         side === "long" ? "long_tp" : "short_tp",
-        getKitSigner(ctx.user.walletAddress),
       );
       await ctx.editMessageText(`✅ Take profit removed for ${symbol}.`);
     } catch (e) {
@@ -105,16 +103,13 @@ export function registerSetTp(bot: Bot<BotContext>) {
       "long" | "short",
     ];
     try {
-      await setTpSl(
-        {
-          symbol,
-          walletAddress: ctx.user.walletAddress,
-          positionSide: side,
-          tpPrice: Number(priceStr),
-          tpMode: mode,
-        },
-        getKitSigner(ctx.user.walletAddress),
-      );
+      await setTpSl({
+        symbol,
+        walletAddress: ctx.user.walletAddress,
+        positionSide: side,
+        tpPrice: Number(priceStr),
+        tpMode: mode,
+      });
       const msg = fmt`✅ ${FormattedString.b("Take profit set")}\n\n${symbol} — ${fmtPrice(Number(priceStr))}\nYou'll be notified when it triggers.`;
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {
@@ -165,19 +160,16 @@ export function registerSetTp(bot: Bot<BotContext>) {
     const prices = pricesStr.split(",").map(Number);
 
     try {
-      await setTpSl(
-        {
-          symbol,
-          walletAddress: ctx.user.walletAddress,
-          positionSide: side,
-          tpLevels: prices.map((p, i) => ({
-            price: p,
-            fraction: LADDER_FRACTIONS[i],
-            mode: "limit" as const,
-          })),
-        },
-        getKitSigner(ctx.user.walletAddress),
-      );
+      await setTpSl({
+        symbol,
+        walletAddress: ctx.user.walletAddress,
+        positionSide: side,
+        tpLevels: prices.map((p, i) => ({
+          price: p,
+          fraction: LADDER_FRACTIONS[i],
+          mode: "limit" as const,
+        })),
+      });
       const msg = fmt`✅ ${FormattedString.b("Ladder take profit set")}\n\n${symbol} — ${prices.length} levels active`;
       await ctx.editMessageText(msg.text, { entities: msg.entities });
     } catch (e) {

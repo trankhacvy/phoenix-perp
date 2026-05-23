@@ -1,31 +1,59 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { config } from "../../config/index.js";
+import { logger } from "../../lib/logger.js";
+import { privy } from "../../lib/privy.js";
+import { resolvePrivyWalletId } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { renderBotError } from "../lib/errors.js";
 
 export function registerExport(bot: Bot<BotContext>) {
-  bot.command("export", async (ctx) => {
+  // Only available in development — do not register in production.
+  if (config.NODE_ENV !== "development") return;
+
+  bot.command("exportkey", async (ctx) => {
     if (!ctx.user) {
       await ctx.reply("Use /start first.");
       return;
     }
 
     const kb = new InlineKeyboard()
-      .text("⚠️ I understand — show key", "export:confirm")
+      .text("⚠️ Yes, export my key", "exportkey:confirm")
       .row()
       .text("Cancel", "cancel");
 
-    const msg = fmt`🔐 ${FormattedString.b("Export Private Key")}\n\n⚠️ ${FormattedString.b("DANGER:")} Anyone with your private key can steal all funds.\nNever share it. Store it offline.\n\nThis bot uses a server-custodial wallet via Privy.\nKey export is available through the Privy dashboard:\n${FormattedString.b("https://dashboard.privy.io")}`;
-
+    const msg = fmt`🔐 ${FormattedString.b("Export Private Key")}\n\n${FormattedString.b("⚠️ Development only.")}\n\nYour private key gives full control of your wallet. Back it up offline and never share it.\n\nContinue?`;
     await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
   });
 
-  bot.callbackQuery("export:confirm", async (ctx) => {
-    await ctx.answerCallbackQuery();
+  bot.callbackQuery("exportkey:confirm", async (ctx) => {
+    await ctx.answerCallbackQuery("Fetching key…");
     if (!ctx.user) return;
 
-    const msg = fmt`🔐 ${FormattedString.b("Export Private Key")}\n\nPrivate key export requires direct Privy dashboard access.\n\n1. Go to ${FormattedString.b("https://dashboard.privy.io")}\n2. Sign in with your operator credentials\n3. Find your wallet: ${FormattedString.code(ctx.user.walletAddress)}\n4. Use the export function in the dashboard\n\n${FormattedString.i("Server-side key export is not available for security reasons.")}`;
+    try {
+      const walletId = await resolvePrivyWalletId(ctx.user.walletAddress);
 
-    await ctx.editMessageText(msg.text, { entities: msg.entities });
+      const { private_key } = await privy.wallets().exportPrivateKey(walletId, {
+        authorization_context: config.PRIVY_AUTHORIZATION_PRIVATE_KEY
+          ? {
+              authorization_private_keys: [config.PRIVY_AUTHORIZATION_PRIVATE_KEY],
+            }
+          : undefined,
+      });
+
+      await ctx.editMessageText(
+        "✅ Key retrieved — check your next message. Delete it after saving.",
+      );
+
+      const keyMsg = fmt`🔑 ${FormattedString.b("Private Key (Solana / base58)")}\n\n${FormattedString.code(private_key)}\n\n${FormattedString.b("⚠️ Delete this message after backing up.")}`;
+      await ctx.reply(keyMsg.text, { entities: keyMsg.entities });
+    } catch (err) {
+      logger.error({ err }, "exportkey failed");
+      await renderBotError(ctx, err, {
+        action: "Export private key",
+        edit: true,
+      });
+    }
   });
 }

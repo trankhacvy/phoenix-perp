@@ -5,7 +5,6 @@ import { logger } from "../../lib/logger.js";
 import { generatePnlCard } from "../../services/image.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition } from "../../services/phoenix/trade.js";
-import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { renderBotError } from "../lib/errors.js";
@@ -279,12 +278,7 @@ export function registerPositions(bot: Bot<BotContext>) {
     const pos = state.positions.find((p) => p.symbol === symbol);
 
     try {
-      const sig = await closePosition(
-        symbol,
-        ctx.user.walletAddress,
-        getKitSigner(ctx.user.walletAddress),
-        fraction,
-      );
+      const sig = await closePosition(symbol, ctx.user.walletAddress, fraction);
 
       const closedPct = fraction * 100;
       const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(`${closedPct}%`)} closed\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
@@ -346,7 +340,7 @@ export function registerPositions(bot: Bot<BotContext>) {
     const [symbol, amtStr] = ctx.match.slice(1) as [string, string];
     const amount = Number(amtStr);
     try {
-      await addMargin(symbol, ctx.user.walletAddress, amount, getKitSigner(ctx.user.walletAddress));
+      await addMargin(symbol, ctx.user.walletAddress, amount);
       const doneMsg = fmt`✅ Added ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}.`;
       await ctx.editMessageText(doneMsg.text, { entities: doneMsg.entities });
     } catch (e) {

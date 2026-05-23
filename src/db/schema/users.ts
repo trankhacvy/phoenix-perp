@@ -6,6 +6,7 @@ export const users = pgTable("users", {
   username: text("username"),
   firstName: text("first_name"),
   privyUserId: text("privy_user_id").notNull(),
+  privyWalletId: text("privy_wallet_id"),
   walletAddress: text("wallet_address").notNull(),
   phoenixActivated: boolean("phoenix_activated").default(false).notNull(),
   referralCode: text("referral_code").unique(), // bot-native referral code for this user

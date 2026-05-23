@@ -98,7 +98,7 @@ export function registerStart(bot: Bot<BotContext>) {
         return;
       }
 
-      const { privyUserId, walletAddress } = await createEmbeddedWallet(telegramId);
+      const { privyUserId, privyWalletId, walletAddress } = await createEmbeddedWallet(telegramId);
       const referralCode = generateReferralCode();
 
       await db.insert(users).values({
@@ -107,6 +107,7 @@ export function registerStart(bot: Bot<BotContext>) {
         username: ctx.from.username,
         firstName: ctx.from.first_name,
         privyUserId,
+        privyWalletId,
         walletAddress,
         phoenixActivated: false,
         referralCode,

@@ -57,7 +57,11 @@ export function registerActivate(bot: Bot<BotContext>) {
       const activated = await tryActivate(ctx.user.walletAddress, code);
 
       if (!activated) {
-        await ctx.api.editMessageText(chatId, msgId, "❌ Invalid code. Check the code and try again.");
+        await ctx.api.editMessageText(
+          chatId,
+          msgId,
+          "❌ Invalid code. Check the code and try again.",
+        );
         return;
       }
 

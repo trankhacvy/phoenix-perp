@@ -11,7 +11,6 @@ import { getMarketSnapshot, isIsolatedOnly } from "../../services/phoenix/market
 import { getTraderState } from "../../services/phoenix/position.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
-import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
@@ -146,15 +145,12 @@ export function registerLong(bot: Bot<BotContext>) {
           },
         },
         () =>
-          placeMarketOrder(
-            {
-              symbol,
-              side: "long",
-              baseUnits,
-              walletAddress,
-            },
-            getKitSigner(walletAddress),
-          ),
+          placeMarketOrder({
+            symbol,
+            side: "long",
+            baseUnits,
+            walletAddress,
+          }),
       );
       ctx.actionLog = { skip: true };
       await subscribeUser(ctx.user.walletAddress, ctx.user.telegramId);

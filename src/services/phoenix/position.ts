@@ -1,13 +1,21 @@
-import type { Position, TraderStateResponse, TraderView } from "@ellipsis-labs/rise";
+import type {
+  Position,
+  TraderStateResponse,
+  TraderView,
+} from "@ellipsis-labs/rise";
 import { withRetry } from "../../lib/retry.js";
 import type { TraderStateEvent } from "../../types/index.js";
 import { getPhoenixClient } from "./client.js";
 
-export async function getTraderState(walletAddress: string): Promise<TraderStateEvent> {
+export async function getTraderState(
+  walletAddress: string,
+): Promise<TraderStateEvent> {
   return withRetry(() => _getTraderState(walletAddress));
 }
 
-async function _getTraderState(walletAddress: string): Promise<TraderStateEvent> {
+async function _getTraderState(
+  walletAddress: string,
+): Promise<TraderStateEvent> {
   const res = (await getPhoenixClient()
     .api.traders()
     .getTraderState(walletAddress)) as TraderStateResponse;
@@ -15,7 +23,8 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
   const traders: TraderView[] = res.traders ?? [];
 
   // subaccount_index=0 is the cross account — primary collateral pool
-  const crossAccount = traders.find((t) => t.traderSubaccountIndex === 0) ?? traders[0];
+  const crossAccount =
+    traders.find((t) => t.traderSubaccountIndex === 0) ?? traders[0];
 
   if (!crossAccount) {
     return {
@@ -42,7 +51,8 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
       const liqPriceRaw = Number(p.liquidationPrice.ui);
       const liqPrice = liqPriceRaw > 0 ? String(liqPriceRaw) : "N/A";
       const marginApprox = Number(p.initialMargin.ui);
-      const leverageApprox = marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
+      const leverageApprox =
+        marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
       const tpRaw = p.takeProfitPrice?.ui;
       const slRaw = p.stopLossPrice?.ui;
       return {
@@ -53,7 +63,10 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
         markPrice: markPriceComputed,
         unrealizedPnl: p.unrealizedPnl.ui,
         liquidationPrice: liqPrice,
-        marginMode: trader.traderSubaccountIndex === 0 ? ("cross" as const) : ("isolated" as const),
+        marginMode:
+          trader.traderSubaccountIndex === 0
+            ? ("cross" as const)
+            : ("isolated" as const),
         subaccountIndex: trader.traderSubaccountIndex,
         leverage: leverageApprox,
         takeProfit: tpRaw && Number(tpRaw) > 0 ? String(tpRaw) : undefined,
@@ -115,7 +128,9 @@ async function _fetchPage(
 ): Promise<TradeHistoryResponse> {
   // biome-ignore lint/suspicious/noExplicitAny: cursor param not in SDK type definitions
   const opts: any = cursor ? { limit, cursor } : { limit };
-  const res = await getPhoenixClient().api.trades().getTraderTradesHistory(walletAddress, opts);
+  const res = await getPhoenixClient()
+    .api.trades()
+    .getTraderTradesHistory(walletAddress, opts);
   const trades: TradeHistoryEntry[] = res.data.map((r) => ({
     symbol: r.marketSymbol,
     side: Number(r.baseLotsDelta) >= 0 ? "long" : "short",
@@ -128,7 +143,11 @@ async function _fetchPage(
     signature: r.signature ?? "",
     instructionType: r.instructionType,
   }));
-  return { trades, hasMore: res.hasMore, nextCursor: res.nextCursor ?? undefined };
+  return {
+    trades,
+    hasMore: res.hasMore,
+    nextCursor: res.nextCursor ?? undefined,
+  };
 }
 
 export async function getTradeHistory(
@@ -178,7 +197,9 @@ export interface WalletAnalytics {
   perMarket: MarketPnl[];
 }
 
-export function computeWalletAnalytics(trades: TradeHistoryEntry[]): WalletAnalytics {
+export function computeWalletAnalytics(
+  trades: TradeHistoryEntry[],
+): WalletAnalytics {
   let totalVolume = 0;
   let realizedPnl = 0;
   let closedTrades = 0;
@@ -201,7 +222,8 @@ export function computeWalletAnalytics(trades: TradeHistoryEntry[]): WalletAnaly
     totalVolume += volume;
     if (t.side === "long") longCount++;
     if (isMaker) makerCount++;
-    if (lastFillAt === null || t.timestamp > lastFillAt) lastFillAt = t.timestamp;
+    if (lastFillAt === null || t.timestamp > lastFillAt)
+      lastFillAt = t.timestamp;
 
     if (isClose) {
       realizedPnl += pnl;
@@ -209,14 +231,22 @@ export function computeWalletAnalytics(trades: TradeHistoryEntry[]): WalletAnaly
       if (pnl > 0) wins++;
       // close direction is inverted: short fill = closing a long position
       const action = t.side === "short" ? "LONG" : "SHORT";
-      if (bestTrade === null || pnl > bestTrade.pnl) bestTrade = { pnl, action, symbol: t.symbol };
+      if (bestTrade === null || pnl > bestTrade.pnl)
+        bestTrade = { pnl, action, symbol: t.symbol };
       if (worstTrade === null || pnl < worstTrade.pnl)
         worstTrade = { pnl, action, symbol: t.symbol };
     }
 
     let mkt = marketMap.get(t.symbol);
     if (!mkt) {
-      mkt = { symbol: t.symbol, fills: 0, realizedPnl: 0, wins: 0, closes: 0, volume: 0 };
+      mkt = {
+        symbol: t.symbol,
+        fills: 0,
+        realizedPnl: 0,
+        wins: 0,
+        closes: 0,
+        volume: 0,
+      };
       marketMap.set(t.symbol, mkt);
     }
     mkt.fills++;

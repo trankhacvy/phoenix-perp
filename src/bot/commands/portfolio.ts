@@ -4,11 +4,13 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
 import { getTraderState } from "../../services/phoenix/position.js";
+import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { pnlEmoji, shortAddr, signedUsd, usd } from "../lib/fmt.js";
 import { buildPositionRows } from "./positions.js";
 
 const solConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
+const IDLE_USDC_THRESHOLD = 1;
 
 const riskEmoji: Record<string, string> = {
   safe: "🟢",
@@ -47,9 +49,10 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   if (!targetWallet) return;
   const isOwn = !walletAddress || walletAddress === ctx.user?.walletAddress;
 
-  const [state, solLamports] = await Promise.all([
+  const [state, solLamports, walletUsdc] = await Promise.all([
     getTraderState(targetWallet),
     solConnection.getBalance(new PublicKey(targetWallet)).catch(() => 0),
+    isOwn ? getWalletUsdcBalance(targetWallet).catch(() => 0) : Promise.resolve(0),
   ]);
 
   const sol = solLamports / 1e9;
@@ -60,14 +63,35 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   const totalValue = effective + upnl + funding;
   const tier = String(state.riskTier ?? "safe");
   const tierStr = `${riskEmoji[tier] ?? "⚪"} ${riskLabel[tier] ?? tier}`;
+  const hasIdleUsdc = isOwn && walletUsdc >= IDLE_USDC_THRESHOLD;
 
   const sections: FormattedString[] = [];
 
-  // ── Account ──────────────────────────────────────────────────────────────────
+  // ── Balances (two pockets) ───────────────────────────────────────────────────
+  if (isOwn) {
+    sections.push(
+      FormattedString.join(
+        [
+          fmt`💼 ${FormattedString.b("Balances")}`,
+          fmt`💰 Wallet            ${FormattedString.b(usd(walletUsdc))} USDC`,
+          fmt`📊 Trading account   ${FormattedString.b(usd(deposited))}`,
+        ],
+        "\n",
+      ),
+    );
+
+    if (hasIdleUsdc) {
+      sections.push(
+        fmt`⚠️ ${FormattedString.b(`${usd(walletUsdc)} sitting idle in your wallet.`)} Tap ${FormattedString.b("Add Collateral")} below to start trading with it.`,
+      );
+    }
+  }
+
+  // ── Trading account ──────────────────────────────────────────────────────────
   sections.push(
     FormattedString.join(
       [
-        fmt`💼 ${FormattedString.b("Account")}`,
+        fmt`📊 ${FormattedString.b("Trading account")}`,
         fmt`Collateral   ${FormattedString.b(usd(deposited))}`,
         fmt`Available    ${FormattedString.b(usd(effective))}`,
         fmt`Total value  ${FormattedString.b(usd(totalValue))}`,
@@ -121,15 +145,19 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   const msg = FormattedString.join(sections, "\n\n");
 
   const kb = isOwn
-    ? new InlineKeyboard()
-        .text("📥 Deposit", "nav:deposit")
-        .text("📤 Withdraw", "nav:withdraw")
-        .row()
-        .text("🟢 Long", "nav:long")
-        .text("🔴 Short", "nav:short")
-        .row()
-        .text("📊 Positions", "nav:positions")
-        .text("📋 History", "nav:history")
+    ? (() => {
+        const k = new InlineKeyboard().text("📥 Deposit", "nav:deposit");
+        if (hasIdleUsdc) k.text("💰 Add Collateral", "deposit:fund");
+        else k.text("📤 Withdraw", "nav:withdraw");
+        k.row()
+          .text("🟢 Long", "nav:long")
+          .text("🔴 Short", "nav:short")
+          .row()
+          .text("📊 Positions", "nav:positions")
+          .text("📋 History", "nav:history");
+        if (hasIdleUsdc) k.row().text("📤 Withdraw", "nav:withdraw");
+        return k;
+      })()
     : new InlineKeyboard()
         .text("📋 Trade History", `walletinfo:hist:${targetWallet}:0`)
         .row()

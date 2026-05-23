@@ -5,6 +5,7 @@ import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import type { BotContext } from "../types/index.js";
 import { registerCommands } from "./commands/index.js";
+import { sendDepositConfirm } from "./commands/deposit.js";
 import { sendSizePicker, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
 import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
@@ -52,6 +53,16 @@ bot.on("message:text", async (ctx) => {
       return;
     }
     await sendWithdrawConfirm(ctx, amount);
+    return;
+  }
+
+  if (pending === "deposit_amount") {
+    const amount = parseAmount(text);
+    if (Number.isNaN(amount) || amount <= 0) {
+      await ctx.reply("Invalid amount. Try /deposit again.");
+      return;
+    }
+    await sendDepositConfirm(ctx, amount);
     return;
   }
 

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "privy_wallet_id" text;

@@ -12,22 +12,28 @@ import {
   symbol as riseSymbol,
 } from "@ellipsis-labs/rise";
 import {
+  type Address,
   appendTransactionMessageInstructions,
   createSolanaRpc,
-  createSolanaRpcSubscriptions,
   createTransactionMessage,
-  getSignatureFromTransaction,
+  getTransactionEncoder,
+  lamports,
   pipe,
-  sendAndConfirmTransactionFactory,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
 import {
-  type KeyPairSigner,
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+} from "@solana-program/compute-budget";
+import { getTransferSolInstruction } from "@solana-program/system";
+import {
+  type TransactionPartialSigner,
   addSignersToInstruction,
   signTransactionMessageWithSigners,
 } from "@solana/signers";
 import { config } from "../../config/index.js";
+import { getKitSigner, getPrivyKitSigner } from "../wallet.js";
 import { getTradingClient } from "./client.js";
 import { fractionToCloseLots } from "./lots.js";
 import { getMarket } from "./market.js";
@@ -73,26 +79,37 @@ export interface TpSlParams {
 
 type AnyInstruction = Parameters<typeof addSignersToInstruction>[1];
 
+const JITO_TIP_LAMPORTS = 200_000n;
+const COMPUTE_UNIT_PRICE = 200_000;
+const COMPUTE_UNIT_LIMIT = 250_000;
+const JITO_TIP_ACCOUNTS = [
+  "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
+  "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ",
+  "9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta",
+  "5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn",
+  "2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD",
+  "2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ",
+  "wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF",
+  "3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT",
+  "4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey",
+  "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
+] as const;
+
 let _rpc: ReturnType<typeof createSolanaRpc> | null = null;
-let _sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory> | null = null;
 
 function getRpc() {
-  if (!_rpc) {
-    const rpcUrl = config.HELIUS_RPC_URL;
-    const wsUrl = rpcUrl.replace("https://", "wss://").replace("http://", "ws://");
-    _rpc = createSolanaRpc(rpcUrl);
-    const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
-    _sendAndConfirm = sendAndConfirmTransactionFactory({ rpc: _rpc, rpcSubscriptions });
-  }
-  if (!_sendAndConfirm) throw new Error("sendAndConfirm failed to initialize");
-  return { rpc: _rpc, sendAndConfirm: _sendAndConfirm };
+  if (!_rpc) _rpc = createSolanaRpc(config.HELIUS_RPC_URL);
+  return _rpc;
 }
 
 type LatestBlockhashValue = Awaited<
   ReturnType<ReturnType<ReturnType<typeof createSolanaRpc>["getLatestBlockhash"]>["send"]>
 >["value"];
 
-let _cachedBlockhash: { value: LatestBlockhashValue; fetchedAt: number } | null = null;
+let _cachedBlockhash: {
+  value: LatestBlockhashValue;
+  fetchedAt: number;
+} | null = null;
 const BLOCKHASH_TTL_MS = 20_000;
 
 async function getBlockhash(): Promise<LatestBlockhashValue> {
@@ -100,42 +117,127 @@ async function getBlockhash(): Promise<LatestBlockhashValue> {
   if (_cachedBlockhash && now - _cachedBlockhash.fetchedAt < BLOCKHASH_TTL_MS) {
     return _cachedBlockhash.value;
   }
-  const { rpc } = getRpc();
-  const result = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+  const result = await getRpc().getLatestBlockhash({ commitment: "confirmed" }).send();
   _cachedBlockhash = { value: result.value, fetchedAt: now };
   return result.value;
 }
 
-async function sendInstruction(ix: AnyInstruction, signer: KeyPairSigner): Promise<string> {
-  const { sendAndConfirm } = getRpc();
+let _heliusSenderUrl: string | null = null;
+function getHeliusSenderUrl(): string {
+  if (_heliusSenderUrl) return _heliusSenderUrl;
+  try {
+    const url = new URL(config.HELIUS_RPC_URL);
+    const apiKey = url.searchParams.get("api-key");
+    _heliusSenderUrl = `https://sender.helius-rpc.com/fast${apiKey ? `?api-key=${apiKey}` : ""}`;
+  } catch {
+    _heliusSenderUrl = "https://sender.helius-rpc.com/fast";
+  }
+  return _heliusSenderUrl;
+}
+
+async function sendViaHeliusSender(base64Tx: string): Promise<string> {
+  const res = await fetch(getHeliusSenderUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "sendTransaction",
+      params: [base64Tx, { encoding: "base64", skipPreflight: true, maxRetries: 0 }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Helius Sender HTTP error: ${res.status}`);
+  const json = (await res.json()) as {
+    result?: string;
+    error?: { message: string };
+  };
+  if (json.error) throw new Error(`Helius Sender: ${json.error.message}`);
+  if (!json.result) throw new Error("Helius Sender: no signature in response");
+  return json.result;
+}
+
+async function pollConfirmation(signature: string): Promise<void> {
+  const rpc = getRpc();
   const latestBlockhash = await getBlockhash();
+  const deadline = Number(latestBlockhash.lastValidBlockHeight);
+  const sig = signature as Parameters<typeof rpc.getSignatureStatuses>[0][number];
+
+  for (let attempts = 0; attempts < 60; attempts++) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    const { value } = await rpc.getSignatureStatuses([sig]).send();
+    const status = value[0];
+    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
+      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+      return;
+    }
+    const slotRes = await rpc.getSlot({ commitment: "confirmed" }).send();
+    if (Number(slotRes) > deadline) {
+      throw new Error(`Transaction expired before confirmation (signature: ${signature})`);
+    }
+  }
+  throw new Error(`Timed out waiting for confirmation (signature: ${signature})`);
+}
+
+async function sendInstruction(
+  ix: AnyInstruction,
+  signer: TransactionPartialSigner,
+): Promise<string> {
+  const latestBlockhash = await getBlockhash();
+  const tipAccount = JITO_TIP_ACCOUNTS[
+    Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)
+  ] as Address;
+
+  // Attach signer to the Rise SDK instruction accounts before appending.
   const signedIx = addSignersToInstruction([signer], ix);
 
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     (tx) => setTransactionMessageFeePayerSigner(signer, tx),
     (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
-    (tx) => appendTransactionMessageInstructions([signedIx], tx),
+    (tx) =>
+      appendTransactionMessageInstructions(
+        [
+          getSetComputeUnitPriceInstruction({
+            microLamports: COMPUTE_UNIT_PRICE,
+          }),
+          getSetComputeUnitLimitInstruction({ units: COMPUTE_UNIT_LIMIT }),
+          signedIx,
+          getTransferSolInstruction({
+            source: signer,
+            destination: tipAccount,
+            amount: lamports(JITO_TIP_LAMPORTS),
+          }),
+        ],
+        tx,
+      ),
   );
 
   const signedTx = await signTransactionMessageWithSigners(message);
-  await sendAndConfirm(
-    {
-      ...signedTx,
-      lifetimeConstraint: { lastValidBlockHeight: latestBlockhash.lastValidBlockHeight },
-    },
-    { commitment: "confirmed" },
-  );
-  return getSignatureFromTransaction(signedTx);
+  const txBytes = getTransactionEncoder().encode(signedTx);
+  const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
+  await pollConfirmation(sig);
+  return sig;
 }
 
-async function sendInstructions(ixs: AnyInstruction[], signer: KeyPairSigner): Promise<string> {
+async function getSigner(walletAddress: string): Promise<TransactionPartialSigner> {
+  if (config.TEST_KEYPAIR) return getKitSigner(walletAddress);
+  return getPrivyKitSigner(walletAddress);
+}
+
+async function dispatchInstruction(ix: AnyInstruction, walletAddress: string): Promise<string> {
+  const signer = await getSigner(walletAddress);
+  return sendInstruction(ix, signer);
+}
+
+async function dispatchInstructions(ixs: AnyInstruction[], walletAddress: string): Promise<string> {
   let sig = "";
   for (const ix of ixs) {
-    sig = await sendInstruction(ix, signer);
+    sig = await dispatchInstruction(ix, walletAddress);
   }
   return sig;
 }
+
+// ── Shared helpers ───────────────────────────────────────────────────────────
 
 function toMarketSymbol(s: string) {
   return riseSymbol(s.toUpperCase().replace(/-PERP$/i, ""));
@@ -157,10 +259,7 @@ function priceToTicks(
 // Public API
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function placeMarketOrder(
-  params: MarketOrderParams,
-  signer: KeyPairSigner,
-): Promise<string> {
+export async function placeMarketOrder(params: MarketOrderParams): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
 
@@ -177,13 +276,10 @@ export async function placeMarketOrder(
     orderPacket,
   });
 
-  return sendInstruction(ix, signer);
+  return dispatchInstruction(ix, params.walletAddress);
 }
 
-export async function placeLimitOrder(
-  params: LimitOrderParams,
-  signer: KeyPairSigner,
-): Promise<string> {
+export async function placeLimitOrder(params: LimitOrderParams): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
 
@@ -202,15 +298,18 @@ export async function placeLimitOrder(
     traderPdaIndex: 0,
   });
 
-  return sendInstruction(ix, signer);
+  return dispatchInstruction(ix, params.walletAddress);
 }
 
-export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promise<void> {
+export async function setTpSl(params: TpSlParams): Promise<void> {
   const client = getTradingClient();
   await client.exchange.ready();
 
   const marketSymbol = toMarketSymbol(params.symbol);
-  const market = (await getMarket(params.symbol)) as { tickSize: number; baseLotsDecimals: number };
+  const market = (await getMarket(params.symbol)) as {
+    tickSize: number;
+    baseLotsDecimals: number;
+  };
   const closeSide = params.positionSide === "long" ? Side.Ask : Side.Bid;
 
   const tpLevels: TpSlLevel[] = params.tpLevels?.length
@@ -227,6 +326,9 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
 
   const ixs: AnyInstruction[] = [];
 
+  // TODO(ladder-fractions): `level.fraction` is ignored — every rung becomes a
+  // full-position close. `buildPlaceStopLoss` doesn't accept size; switch to
+  // `buildPlacePositionConditionalOrder` (sizeBaseLots/sizePercent) to fix.
   for (const level of tpLevels) {
     const triggerTicks = priceToTicks(level.price, market);
     ixs.push(
@@ -260,14 +362,13 @@ export async function setTpSl(params: TpSlParams, signer: KeyPairSigner): Promis
   }
 
   for (const ix of ixs) {
-    await sendInstruction(ix, signer);
+    await dispatchInstruction(ix, params.walletAddress);
   }
 }
 
 export async function closePosition(
   symbol: string,
   walletAddress: string,
-  signer: KeyPairSigner,
   fraction = 1,
 ): Promise<string> {
   const client = getTradingClient();
@@ -276,7 +377,11 @@ export async function closePosition(
   const marketSymbol = toMarketSymbol(symbol);
 
   const snapshot = (await getTraderStateSnapshot(walletAddress)) as unknown as {
-    snapshot?: { subaccounts?: { positions?: { symbol: string; basePositionLots: string }[] }[] };
+    snapshot?: {
+      subaccounts?: {
+        positions?: { symbol: string; basePositionLots: string }[];
+      }[];
+    };
   };
 
   const subaccounts = snapshot.snapshot?.subaccounts ?? [];
@@ -312,14 +417,13 @@ export async function closePosition(
     orderPacket,
   });
 
-  return sendInstruction(ix, signer);
+  return dispatchInstruction(ix, walletAddress);
 }
 
 export async function cancelStopLoss(
   symbol: string,
   walletAddress: string,
   direction: "long_sl" | "long_tp" | "short_sl" | "short_tp",
-  signer: KeyPairSigner,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -336,23 +440,21 @@ export async function cancelStopLoss(
     executionDirection,
   });
 
-  return sendInstruction(ix, signer);
+  return dispatchInstruction(ix, walletAddress);
 }
 
 export async function addMargin(
   _symbol: string,
   walletAddress: string,
   amountUsdc: number,
-  signer: KeyPairSigner,
 ): Promise<string> {
   const amountNative = BigInt(Math.round(amountUsdc * 1_000_000));
-  return depositCollateral(walletAddress, amountNative, signer);
+  return depositCollateral(walletAddress, amountNative);
 }
 
 export async function depositCollateral(
   walletAddress: string,
   amountUsdcNative: bigint,
-  signer: KeyPairSigner,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -363,13 +465,12 @@ export async function depositCollateral(
     traderPdaIndex: 0,
   });
 
-  return sendInstructions(result.instructions, signer);
+  return dispatchInstructions(result.instructions, walletAddress);
 }
 
 export async function withdrawCollateral(
   walletAddress: string,
   amountUsdcNative: bigint,
-  signer: KeyPairSigner,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -380,5 +481,5 @@ export async function withdrawCollateral(
     traderPdaIndex: 0,
   });
 
-  return sendInstructions(result.instructions, signer);
+  return dispatchInstructions(result.instructions, walletAddress);
 }

@@ -5,11 +5,10 @@ import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { withdrawCollateral } from "../../services/phoenix/trade.js";
-import { getKitSigner } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
 import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
-import { setPending } from "../lib/pending.js";
+import { clearPending, setPending } from "../lib/pending.js";
 
 const SECURITY_DELAY_SECONDS = 300;
 
@@ -63,11 +62,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
 
     try {
       const amountNative = BigInt(Math.round(amount * 1_000_000));
-      const sig = await withdrawCollateral(
-        ctx.user.walletAddress,
-        amountNative,
-        getKitSigner(ctx.user.walletAddress),
-      );
+      const sig = await withdrawCollateral(ctx.user.walletAddress, amountNative);
       const msg = fmt`✅ ${FormattedString.b("Withdrawal submitted")}\n\n${FormattedString.b(usd(amount))} sent to your wallet.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nLarge withdrawals may take a few minutes due to the on-chain queue.`;
       await ctx.editMessageText(msg.text, {
         entities: msg.entities,
@@ -93,8 +88,11 @@ export async function sendWithdrawAmountPrompt(ctx: BotContext): Promise<void> {
   const state = await getTraderState(ctx.user.walletAddress);
   const available = Number(state.effectiveCollateral);
 
+  const kb = new InlineKeyboard().text("✕ Cancel", "cancel");
   const msg = fmt`📤 ${FormattedString.b("Withdraw Funds")}\n\nAvailable: ${FormattedString.code(usd(available))}\n\nReply with the amount you want to withdraw:`;
-  await ctx.reply(msg.text, { entities: msg.entities });
+  await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+  // Defensive: clear any prior pending flow before claiming this one.
+  await clearPending(ctx.from.id);
   await setPending(ctx.from.id, "withdraw_amount");
 }
 
