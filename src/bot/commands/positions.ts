@@ -304,9 +304,8 @@ export function registerPositions(bot: Bot<BotContext>) {
             side: pos.side,
             entryPrice: pos.entryPrice,
             exitPrice: pos.markPrice,
-            roiPercent: roiPct,
-            pnlUsdc: String(pnl.toFixed(2)),
-            botHandle: `@${ctx.me.username ?? "PhoenixPerpBot"}`,
+            roiPercent: Number(roiPct),
+            pnlUsdc: pnl,
           });
           const captionMsg = fmt`${side === "long" ? "🟢" : "🔴"} ${FormattedString.b(`${symbol} ${side === "long" ? "Long" : "Short"}`)}\nP&L: ${FormattedString.b(usd(pnl))}  ROI: ${FormattedString.b(`${roiPct}%`)}`;
           await ctx.replyWithPhoto(new InputFile(card, "pnl.png"), {

@@ -8,9 +8,8 @@ describe("generatePnlCard", () => {
       side: "long",
       entryPrice: "100.00",
       exitPrice: "150.00",
-      roiPercent: "+50.0",
-      pnlUsdc: "+500.00",
-      botHandle: "@TestBot",
+      roiPercent: 50.0,
+      pnlUsdc: 500.0,
     });
     expect(buf).toBeInstanceOf(Buffer);
     expect(buf.length).toBeGreaterThan(0);
@@ -22,9 +21,8 @@ describe("generatePnlCard", () => {
       side: "short",
       entryPrice: "60000.00",
       exitPrice: "65000.00",
-      roiPercent: "-8.3",
-      pnlUsdc: "-500.00",
-      botHandle: "@TestBot",
+      roiPercent: -8.3,
+      pnlUsdc: -500.0,
     });
     expect(buf).toBeInstanceOf(Buffer);
     expect(buf.length).toBeGreaterThan(0);

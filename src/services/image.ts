@@ -17,7 +17,7 @@ function getFont(weight: FontWeight): ArrayBuffer {
     const name = weight === 700 ? "SpaceGrotesk-Bold.ttf" : "SpaceGrotesk-Regular.ttf";
     fontCache.set(weight, readFileSync(join(ASSETS, "fonts", name)).buffer as ArrayBuffer);
   }
-  return fontCache.get(weight)!;
+  return fontCache.get(weight) as ArrayBuffer;
 }
 
 // ── Background images ─────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ function getBg(win: boolean): string {
     const data = readFileSync(join(ASSETS, `${key}.jpg`));
     bgCache.set(key, `data:image/jpeg;base64,${data.toString("base64")}`);
   }
-  return bgCache.get(key)!;
+  return bgCache.get(key) as string;
 }
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -144,8 +144,20 @@ function directionBadge(side: "long" | "short", leverage?: number): Node {
   const color = isLong ? C.profit : C.loss;
   const bg = isLong ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
   const pillChildren: Node[] = [
-    { type: "div", props: { style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color }, children: isLong ? "▲" : "▼" } },
-    { type: "div", props: { style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color }, children: isLong ? "LONG" : "SHORT" } },
+    {
+      type: "div",
+      props: {
+        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
+        children: isLong ? "▲" : "▼",
+      },
+    },
+    {
+      type: "div",
+      props: {
+        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
+        children: isLong ? "LONG" : "SHORT",
+      },
+    },
   ];
   const rowChildren: Node[] = [
     {
