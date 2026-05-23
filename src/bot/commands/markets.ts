@@ -15,7 +15,7 @@ import type { BotContext } from "../../types/index.js";
 import { price as fmtPrice, fundingApr, fundingDir, fundingTrend, usd } from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 10;
 
 // ── List ──────────────────────────────────────────────────────────────────────
 

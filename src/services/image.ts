@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +5,6 @@ import satori from "satori";
 import sharp from "sharp";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _require = createRequire(import.meta.url);
 const ASSETS = join(__dirname, "../../assets");
 
 // ── Fonts ─────────────────────────────────────────────────────────────────────
@@ -16,10 +14,8 @@ const fontCache = new Map<FontWeight, ArrayBuffer>();
 
 function getFont(weight: FontWeight): ArrayBuffer {
   if (!fontCache.has(weight)) {
-    const path = _require.resolve(
-      `@fontsource/space-grotesk/files/space-grotesk-latin-${weight}-normal.woff2`,
-    );
-    fontCache.set(weight, readFileSync(path).buffer as ArrayBuffer);
+    const name = weight === 700 ? "SpaceGrotesk-Bold.ttf" : "SpaceGrotesk-Regular.ttf";
+    fontCache.set(weight, readFileSync(join(ASSETS, "fonts", name)).buffer as ArrayBuffer);
   }
   return fontCache.get(weight)!;
 }
@@ -43,9 +39,9 @@ const FF = "SpaceGrotesk";
 
 const C = {
   bg: "#05050f",
-  label: "#484858",
+  label: "#ffffff",
   text: "#efefef",
-  muted: "#7a7a8a",
+  muted: "#FFFFFF",
   profit: "#22c55e",
   loss: "#ef4444",
   divider: "rgba(255,255,255,0.07)",
@@ -59,7 +55,7 @@ const OVERLAY =
 
 const W = 1200;
 const H = 630;
-const BAR_H = 72;
+const BAR_H = 96;
 const PANEL_W = 615;
 const PAD_L = 60;
 const PAD_T = 32;
@@ -75,7 +71,7 @@ function lbl(text: string): Node {
     props: {
       style: {
         fontFamily: FF,
-        fontSize: 11,
+        fontSize: 16,
         fontWeight: 400,
         color: C.label,
         letterSpacing: 2.5,
@@ -117,7 +113,7 @@ function statItem(labelText: string, valueText: string, valueColor: string = C.t
           props: {
             style: {
               fontFamily: FF,
-              fontSize: 10,
+              fontSize: 16,
               fontWeight: 400,
               color: C.label,
               letterSpacing: 2,
@@ -129,7 +125,7 @@ function statItem(labelText: string, valueText: string, valueColor: string = C.t
         {
           type: "div",
           props: {
-            style: { fontFamily: FF, fontSize: 19, fontWeight: 700, color: valueColor },
+            style: { fontFamily: FF, fontSize: 24, fontWeight: 700, color: valueColor },
             children: valueText,
           },
         },
@@ -406,8 +402,8 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
   const accent = win ? C.profit : C.loss;
 
   const leftContent: Node[] = [
-    field("Trader", shortAddr(data.walletAddress), 28, C.muted),
-    field("Total PnL", fmtUsd(data.realizedPnl), 74, accent),
+    field("Trader", shortAddr(data.walletAddress), 32, C.muted),
+    field("Total PnL", fmtUsd(data.realizedPnl), 80, accent),
   ];
 
   if (data.winRate !== null) {
@@ -424,14 +420,14 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
             type: "div",
             props: {
               style: { display: "flex", flexDirection: "column", gap: 6 },
-              children: [lbl("Best Trade"), txt(fmtUsd(data.bestTrade.pnl), 22, C.profit)],
+              children: [lbl("Best Trade"), txt(fmtUsd(data.bestTrade.pnl), 32, C.profit)],
             },
           },
           {
             type: "div",
             props: {
               style: { display: "flex", flexDirection: "column", gap: 6 },
-              children: [lbl("Worst Trade"), txt(fmtUsd(data.worstTrade.pnl), 22, C.loss)],
+              children: [lbl("Worst Trade"), txt(fmtUsd(data.worstTrade.pnl), 32, C.loss)],
             },
           },
         ],

@@ -8,7 +8,14 @@ import {
 } from "../../services/phoenix/position.js";
 import { generateWalletCard } from "../../services/image.js";
 import type { BotContext } from "../../types/index.js";
-import { compactUsd, pnlEmoji, shortAddr, signedUsd, timeAgo, usd } from "../lib/fmt.js";
+import {
+  compactUsd,
+  pnlEmoji,
+  shortAddr,
+  signedUsd,
+  timeAgo,
+  usd,
+} from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryScreen } from "./history.js";
 
@@ -64,10 +71,17 @@ async function sendWalletScreen(
         ? Math.round((analytics.wins / analytics.closedTrades) * 100)
         : null;
     const winStr =
-      winPct !== null ? `${winPct}%  (${analytics.wins} / ${analytics.closedTrades} closes)` : "—";
-    const longPct = Math.round((analytics.longCount / analytics.totalFills) * 100);
-    const makerPct = Math.round((analytics.makerCount / analytics.totalFills) * 100);
-    const lastStr = analytics.lastFillAt !== null ? timeAgo(analytics.lastFillAt) : "—";
+      winPct !== null
+        ? `${winPct}%  (${analytics.wins} / ${analytics.closedTrades} closes)`
+        : "—";
+    const longPct = Math.round(
+      (analytics.longCount / analytics.totalFills) * 100,
+    );
+    const makerPct = Math.round(
+      (analytics.makerCount / analytics.totalFills) * 100,
+    );
+    const lastStr =
+      analytics.lastFillAt !== null ? timeAgo(analytics.lastFillAt) : "—";
 
     sections.push(
       FormattedString.join(
@@ -101,9 +115,12 @@ async function sendWalletScreen(
     if (analytics.perMarket.length > 0) {
       const top = analytics.perMarket.slice(0, 5);
       const rest = analytics.perMarket.length - top.length;
-      const mktLines: FormattedString[] = [fmt`📊 ${FormattedString.b("Per-market P&L")}`];
+      const mktLines: FormattedString[] = [
+        fmt`📊 ${FormattedString.b("Per-market P&L")}`,
+      ];
       for (const m of top) {
-        const mWinPct = m.closes > 0 ? Math.round((m.wins / m.closes) * 100) : 0;
+        const mWinPct =
+          m.closes > 0 ? Math.round((m.wins / m.closes) * 100) : 0;
         mktLines.push(
           fmt`${FormattedString.b(m.symbol.padEnd(6))}  ${FormattedString.b(signedUsd(m.realizedPnl))}  ·  ${m.fills} fills  ·  ${mWinPct}% win`,
         );
@@ -164,13 +181,16 @@ export function registerWallet(bot: Bot<BotContext>) {
     }
   });
 
-  bot.callbackQuery(/^walletinfo:hist:([1-9A-HJ-NP-Za-km-z]{32,44}):(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.user) return;
-    const address = ctx.match[1];
-    const page = Number(ctx.match[2]);
-    await sendHistoryScreen(ctx, page, true, address);
-  });
+  bot.callbackQuery(
+    /^walletinfo:hist:([1-9A-HJ-NP-Za-km-z]{32,44}):(\d+)$/,
+    async (ctx) => {
+      await ctx.answerCallbackQuery();
+      if (!ctx.user) return;
+      const address = ctx.match[1];
+      const page = Number(ctx.match[2]);
+      await sendHistoryScreen(ctx, page, true, address);
+    },
+  );
 
   bot.callbackQuery(/^wc:gen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
     await ctx.answerCallbackQuery("Generating card…");
@@ -195,14 +215,21 @@ export function registerWallet(bot: Bot<BotContext>) {
           ? { pnl: analytics.bestTrade.pnl, symbol: analytics.bestTrade.symbol }
           : null,
         worstTrade: analytics.worstTrade
-          ? { pnl: analytics.worstTrade.pnl, symbol: analytics.worstTrade.symbol }
+          ? {
+              pnl: analytics.worstTrade.pnl,
+              symbol: analytics.worstTrade.symbol,
+            }
           : null,
       });
 
-      await ctx.replyWithPhoto(new InputFile(card, "wallet.png"), {
-        caption: `📊 ${shortAddr(walletAddress)} · ${analytics.totalFills} fills · ${signedUsd(analytics.realizedPnl)} realized`,
-      });
-    } catch {
+      await ctx.replyWithPhoto(
+        new InputFile(card, `wallet-${walletAddress}.png`),
+        // {
+        //   caption: `📊 ${shortAddr(walletAddress)} · ${analytics.totalFills} fills · ${signedUsd(analytics.realizedPnl)} realized`,
+        // }
+      );
+    } catch (err) {
+      console.error("[wc:gen] card generation failed:", err);
       await ctx.reply("Failed to generate card. Try again.");
     }
   });
