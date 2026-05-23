@@ -19,9 +19,7 @@ export function registerShare(bot: Bot<BotContext>) {
 
     const history = await getTradeHistory(ctx.user.walletAddress, 20);
     // Find the most recent closing fill for this symbol (realizedPnl != 0)
-    const trade = history.trades.find(
-      (t) => t.symbol === symbol && Number(t.realizedPnl) !== 0,
-    );
+    const trade = history.trades.find((t) => t.symbol === symbol && Number(t.realizedPnl) !== 0);
 
     if (!trade) {
       await ctx.reply(`No closed ${symbol} trades found.`);

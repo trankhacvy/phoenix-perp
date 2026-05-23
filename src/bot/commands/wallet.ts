@@ -1,12 +1,12 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { type Bot, InputFile } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { generateWalletCard } from "../../services/image.js";
 import {
   computeWalletAnalytics,
   fetchAllTradeHistory,
   getTraderState,
 } from "../../services/phoenix/position.js";
-import { generateWalletCard } from "../../services/image.js";
 import type { BotContext } from "../../types/index.js";
 import { compactUsd, pnlEmoji, shortAddr, signedUsd, timeAgo, usd } from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
@@ -181,9 +181,7 @@ export function registerWallet(bot: Bot<BotContext>) {
       const analytics = computeWalletAnalytics(allTrades);
 
       const winRate =
-        analytics.closedTrades > 0
-          ? (analytics.wins / analytics.closedTrades) * 100
-          : null;
+        analytics.closedTrades > 0 ? (analytics.wins / analytics.closedTrades) * 100 : null;
 
       const card = await generateWalletCard({
         walletAddress,

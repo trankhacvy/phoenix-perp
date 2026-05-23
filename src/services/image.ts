@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,22 +5,18 @@ import satori from "satori";
 import sharp from "sharp";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _require = createRequire(import.meta.url);
 const ASSETS = join(__dirname, "../../assets");
+const FONT_PATH = join(ASSETS, "fonts/Inter-Bold.ttf");
 
 // ── Fonts ─────────────────────────────────────────────────────────────────────
 
-type FontWeight = 400 | 700;
-const fontCache = new Map<FontWeight, ArrayBuffer>();
+let _fontData: ArrayBuffer | null = null;
 
-function getFont(weight: FontWeight): ArrayBuffer {
-  if (!fontCache.has(weight)) {
-    const path = _require.resolve(
-      `@fontsource/space-grotesk/files/space-grotesk-latin-${weight}-normal.woff2`,
-    );
-    fontCache.set(weight, readFileSync(path).buffer as ArrayBuffer);
+function getFont(): ArrayBuffer {
+  if (!_fontData) {
+    _fontData = readFileSync(FONT_PATH).buffer as ArrayBuffer;
   }
-  return fontCache.get(weight)!;
+  return _fontData;
 }
 
 // ── Background images ─────────────────────────────────────────────────────────
@@ -34,7 +29,7 @@ function getBg(win: boolean): string {
     const data = readFileSync(join(ASSETS, `${key}.jpg`));
     bgCache.set(key, `data:image/jpeg;base64,${data.toString("base64")}`);
   }
-  return bgCache.get(key)!;
+  return bgCache.get(key) as string;
 }
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -148,8 +143,20 @@ function directionBadge(side: "long" | "short", leverage?: number): Node {
   const color = isLong ? C.profit : C.loss;
   const bg = isLong ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
   const pillChildren: Node[] = [
-    { type: "div", props: { style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color }, children: isLong ? "▲" : "▼" } },
-    { type: "div", props: { style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color }, children: isLong ? "LONG" : "SHORT" } },
+    {
+      type: "div",
+      props: {
+        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
+        children: isLong ? "▲" : "▼",
+      },
+    },
+    {
+      type: "div",
+      props: {
+        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
+        children: isLong ? "LONG" : "SHORT",
+      },
+    },
   ];
   const rowChildren: Node[] = [
     {
@@ -381,8 +388,8 @@ export async function generatePnlCard(data: PnlCardData): Promise<Buffer> {
     width: W,
     height: H,
     fonts: [
-      { name: FF, data: getFont(400), weight: 400, style: "normal" },
-      { name: FF, data: getFont(700), weight: 700, style: "normal" },
+      { name: FF, data: getFont(), weight: 400, style: "normal" },
+      { name: FF, data: getFont(), weight: 700, style: "normal" },
     ],
   });
 
@@ -456,8 +463,8 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
     width: W,
     height: H,
     fonts: [
-      { name: FF, data: getFont(400), weight: 400, style: "normal" },
-      { name: FF, data: getFont(700), weight: 700, style: "normal" },
+      { name: FF, data: getFont(), weight: 400, style: "normal" },
+      { name: FF, data: getFont(), weight: 700, style: "normal" },
     ],
   });
 
