@@ -193,14 +193,21 @@ export function registerWallet(bot: Bot<BotContext>) {
           ? { pnl: analytics.bestTrade.pnl, symbol: analytics.bestTrade.symbol }
           : null,
         worstTrade: analytics.worstTrade
-          ? { pnl: analytics.worstTrade.pnl, symbol: analytics.worstTrade.symbol }
+          ? {
+              pnl: analytics.worstTrade.pnl,
+              symbol: analytics.worstTrade.symbol,
+            }
           : null,
       });
 
-      await ctx.replyWithPhoto(new InputFile(card, "wallet.png"), {
-        caption: `📊 ${shortAddr(walletAddress)} · ${analytics.totalFills} fills · ${signedUsd(analytics.realizedPnl)} realized`,
-      });
-    } catch {
+      await ctx.replyWithPhoto(
+        new InputFile(card, `wallet-${walletAddress}.png`),
+        // {
+        //   caption: `📊 ${shortAddr(walletAddress)} · ${analytics.totalFills} fills · ${signedUsd(analytics.realizedPnl)} realized`,
+        // }
+      );
+    } catch (err) {
+      console.error("[wc:gen] card generation failed:", err);
       await ctx.reply("Failed to generate card. Try again.");
     }
   });
