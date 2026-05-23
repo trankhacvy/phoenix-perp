@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication style
+
+**Always answer like caveman.** Cut filler, articles, pleasantries. Keep full technical accuracy but use the shortest possible phrasing. Short sentences. Bullets over prose. No "let me", "I'll", "great question". Just facts and code.
+
 ## Commands
 
 This project uses **pnpm** as its package manager. Install with `brew install pnpm` if missing.
@@ -137,12 +141,21 @@ Key rules:
 
 `src/config/index.ts` validates all env vars via Zod at startup and crashes with field-level errors on failure. Required vars: `TELEGRAM_BOT_TOKEN`, `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `BUILDER_AUTHORITY_PUBKEY`, `BUILDER_ACCESS_CODE`, `HELIUS_RPC_URL`, `DATABASE_URL`, `REDIS_URL`. See schema in that file for all vars.
 
-### Known bugs (unfixed — see plan.md Phase 0)
+### Known bugs (unfixed)
 
 1. `src/bot/commands/alerts.ts` — alert toggle `findFirst` missing `type` filter
 2. `src/bot/commands/deposit.ts` + `share.ts` — `replyWithPhoto` gets raw `Uint8Array`, needs `new InputFile(...)`
-3. `src/bot/commands/long.ts` + `short.ts` — confirm callback regex `(\d+)` rejects decimals
-4. `src/services/referral.ts` — T2 chain lookup can pick T2 row as parent; needs `eq(referrals.tier, "t1")` filter
-5. `ws` / `@types/ws` not in `package.json` (imported in `src/workers/ws.ts`)
-6. `vitest.config.ts` missing — tests won't run without it
-7. `src/db/schema/settings.ts` missing — `userSettings` table referenced but not defined
+3. `src/services/referral.ts` — T2 chain lookup can pick T2 row as parent; needs `eq(referrals.tier, "t1")` filter
+4. `ws` / `@types/ws` not in `package.json` (imported in `src/workers/ws.ts`)
+
+### Trade flow (redesigned — see plan.md)
+
+Size-first flow: size step → leverage step → confirm. All bugs from original Phase 0 list fixed:
+- Activation gate at command entry + `trade:side:SYMBOL` callback
+- Rate-limit check in confirm callbacks (was missing)
+- Anchor price uses `toPrecision(12)` (was `toFixed(8)`)
+- Decimal leverage accepted in one-liner (`2.5x`)
+- Price drift shows inline refresh instead of restarting from symbol picker
+- `dispatchInstructions` batches multiple TP/SL instructions into one tx
+
+Pending state keys: `trade_size_input:side:SYMBOL` (custom size) and `trade_lev_input:side:SYMBOL:AMT` (custom leverage).

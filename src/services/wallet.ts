@@ -1,10 +1,10 @@
-import { type AuthorizationContext } from "@privy-io/node";
-import { createSolanaKitSigner, type SolanaKitSigner } from "@privy-io/node/solana-kit";
-import { type Address } from "@solana/kit";
+import * as crypto from "node:crypto";
+import type { AuthorizationContext } from "@privy-io/node";
+import { type SolanaKitSigner, createSolanaKitSigner } from "@privy-io/node/solana-kit";
+import type { Address } from "@solana/kit";
 import { type KeyPairSigner, createKeyPairSignerFromBytes } from "@solana/signers";
 import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
-import * as crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
@@ -64,6 +64,7 @@ export async function createEmbeddedWallet(telegramUserId: string) {
     chain_type: "solana",
     // App-owned wallet: the authorization key is the owner, so signing and export
     // both work server-side without requiring a user JWT.
+    // biome-ignore lint/suspicious/noExplicitAny: Privy SDK owner field not typed for app-owned wallets
     owner: { public_key: getAppPublicKey() } as any,
   });
 

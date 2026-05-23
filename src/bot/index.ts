@@ -3,10 +3,11 @@ import { Bot, webhookCallback } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
+import { getMarketSnapshot } from "../services/phoenix/market.js";
 import type { BotContext } from "../types/index.js";
-import { registerCommands } from "./commands/index.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
-import { sendSizePicker, sendTradeConfirm } from "./commands/long.js";
+import { registerCommands } from "./commands/index.js";
+import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
 import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
 import { sendRemoveTpConfirm, sendTpModePicker } from "./commands/settp.js";
@@ -41,12 +42,11 @@ bot.on("message:text", async (ctx) => {
   const pending = await getPending(ctx.from.id);
   if (!pending) return;
 
-  await clearPending(ctx.from.id);
-
   const text = ctx.message.text.trim();
   const parts = pending.split(":");
 
   if (pending === "withdraw_amount") {
+    await clearPending(ctx.from.id);
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
       await ctx.reply("Invalid amount. Try /withdraw again.");
@@ -57,6 +57,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (pending === "deposit_amount") {
+    await clearPending(ctx.from.id);
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
       await ctx.reply("Invalid amount. Try /deposit again.");
@@ -66,32 +67,41 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  if (parts[0] === "trade_leverage") {
+  if (parts[0] === "trade_size_input") {
     const side = parts[1] as "long" | "short";
     const symbol = parts[2];
-    const lev = parseLeverage(text);
-    if (Number.isNaN(lev) || lev < 1) {
-      await ctx.reply("Invalid leverage. Enter a number like 10 or 10x.");
+    const size = parseAmount(text);
+    if (Number.isNaN(size) || size <= 0) {
+      await ctx.reply("Invalid amount. Enter a USD value like 100.");
       return;
     }
-    await sendSizePicker(ctx, side, symbol, lev);
+    await clearPending(ctx.from.id);
+    await sendLevStep(ctx, side, symbol, size);
     return;
   }
 
-  if (parts[0] === "trade_size") {
+  if (parts[0] === "trade_lev_input") {
     const side = parts[1] as "long" | "short";
     const symbol = parts[2];
-    const lev = Number(parts[3]);
-    const size = parseAmount(text);
-    if (Number.isNaN(size) || size <= 0) {
-      await ctx.reply("Invalid amount. Enter a USD value like 500.");
+    const amt = Number(parts[3]);
+    const lev = parseLeverage(text);
+    if (Number.isNaN(lev) || lev < 1 || !Number.isFinite(lev)) {
+      await ctx.reply("Invalid leverage. Enter a number like 10 or 2.5 (minimum 1).");
       return;
     }
-    await sendTradeConfirm(ctx, side, symbol, lev, size);
+    const snap = await getMarketSnapshot(symbol).catch(() => null);
+    const maxLev = snap?.maxLeverage ?? 100;
+    if (lev > maxLev) {
+      await ctx.reply(`Max leverage for ${symbol} is ${maxLev}×. Enter between 1–${maxLev}:`);
+      return;
+    }
+    await clearPending(ctx.from.id);
+    await sendTradeConfirm(ctx, side, symbol, lev, amt);
     return;
   }
 
   if (parts[0] === "pricealert") {
+    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const triggerPrice = parseAmount(text);
     if (Number.isNaN(triggerPrice) || triggerPrice <= 0) {
@@ -103,6 +113,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "addmargin") {
+    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount < 1) {
@@ -118,6 +129,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "editsl") {
+    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
@@ -134,6 +146,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "edittp") {
+    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
@@ -155,6 +168,7 @@ bot.on("message:text", async (ctx) => {
       await ctx.reply("Invalid address. Send a valid Solana wallet address.");
       return;
     }
+    await clearPending(ctx.from.id);
     await handleAddMonitor(ctx, address);
     return;
   }

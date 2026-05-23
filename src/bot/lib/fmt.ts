@@ -93,6 +93,24 @@ export function compactUsd(n: number): string {
   return usd(n, 0, 0);
 }
 
+export function fundingDailyUsd(rateDecimal: number, notionalUsdc: number): string {
+  const dailyUsd = Math.abs(rateDecimal) * notionalUsdc * 3;
+  return `$${num(dailyUsd, 2, 2)}/day`;
+}
+
+export function liqDistanceLabel(
+  side: "long" | "short",
+  markPrice: number,
+  liqPrice: number,
+): string {
+  const dist =
+    side === "long"
+      ? ((markPrice - liqPrice) / markPrice) * 100
+      : ((liqPrice - markPrice) / markPrice) * 100;
+  const dir = side === "long" ? "falls" : "rises";
+  return `${dir} ${num(dist, 0, 1)}% to ~${price(liqPrice)}`;
+}
+
 export function fundingTrend(rates: number[]): string {
   if (rates.length < 3) return "";
   const recent = rates.slice(-3);

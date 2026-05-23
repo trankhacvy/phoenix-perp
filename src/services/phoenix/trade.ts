@@ -12,6 +12,11 @@ import {
   symbol as riseSymbol,
 } from "@ellipsis-labs/rise";
 import {
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+} from "@solana-program/compute-budget";
+import { getTransferSolInstruction } from "@solana-program/system";
+import {
   type Address,
   appendTransactionMessageInstructions,
   createSolanaRpc,
@@ -22,11 +27,6 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
-import {
-  getSetComputeUnitLimitInstruction,
-  getSetComputeUnitPriceInstruction,
-} from "@solana-program/compute-budget";
-import { getTransferSolInstruction } from "@solana-program/system";
 import {
   type TransactionPartialSigner,
   addSignersToInstruction,
@@ -230,10 +230,41 @@ async function dispatchInstruction(ix: AnyInstruction, walletAddress: string): P
 }
 
 async function dispatchInstructions(ixs: AnyInstruction[], walletAddress: string): Promise<string> {
-  let sig = "";
-  for (const ix of ixs) {
-    sig = await dispatchInstruction(ix, walletAddress);
-  }
+  if (ixs.length === 0) throw new Error("No instructions to dispatch");
+  if (ixs.length === 1) return dispatchInstruction(ixs[0], walletAddress);
+
+  const signer = await getSigner(walletAddress);
+  const latestBlockhash = await getBlockhash();
+  const tipAccount = JITO_TIP_ACCOUNTS[
+    Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)
+  ] as Address;
+
+  const signedIxs = ixs.map((ix) => addSignersToInstruction([signer], ix));
+
+  const message = pipe(
+    createTransactionMessage({ version: 0 }),
+    (tx) => setTransactionMessageFeePayerSigner(signer, tx),
+    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
+    (tx) =>
+      appendTransactionMessageInstructions(
+        [
+          getSetComputeUnitPriceInstruction({ microLamports: COMPUTE_UNIT_PRICE }),
+          getSetComputeUnitLimitInstruction({ units: COMPUTE_UNIT_LIMIT }),
+          ...signedIxs,
+          getTransferSolInstruction({
+            source: signer,
+            destination: tipAccount,
+            amount: lamports(JITO_TIP_LAMPORTS),
+          }),
+        ],
+        tx,
+      ),
+  );
+
+  const signedTx = await signTransactionMessageWithSigners(message);
+  const txBytes = getTransactionEncoder().encode(signedTx);
+  const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
+  await pollConfirmation(sig);
   return sig;
 }
 

@@ -86,19 +86,29 @@ export async function preflightOpen(input: PreflightInput): Promise<PreflightRes
     });
   }
 
+  if (!snapshot.maxLeverage || snapshot.maxLeverage <= 0) {
+    throw new BotError({
+      category: "api",
+      code: "MARKET_CLOSED",
+      userMessage: `No leverage data for ${symbol}.`,
+      hint: "Market may be unavailable. Try again shortly.",
+    });
+  }
+
   const state = await getTraderState(user.walletAddress);
   const availableCollateral = Number(state.effectiveCollateral);
 
   const effectiveLeverage = Math.min(leverage, snapshot.maxLeverage);
   const notional = marginUsdc * effectiveLeverage;
-  const feeUsdc = notional * snapshot.takerFee + (notional * config.BUILDER_FEE_BPS) / 10_000;
+  const totalFeeRate = snapshot.takerFee + config.BUILDER_FEE_BPS / 10_000;
+  const feeUsdc = notional * totalFeeRate;
   const totalCost = marginUsdc + feeUsdc;
 
   if (totalCost > availableCollateral) {
     throw new BotError({
       category: "validation",
       code: "INSUFFICIENT_MARGIN",
-      userMessage: `Need $${totalCost.toFixed(2)} USDC, you have $${availableCollateral.toFixed(2)}.`,
+      userMessage: `Need $${totalCost.toFixed(2)} USDC (incl. fee), you have $${availableCollateral.toFixed(2)}.`,
       hint: "Deposit more with /deposit or reduce your size.",
       meta: { totalCost, availableCollateral },
     });

@@ -50,7 +50,7 @@ export function registerActivate(bot: Bot<BotContext>) {
     }
 
     const processing = await ctx.reply("Activating account... ⏳");
-    const chatId = ctx.chat!.id;
+    const chatId = ctx.chat?.id;
     const msgId = processing.message_id;
 
     try {

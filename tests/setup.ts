@@ -7,3 +7,4 @@ process.env.BUILDER_ACCESS_CODE = "test-code";
 process.env.HELIUS_RPC_URL = "https://rpc.example.com";
 process.env.DATABASE_URL = "postgres://localhost:5432/test";
 process.env.REDIS_URL = "redis://localhost:6379";
+process.env.TEST_KEYPAIR = "test-keypair-placeholder";

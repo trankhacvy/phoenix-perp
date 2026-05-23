@@ -12,6 +12,7 @@ import { createEmbeddedWallet } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { usd } from "../lib/fmt.js";
 import { sendHistoryDetail } from "./history.js";
+import { sendSizeStep } from "./long.js";
 import { sendMarketDetail } from "./markets.js";
 import { sendPositionDetail } from "./positions.js";
 
@@ -53,6 +54,24 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
+      if (payload.startsWith("long_") || payload.startsWith("short_")) {
+        const side = payload.startsWith("long_") ? "long" : "short";
+        const rest = payload.slice(side.length + 1);
+        const symbol = rest.replace(/_\d+$/, "").toUpperCase();
+        if (symbol) {
+          if (!ctx.user.phoenixActivated) {
+            const kb = new InlineKeyboard().text("Activate account", "nav:activate");
+            await ctx.reply(
+              "Your trading account isn't activated yet.\nUse /activate <code> to unlock trading.",
+              { reply_markup: kb },
+            );
+            return;
+          }
+          await sendSizeStep(ctx, side, symbol);
+          return;
+        }
+      }
+
       const [solLamports, solBook] = await Promise.all([
         new Connection(config.HELIUS_RPC_URL, "confirmed")
           .getBalance(new PublicKey(ctx.user.walletAddress))
@@ -83,7 +102,7 @@ export function registerStart(bot: Bot<BotContext>) {
 
     const setupMsg = await ctx.reply("Creating your wallet... ⏳");
     const msgId = setupMsg.message_id;
-    const chatId = ctx.chat!.id;
+    const chatId = ctx.chat?.id;
 
     try {
       const existing = await db.query.users.findFirst({

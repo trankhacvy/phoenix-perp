@@ -1,6 +1,5 @@
 import type { Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
-import { config } from "../../config/index.js";
 import { clearPending } from "../lib/pending.js";
 import { registerActivate } from "./activate.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";

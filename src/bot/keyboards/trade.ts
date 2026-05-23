@@ -1,9 +1,30 @@
 import { InlineKeyboard } from "grammy";
 import { usd } from "../lib/fmt.js";
 
+export function sizePickerKeyboard(
+  side: "long" | "short",
+  symbol: string,
+  availableMargin: number,
+): InlineKeyboard {
+  const pcts = [10, 25, 50, 100];
+  const kb = new InlineKeyboard();
+  for (let i = 0; i < pcts.length; i++) {
+    const p = pcts[i];
+    const amt = Number.parseFloat(((availableMargin * p) / 100).toFixed(2));
+    kb.text(`${usd(amt)}  (${p}%)`, `trade_size:${side}:${symbol}:${amt}`);
+    if (i % 2 === 1) kb.row();
+  }
+  kb.text("Enter custom amount", `trade_size_custom:${side}:${symbol}`)
+    .row()
+    .text("← Back", `trade_sym:${side}:0`)
+    .text("✕ Cancel", "cancel");
+  return kb;
+}
+
 export function leveragePickerKeyboard(
   side: "long" | "short",
   symbol: string,
+  sizeUsdc: number,
   maxLeverage: number,
   defaultLeverage: number,
 ): InlineKeyboard {
@@ -11,28 +32,17 @@ export function leveragePickerKeyboard(
   const kb = new InlineKeyboard();
   let count = 0;
   for (const l of options) {
-    const label = l === defaultLeverage ? `★${l}x` : `${l}x`;
-    kb.text(label, `trade_lev:${side}:${symbol}:${l}`);
+    const positionSize = sizeUsdc * l;
+    const star = l === defaultLeverage ? "★ " : "";
+    kb.text(
+      `${star}${l}× · ${usd(positionSize, 0, 0)}`,
+      `trade_lev:${side}:${symbol}:${sizeUsdc}:${l}`,
+    );
     count++;
-    if (count % 3 === 0) kb.row();
+    if (count % 2 === 0) kb.row();
   }
-  kb.row().text("Custom", `trade_lev_custom:${side}:${symbol}`).text("✕ Cancel", "cancel");
-  return kb;
-}
-
-export function sizePickerKeyboard(
-  side: "long" | "short",
-  symbol: string,
-  lev: number,
-  availableMargin: number,
-): InlineKeyboard {
-  const pcts = [10, 25, 50, 100];
-  const kb = new InlineKeyboard();
-  for (const p of pcts) {
-    const amt = (availableMargin * p) / 100;
-    kb.text(`${p}%  ${usd(amt)}`, `trade_size:${side}:${symbol}:${lev}:${amt.toFixed(2)}`).row();
-  }
-  kb.text("Custom amount", `trade_size_custom:${side}:${symbol}:${lev}`)
+  kb.row()
+    .text("Enter custom", `trade_lev_custom:${side}:${symbol}:${sizeUsdc}`)
     .row()
     .text("← Back", `trade:${side}:${symbol}`)
     .text("✕ Cancel", "cancel");
