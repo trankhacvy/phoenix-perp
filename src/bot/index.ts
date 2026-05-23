@@ -4,13 +4,14 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { getMarketSnapshot } from "../services/phoenix/market.js";
+import { getTraderState } from "../services/phoenix/position.js";
 import type { BotContext } from "../types/index.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
 import { registerCommands } from "./commands/index.js";
 import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
-import { sendRemoveSlConfirm, sendSlModePicker } from "./commands/setsl.js";
-import { sendRemoveTpConfirm, sendTpModePicker } from "./commands/settp.js";
+import { sendRemoveSlConfirm, sendSlFinalConfirm, validateSlPrice } from "./commands/setsl.js";
+import { sendRemoveTpConfirm, sendTpFinalConfirm, validateTpPrice } from "./commands/settp.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import { sendWithdrawConfirm } from "./commands/withdraw.js";
 import { renderBotError } from "./lib/errors.js";
@@ -129,36 +130,74 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "editsl") {
-    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
+
     if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
       await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
       return;
     }
+
     if (triggerPrice === 0) {
+      await clearPending(ctx.from.id);
       await sendRemoveSlConfirm(ctx, symbol, positionSide);
       return;
     }
-    await sendSlModePicker(ctx, symbol, positionSide, triggerPrice);
+
+    const slState = await getTraderState(ctx.user.walletAddress);
+    const slPos = slState.positions.find((p) => p.symbol === symbol && p.side === positionSide);
+
+    if (!slPos) {
+      await clearPending(ctx.from.id);
+      await ctx.reply(`No open ${symbol} ${positionSide} position. It may have been closed.`);
+      return;
+    }
+
+    const slError = validateSlPrice(slPos, triggerPrice);
+    if (slError) {
+      await ctx.reply(slError);
+      return;
+    }
+
+    await clearPending(ctx.from.id);
+    await sendSlFinalConfirm(ctx, symbol, triggerPrice, "market", positionSide);
     return;
   }
 
   if (parts[0] === "edittp") {
-    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const positionSide = parts[2] as "long" | "short";
     const triggerPrice = parseAmount(text);
+
     if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
       await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
       return;
     }
+
     if (triggerPrice === 0) {
+      await clearPending(ctx.from.id);
       await sendRemoveTpConfirm(ctx, symbol, positionSide);
       return;
     }
-    await sendTpModePicker(ctx, symbol, positionSide, triggerPrice);
+
+    const tpState = await getTraderState(ctx.user.walletAddress);
+    const tpPos = tpState.positions.find((p) => p.symbol === symbol && p.side === positionSide);
+
+    if (!tpPos) {
+      await clearPending(ctx.from.id);
+      await ctx.reply(`No open ${symbol} ${positionSide} position. It may have been closed.`);
+      return;
+    }
+
+    const tpError = validateTpPrice(tpPos, triggerPrice);
+    if (tpError) {
+      await ctx.reply(tpError);
+      return;
+    }
+
+    await clearPending(ctx.from.id);
+    await sendTpFinalConfirm(ctx, symbol, triggerPrice, "limit", positionSide);
     return;
   }
 

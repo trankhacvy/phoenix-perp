@@ -4,12 +4,33 @@ import { InlineKeyboard } from "grammy";
 import { logger } from "../../lib/logger.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
-import type { BotContext } from "../../types/index.js";
+import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
-import { price as fmtPrice, parseAmount, usd } from "../lib/fmt.js";
+import { price as fmtPrice, parseAmount, pct, signedUsd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
-const LADDER_FRACTIONS = [0.25, 0.5, 1.0];
+function priceForCallback(p: number): string {
+  return p.toFixed(8).replace(/\.?0+$/, "");
+}
+
+function estimatePnlFromEntry(pos: PhoenixPosition, triggerPrice: number): number {
+  const entry = Number(pos.entryPrice);
+  const size = Number(pos.size);
+  if (Number.isNaN(entry) || Number.isNaN(size) || size === 0) return 0;
+  return pos.side === "long" ? (triggerPrice - entry) * size : (entry - triggerPrice) * size;
+}
+
+export function validateTpPrice(pos: PhoenixPosition, triggerPrice: number): string | null {
+  const mark = Number(pos.markPrice);
+
+  if (pos.side === "long" && triggerPrice <= mark) {
+    return `TP for a long must be above the current price (${fmtPrice(mark)}). Enter a higher price.`;
+  }
+  if (pos.side === "short" && triggerPrice >= mark) {
+    return `TP for a short must be below the current price (${fmtPrice(mark)}). Enter a lower price.`;
+  }
+  return null;
+}
 
 export function registerSetTp(bot: Bot<BotContext>) {
   bot.command("settp", async (ctx) => {
@@ -19,37 +40,33 @@ export function registerSetTp(bot: Bot<BotContext>) {
     }
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
     if (!parts[0]) {
-      await ctx.reply("Usage: /settp <symbol> <price> [market|limit]\nExample: /settp BTC 55000");
+      await ctx.reply("Usage: /settp <symbol> <price>\nExample: /settp BTC 55000");
       return;
     }
     const symbol = parts[0].toUpperCase();
     const state = await getTraderState(ctx.user.walletAddress);
-    const pos = state.positions.find((p) => p.symbol === symbol);
-    if (!pos) {
+    const matches = state.positions.filter((p) => p.symbol === symbol);
+    if (matches.length === 0) {
       await ctx.reply(`No open ${symbol} position found.`);
       return;
     }
+    if (matches.length > 1) {
+      await ctx.reply(`You have multiple ${symbol} positions. Use /positions to manage them.`);
+      return;
+    }
+    const pos = matches[0];
     if (parts.length >= 2) {
       const p = parseAmount(parts[1]);
       if (Number.isNaN(p)) {
         await ctx.reply("Invalid price.");
         return;
       }
-      const mode = parts[2] === "limit" ? "limit" : "market";
-      const markPrice = Number(pos.markPrice);
-      if (pos.side === "long" && p <= markPrice) {
-        await ctx.reply(
-          `Take profit for a long must be above current price (${fmtPrice(markPrice)}).`,
-        );
+      const validationError = validateTpPrice(pos, p);
+      if (validationError) {
+        await ctx.reply(validationError);
         return;
       }
-      if (pos.side === "short" && p >= markPrice) {
-        await ctx.reply(
-          `Take profit for a short must be below current price (${fmtPrice(markPrice)}).`,
-        );
-        return;
-      }
-      await sendTpFinalConfirm(ctx, symbol, p, mode, pos.side);
+      await sendTpFinalConfirm(ctx, symbol, p, "limit", pos.side);
       return;
     }
     await sendTpPrompt(ctx, symbol, pos.side);
@@ -59,7 +76,13 @@ export function registerSetTp(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    const msg = fmt`Enter your take profit price for ${FormattedString.b(symbol)}:\n\nSend ${FormattedString.b("0")} to remove your current take profit.`;
+
+    const state = await getTraderState(ctx.user.walletAddress);
+    const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
+    const markLabel = pos ? fmtPrice(Number(pos.markPrice)) : "—";
+    const direction = side === "long" ? "above" : "below";
+
+    const msg = fmt`Enter your take profit price for ${FormattedString.b(symbol)}:\n\nCurrent: ${FormattedString.b(markLabel)}\nMust be ${direction} current price.\n\nSend ${FormattedString.b("0")} to remove your current take profit.`;
     await ctx.reply(msg.text, { entities: msg.entities });
     await setPending(ctx.from.id, `edittp:${symbol}:${side}`);
   });
@@ -117,66 +140,6 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await renderBotError(ctx, e, { action: "Set take profit", edit: true });
     }
   });
-
-  bot.callbackQuery(/^tp_ladder:([A-Z0-9]+):(long|short)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.user) return;
-    const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    const state = await getTraderState(ctx.user.walletAddress);
-    const pos = state.positions.find((p) => p.symbol === symbol);
-    if (!pos) {
-      await ctx.reply(`No open ${symbol} position.`);
-      return;
-    }
-
-    const markPrice = Number(pos.markPrice);
-    const pcts = [5, 10, 20];
-    const levels = pcts.map((pct, i) => ({
-      price: side === "long" ? markPrice * (1 + pct / 100) : markPrice * (1 - pct / 100),
-      fraction: LADDER_FRACTIONS[i],
-      pct,
-    }));
-
-    const lines = levels
-      .map(
-        (l) =>
-          `• ${side === "long" ? "+" : "-"}${l.pct}%  ~${fmtPrice(l.price)}  close ${(l.fraction * 100).toFixed(0)}%`,
-      )
-      .join("\n");
-
-    const pricesParam = levels.map((l) => l.price.toFixed(2)).join(",");
-    const kb = new InlineKeyboard()
-      .text("✅ Set ladder", `tp_ladder_exec:${symbol}:${side}:${pricesParam}`)
-      .text("✕ Cancel", "cancel");
-
-    const msg = fmt`🪜 ${FormattedString.b(`Ladder Take Profit — ${symbol}`)}\n\n${lines}\n\n${FormattedString.i("Each level closes a portion of your position.")}`;
-    await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
-  });
-
-  bot.callbackQuery(/^tp_ladder_exec:([A-Z0-9]+):(long|short):(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Setting ladder…");
-    if (!ctx.user) return;
-    const [symbol, side, pricesStr] = ctx.match.slice(1) as [string, "long" | "short", string];
-    const prices = pricesStr.split(",").map(Number);
-
-    try {
-      await setTpSl({
-        symbol,
-        walletAddress: ctx.user.walletAddress,
-        positionSide: side,
-        tpLevels: prices.map((p, i) => ({
-          price: p,
-          fraction: LADDER_FRACTIONS[i],
-          mode: "limit" as const,
-        })),
-      });
-      const msg = fmt`✅ ${FormattedString.b("Ladder take profit set")}\n\n${symbol} — ${prices.length} levels active`;
-      await ctx.editMessageText(msg.text, { entities: msg.entities });
-    } catch (e) {
-      logger.error({ err: e, symbol }, "tp_ladder_exec failed");
-      await renderBotError(ctx, e, { action: "Ladder TP", edit: true });
-    }
-  });
 }
 
 export async function sendTpPrompt(
@@ -186,79 +149,104 @@ export async function sendTpPrompt(
 ): Promise<void> {
   if (!ctx.user) return;
   const state = await getTraderState(ctx.user.walletAddress);
-  const pos = state.positions.find((p) => p.symbol === symbol);
+  const pos = state.positions.find((p) => p.symbol === symbol && p.side === positionSide);
   if (!pos) {
-    await ctx.reply(`No open ${symbol} position found.`);
+    await ctx.reply(`No open ${symbol} ${positionSide} position found.`);
     return;
   }
 
   const markPrice = Number(pos.markPrice);
-  const direction = positionSide === "long" ? "above" : "below";
+  const entryPrice = Number(pos.entryPrice);
+  const unrealizedPnl = Number(pos.unrealizedPnl);
+  const currentTpLabel = pos.takeProfit ? fmtPrice(Number(pos.takeProfit)) : "—";
 
   const pcts = [5, 10, 20, 30, 50];
   const kb = new InlineKeyboard();
+
   for (let i = 0; i < pcts.length; i++) {
-    const pct = pcts[i];
+    const p = pcts[i];
     const triggerPrice =
-      positionSide === "long" ? markPrice * (1 + pct / 100) : markPrice * (1 - pct / 100);
+      positionSide === "long" ? markPrice * (1 + p / 100) : markPrice * (1 - p / 100);
+    const pnl = estimatePnlFromEntry(pos, triggerPrice);
     const sign = positionSide === "long" ? "+" : "-";
+
     kb.text(
-      `${sign}${pct}%  ${fmtPrice(triggerPrice)}`,
-      `tp:mode:${symbol}:${triggerPrice.toFixed(4)}:limit:${positionSide}`,
+      `${sign}${p}%  ${fmtPrice(triggerPrice)}  ${signedUsd(pnl)}`,
+      `tp:mode:${symbol}:${priceForCallback(triggerPrice)}:limit:${positionSide}`,
     );
     if (i === 1 || i === 3) kb.row();
   }
-  kb.row()
-    .text("Custom price", `tp_custom:${symbol}:${positionSide}`)
-    .row()
-    .text("🪜 Ladder exit (25/50/100%)", `tp_ladder:${symbol}:${positionSide}`)
-    .row()
-    .text("🗑 Remove take profit", `tp:remove:${symbol}:${positionSide}`)
-    .text("✕ Cancel", "cancel");
 
-  const msg = fmt`🎯 ${FormattedString.b(`Set Take Profit — ${symbol}`)}\n\nCurrent price  ${FormattedString.b(fmtPrice(markPrice))}\nEntry price    ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}\n\nSelect a level (${direction} current price):`;
+  kb.row().text("Enter price manually →", `tp_custom:${symbol}:${positionSide}`);
+
+  if (pos.takeProfit) {
+    kb.row()
+      .text("🗑 Clear take profit", `tp:remove:${symbol}:${positionSide}`)
+      .text("✕ Cancel", "cancel");
+  } else {
+    kb.row().text("✕ Cancel", "cancel");
+  }
+
+  const sideLabel = positionSide === "long" ? "LONG" : "SHORT";
+  const pnlLine = fmt`${FormattedString.b(signedUsd(unrealizedPnl))} uPnL`;
+
+  const msg = fmt`🎯 ${FormattedString.b(`Take Profit — ${symbol} ${sideLabel}`)}\n\nEntry       ${FormattedString.b(fmtPrice(entryPrice))}\nMark now  ${FormattedString.b(fmtPrice(markPrice))}  (${pnlLine})\nCurrent TP  ${FormattedString.b(currentTpLabel)}\n\nSelect a take profit level:`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
-export async function sendTpModePicker(
+export async function sendTpFinalConfirm(
   ctx: BotContext,
   symbol: string,
-  positionSide: "long" | "short",
   triggerPrice: number,
+  mode: "market" | "limit",
+  positionSide: "long" | "short",
 ): Promise<void> {
   if (!ctx.user) return;
   const state = await getTraderState(ctx.user.walletAddress);
-  const pos = state.positions.find((p) => p.symbol === symbol);
+  const pos = state.positions.find((p) => p.symbol === symbol && p.side === positionSide);
+
   if (!pos) {
-    await ctx.reply(`No open ${symbol} position found.`);
+    await ctx.reply(`No open ${symbol} ${positionSide} position. It may have been closed.`);
     return;
   }
 
   const markPrice = Number(pos.markPrice);
+  const entryPrice = Number(pos.entryPrice);
 
-  if (positionSide === "long" && triggerPrice <= markPrice) {
-    await ctx.reply(
-      `Take profit must be above the current price (${fmtPrice(markPrice)}). Enter a higher price.`,
-    );
-    return;
-  }
-  if (positionSide === "short" && triggerPrice >= markPrice) {
-    await ctx.reply(
-      `Take profit must be below the current price (${fmtPrice(markPrice)}). Enter a lower price.`,
-    );
+  // Validate with the freshly-fetched mark price — catches stale prices from %-buttons tapped after market moves
+  const validationError = validateTpPrice(pos, triggerPrice);
+  if (validationError) {
+    const kb = new InlineKeyboard().text("✕ Dismiss", "cancel");
+    await ctx.reply(`${validationError}\n\nPrice may have moved since the menu was shown.`, {
+      reply_markup: kb,
+    });
     return;
   }
 
-  const expectedGain = Math.abs(triggerPrice - Number(pos.entryPrice)) * Number(pos.size);
+  const pnlFromEntry = estimatePnlFromEntry(pos, triggerPrice);
+
+  // Normalize sign to P&L perspective: positive = profit for this side
+  const rawEntryPct = entryPrice > 0 ? ((triggerPrice - entryPrice) / entryPrice) * 100 : null;
+  const entryPct =
+    rawEntryPct !== null ? (positionSide === "long" ? rawEntryPct : -rawEntryPct) : null;
+  const entryPctLabel = entryPct !== null ? pct(entryPct) : "—";
+
+  const markPct = markPrice > 0 ? ((triggerPrice - markPrice) / markPrice) * 100 : null;
+  const markPctLabel = markPct !== null ? pct(markPct) : "—";
+
+  const execLabel = pnlFromEntry >= 0 ? "✅ Lock in profit" : "✅ Set take profit";
+
+  const fillNote =
+    mode === "limit"
+      ? fmt`\nOrder placed at ${FormattedString.b(fmtPrice(triggerPrice))} — fills when price reaches it.`
+      : fmt`\nCloses immediately when price reaches ${FormattedString.b(fmtPrice(triggerPrice))}.`;
 
   const kb = new InlineKeyboard()
-    .text("Limit (recommended)", `tp:mode:${symbol}:${triggerPrice}:limit:${positionSide}`)
-    .row()
-    .text("Market", `tp:mode:${symbol}:${triggerPrice}:market:${positionSide}`)
-    .row()
+    .text(execLabel, `tp:exec:${symbol}:${priceForCallback(triggerPrice)}:${mode}:${positionSide}`)
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`Take profit at ${FormattedString.b(fmtPrice(triggerPrice))}\nExpected gain: ${FormattedString.code(`+${usd(expectedGain)}`)}\n\n${FormattedString.b("Limit")}  — Place an order at exactly ${fmtPrice(triggerPrice)}\n${FormattedString.b("Market")} — Close immediately when price hits`;
+  const sideLabel = positionSide === "long" ? "LONG" : "SHORT";
+  const msg = fmt`🎯 ${FormattedString.b(`Take Profit — ${symbol} ${sideLabel}`)}\n\nTrigger      ${FormattedString.b(fmtPrice(triggerPrice))}\nFrom entry   ${FormattedString.b(`${entryPctLabel}  (${signedUsd(pnlFromEntry)} total)`)}  ${FormattedString.i("approx, excl. fees")}\nFrom now     ${FormattedString.b(markPctLabel)}${fillNote}`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
@@ -271,29 +259,5 @@ export async function sendRemoveTpConfirm(
     .text("✅ Remove take profit", `tp:remove:${symbol}:${positionSide}`)
     .text("✕ Cancel", "cancel");
   const msg = fmt`Remove take profit for ${FormattedString.b(symbol)}?`;
-  await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
-}
-
-async function sendTpFinalConfirm(
-  ctx: BotContext,
-  symbol: string,
-  triggerPrice: number,
-  mode: "market" | "limit",
-  positionSide: "long" | "short",
-): Promise<void> {
-  if (!ctx.user) return;
-  const state = await getTraderState(ctx.user.walletAddress);
-  const pos = state.positions.find((p) => p.symbol === symbol);
-  const fromEntry = pos ? Math.abs(Number(pos.entryPrice) - triggerPrice) * Number(pos.size) : null;
-  const gainStr =
-    fromEntry !== null
-      ? fmt`\nExpected gain: ${FormattedString.code(`+${usd(fromEntry)}`)}`
-      : fmt``;
-
-  const kb = new InlineKeyboard()
-    .text("✅ Set take profit", `tp:exec:${symbol}:${triggerPrice}:${mode}:${positionSide}`)
-    .text("✕ Cancel", "cancel");
-
-  const msg = fmt`Set take profit?\n\n${FormattedString.b(symbol)} — ${fmtPrice(triggerPrice)} (${mode === "market" ? "Market" : "Limit"})${gainStr}`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
