@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { NextFunction } from "grammy";
+import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
 import { initTestSigner } from "../../services/wallet.js";
@@ -14,8 +15,8 @@ export async function authMiddleware(ctx: BotContext, next: NextFunction) {
     where: eq(users.telegramId, telegramId),
   });
 
-  // Dev shortcut: auto-register with TEST_KEYPAIR wallet, no Privy needed
-  if (!user && process.env.TEST_KEYPAIR) {
+  /* === DEV ONLY — remove this block before production === */
+  if (!user && config.TEST_KEYPAIR) {
     const walletAddress = await initTestSigner();
     const [inserted] = await db
       .insert(users)
@@ -36,6 +37,7 @@ export async function authMiddleware(ctx: BotContext, next: NextFunction) {
       .returning();
     user = inserted;
   }
+  /* === END DEV ONLY === */
 
   if (user) ctx.user = user;
 

@@ -25,10 +25,12 @@ function startActionLogRetention() {
 }
 
 async function main() {
-  if (process.env.TEST_KEYPAIR) {
+  /* === DEV ONLY === */
+  if (config.TEST_KEYPAIR) {
     const addr = await initTestSigner();
     logger.info({ walletAddress: addr }, "Test signer loaded from TEST_KEYPAIR");
   }
+  /* === END DEV ONLY === */
   startActionLogRetention();
   if (config.NODE_ENV === "production" && config.WEBHOOK_URL) {
     const server = await createServer();

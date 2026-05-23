@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
+import { config } from "../../config/index.js";
 import { clearPending } from "../lib/pending.js";
+import { registerActivate } from "./activate.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
 import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
@@ -10,7 +12,7 @@ import { registerHistory, sendHistoryScreen } from "./history.js";
 import { registerLeaderboard } from "./leaderboard.js";
 import { registerLog } from "./log.js";
 import { registerLong, sendSymbolPicker } from "./long.js";
-import { registerMarkets } from "./markets.js";
+import { registerMarkets, sendMarketsScreen } from "./markets.js";
 import { registerPortfolio, sendPortfolioScreen } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
 import { registerPriceAlert } from "./pricealert.js";
@@ -27,6 +29,7 @@ import { registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
 
 export function registerCommands(bot: Bot<BotContext>) {
   registerStart(bot);
+  registerActivate(bot);
   registerDeposit(bot);
   registerWithdraw(bot);
   registerMarkets(bot);
@@ -96,6 +99,12 @@ export function registerCommands(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendAlertsScreen(ctx);
+  });
+
+  bot.callbackQuery("nav:markets", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendMarketsScreen(ctx);
   });
 
   bot.callbackQuery("cancel", async (ctx) => {

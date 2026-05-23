@@ -38,6 +38,10 @@ function buildListRow(
   return fmt`${FormattedString.link(label, deepLink)}   ${FormattedString.b(fmtPrice(snap.markPrice))}  ${FormattedString.i(fundingApr(snap.fundingRate))}`;
 }
 
+export async function sendMarketsScreen(ctx: BotContext | CallbackQueryContext<BotContext>) {
+  return sendMarketsPage(ctx, 0, false);
+}
+
 async function sendMarketsPage(
   ctx: BotContext | CallbackQueryContext<BotContext>,
   page: number,

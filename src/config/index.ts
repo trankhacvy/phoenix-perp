@@ -10,11 +10,16 @@ const schema = z.object({
   // Privy
   PRIVY_APP_ID: z.string().min(1),
   PRIVY_APP_SECRET: z.string().min(1),
+  // Bot-first: authorization key from Privy Dashboard → Wallets → Authorization Keys
+  PRIVY_AUTHORIZATION_PRIVATE_KEY: z.string().optional(),
+  PRIVY_AUTHORIZATION_KEY_ID: z.string().optional(),
 
   // Phoenix / Flight
   BUILDER_AUTHORITY_PUBKEY: z.string().min(1),
-  BUILDER_ACCESS_CODE: z.string().min(1),
   BUILDER_FEE_BPS: z.coerce.number().min(1).max(50).default(10),
+
+  // Dev / testing — must NOT be set in production
+  TEST_KEYPAIR: z.string().optional(),
   PHOENIX_API_URL: z.string().url().default("https://perp-api.phoenix.trade"),
   PHOENIX_WS_URL: z.string().default("wss://perp-api.phoenix.trade/v1/ws"),
 
@@ -32,7 +37,17 @@ const schema = z.object({
   HOST: z.string().default("0.0.0.0"),
 });
 
-const parsed = schema.safeParse(process.env);
+const parsed = schema
+  .refine((d) => !(d.NODE_ENV === "production" && d.TEST_KEYPAIR), {
+    message: "TEST_KEYPAIR must not be set in production",
+    path: ["TEST_KEYPAIR"],
+  })
+  .refine((d) => d.TEST_KEYPAIR || d.PRIVY_AUTHORIZATION_PRIVATE_KEY, {
+    message:
+      "PRIVY_AUTHORIZATION_PRIVATE_KEY is required when TEST_KEYPAIR is not set. Generate one in Privy Dashboard → Wallets → Authorization Keys.",
+    path: ["PRIVY_AUTHORIZATION_PRIVATE_KEY"],
+  })
+  .safeParse(process.env);
 
 if (!parsed.success) {
   console.error("❌ Invalid environment variables:");

@@ -71,8 +71,9 @@ export function parseLeverage(raw: string): number {
   return Number.parseFloat(raw.replace(/[xX]/g, ""));
 }
 
-export function solscanUrl(sig: string): string {
-  return `https://solscan.io/tx/${sig}`;
+export function solscanUrl(sig: string, cluster?: "devnet" | "testnet"): string {
+  const base = `https://solscan.io/tx/${sig}`;
+  return cluster ? `${base}?cluster=${cluster}` : base;
 }
 
 export function timeAgo(ts: number): string {

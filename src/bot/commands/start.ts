@@ -6,10 +6,9 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
-import { redis } from "../../lib/redis.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
-import { activatePhoenixAccount, createEmbeddedWallet } from "../../services/wallet.js";
+import { createEmbeddedWallet } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { usd } from "../lib/fmt.js";
 import { sendHistoryDetail } from "./history.js";
@@ -20,10 +19,10 @@ export function registerStart(bot: Bot<BotContext>) {
   bot.command("start", async (ctx) => {
     if (!ctx.from) return;
 
+    // ── Existing user ─────────────────────────────────────────────────────────
     if (ctx.user) {
       const payload = ctx.match ? String(ctx.match).trim() : "";
 
-      // Deep link from position list: ?start=pos_BTC_long
       if (payload.startsWith("pos_")) {
         const parts = payload.slice(4).split("_");
         const symbol = parts[0]?.toUpperCase();
@@ -34,7 +33,6 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
-      // Deep link from history list: ?start=hist_<globalIdx>_<page>
       if (payload.startsWith("hist_")) {
         const parts = payload.slice(5).split("_");
         const globalIdx = Number(parts[0]);
@@ -45,7 +43,6 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
-      // Deep link from markets list: ?start=mkt_<symbol>_<page>
       if (payload.startsWith("mkt_")) {
         const parts = payload.slice(4).split("_");
         const symbol = parts[0]?.toUpperCase();
@@ -80,56 +77,28 @@ export function registerStart(bot: Bot<BotContext>) {
       return;
     }
 
+    // ── New user: create wallet ───────────────────────────────────────────────
     const telegramId = String(ctx.from.id);
-    const referredBy = ctx.match ? String(ctx.match).trim() : undefined;
+    const referredBy = ctx.match ? String(ctx.match).trim() || undefined : undefined;
 
-    const kb = new InlineKeyboard()
-      .text("✅ I am not a US person", `attest:notus:${referredBy ?? ""}`)
-      .row()
-      .text("❌ I am a US person", "attest:us");
-
-    await redis.set(`attest:pending:${telegramId}`, "1", "EX", 300);
-
-    const msg = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot")}\n\nBefore continuing, please confirm your jurisdiction.\nThis service is not available to US persons or residents of sanctioned jurisdictions.`;
-    await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
-  });
-
-  bot.callbackQuery(/^attest:notus:(.*)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.from) return;
-
-    const telegramId = String(ctx.from.id);
-    const pending = await redis.get(`attest:pending:${telegramId}`);
-    if (!pending) {
-      await ctx.editMessageText("Attestation expired. Please type /start again.");
-      return;
-    }
-    await redis.del(`attest:pending:${telegramId}`);
-
-    const referredBy = ctx.match[1] || undefined;
-
-    const msgResult = await ctx.editMessageText("Setting up your account... ⏳");
-    const msgId =
-      typeof msgResult === "object" && "message_id" in msgResult ? msgResult.message_id : undefined;
+    const setupMsg = await ctx.reply("Creating your wallet... ⏳");
+    const msgId = setupMsg.message_id;
+    const chatId = ctx.chat!.id;
 
     try {
       const existing = await db.query.users.findFirst({
         where: eq(users.telegramId, telegramId),
       });
       if (existing) {
-        if (msgId) {
-          await ctx.api.editMessageText(
-            ctx.chat?.id ?? 0,
-            msgId,
-            "Account already exists. Use /balance to check your account.",
-          );
-        }
+        await ctx.api.editMessageText(
+          chatId,
+          msgId,
+          "Account already exists. Use /portfolio to check your balance.",
+        );
         return;
       }
 
       const { privyUserId, walletAddress } = await createEmbeddedWallet(telegramId);
-      await activatePhoenixAccount(walletAddress);
-
       const referralCode = generateReferralCode();
 
       await db.insert(users).values({
@@ -139,37 +108,26 @@ export function registerStart(bot: Bot<BotContext>) {
         firstName: ctx.from.first_name,
         privyUserId,
         walletAddress,
-        phoenixActivated: true,
+        phoenixActivated: false,
         referralCode,
         referredBy,
       });
 
-      if (referredBy) {
-        await linkReferral(telegramId, referredBy);
-      }
+      if (referredBy) await linkReferral(telegramId, referredBy);
 
-      if (msgId) {
-        const welcome = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\nYour Phoenix account is ready to trade.\n\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account, then use /markets to explore all pairs.`;
-        await ctx.api.editMessageText(ctx.chat?.id ?? 0, msgId, welcome.text, {
-          entities: welcome.entities,
-        });
-      }
+      const kb = new InlineKeyboard()
+        .text("💰 Deposit", "nav:deposit")
+        .text("📈 Markets", "nav:markets");
+
+      const msg = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\n${FormattedString.b("Your wallet:")}\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account.\n\n⚠️ ${FormattedString.b("Activate trading:")}\nUse /activate <code> with your Phoenix invite or referral code to unlock trading.`;
+
+      await ctx.api.editMessageText(chatId, msgId, msg.text, {
+        entities: msg.entities,
+        reply_markup: kb,
+      });
     } catch (err) {
-      if (msgId) {
-        await ctx.api.editMessageText(
-          ctx.chat?.id ?? 0,
-          msgId,
-          "❌ Setup failed. Please try again or contact support.",
-        );
-      }
+      await ctx.api.editMessageText(chatId, msgId, "❌ Setup failed. Please try again.");
       throw err;
     }
-  });
-
-  bot.callbackQuery("attest:us", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.from) return;
-    await redis.del(`attest:pending:${String(ctx.from.id)}`);
-    await ctx.editMessageText("Service not available in your region. Thank you for your honesty.");
   });
 }

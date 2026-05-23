@@ -6,9 +6,10 @@ import { privy } from "../lib/privy.js";
 
 let _testSigner: KeyPairSigner | null = null;
 
-/** Call once at test-script startup to wire TEST_KEYPAIR into getKitSigner. */
+/** Call once at startup to wire TEST_KEYPAIR into getKitSigner. Idempotent. */
 export async function initTestSigner(): Promise<string> {
-  const raw = process.env.TEST_KEYPAIR;
+  if (_testSigner) return _testSigner.address as string;
+  const raw = config.TEST_KEYPAIR;
   if (!raw) throw new Error("TEST_KEYPAIR env var not set");
   const bytes = bs58.decode(raw);
   _testSigner = await createKeyPairSignerFromBytes(bytes);
@@ -16,16 +17,20 @@ export async function initTestSigner(): Promise<string> {
 }
 
 export async function createEmbeddedWallet(telegramUserId: string) {
+  // Step 1: create Privy user linked to Telegram identity
   const user = await privy.importUser({
     linkedAccounts: [{ type: "telegram", telegramUserId }],
-    createSolanaWallet: true,
   });
 
-  const wallet = user.linkedAccounts.find(
-    (a): a is typeof a & { type: "wallet"; address: string } =>
-      a.type === "wallet" && (a as { chainType?: string }).chainType === "solana",
-  );
-  if (!wallet) throw new Error("Solana embedded wallet not created by Privy");
+  // Step 2: create Solana wallet owned by user, with bot as authorized signer so
+  // the server can sign transactions on the user's behalf without user presence.
+  const wallet = await privy.walletApi.createWallet({
+    chainType: "solana",
+    owner: { userId: user.id },
+    ...(config.PRIVY_AUTHORIZATION_KEY_ID && {
+      additionalSigners: [{ signerId: config.PRIVY_AUTHORIZATION_KEY_ID }],
+    }),
+  });
 
   return { privyUserId: user.id, walletAddress: wallet.address };
 }
@@ -52,18 +57,3 @@ export function getKitSigner(_walletAddress: string): KeyPairSigner {
   );
 }
 
-export async function activatePhoenixAccount(walletAddress: string) {
-  const res = await fetch(`${config.PHOENIX_API_URL}/v1/invite/activate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      wallet_address: walletAddress,
-      code: config.BUILDER_ACCESS_CODE,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Phoenix activation failed: ${JSON.stringify(err)}`);
-  }
-}
