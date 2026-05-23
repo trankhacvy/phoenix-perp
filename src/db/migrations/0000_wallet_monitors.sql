@@ -14,4 +14,5 @@ DO $$ BEGIN
  ALTER TABLE "wallet_monitors" ADD CONSTRAINT "wallet_monitors_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
+ WHEN undefined_table THEN null;
 END $$;

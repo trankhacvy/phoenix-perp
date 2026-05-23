@@ -21,6 +21,7 @@ DO $$ BEGIN
  ALTER TABLE "action_logs" ADD CONSTRAINT "action_logs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
+ WHEN undefined_table THEN null;
 END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "action_logs_user_idx" ON "action_logs" USING btree ("user_id","created_at");
