@@ -8,6 +8,7 @@ export default defineConfig({
     "./src/db/schema/settings.ts",
     "./src/db/schema/wallet_monitors.ts",
     "./src/db/schema/action_logs.ts",
+    "./src/db/schema/leaderboard.ts",
   ],
   out: "./src/db/migrations",
   dialect: "postgresql",

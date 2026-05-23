@@ -7,6 +7,7 @@ import { registerDeposit, sendDepositScreen } from "./deposit.js";
 import { registerExport } from "./export.js";
 import { registerFunding } from "./funding.js";
 import { registerHistory, sendHistoryScreen } from "./history.js";
+import { registerLeaderboard } from "./leaderboard.js";
 import { registerLog } from "./log.js";
 import { registerLong, sendSymbolPicker } from "./long.js";
 import { registerMarkets } from "./markets.js";
@@ -46,6 +47,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerPriceAlert(bot);
   registerWalletMonitor(bot);
   registerWallet(bot);
+  registerLeaderboard(bot);
   registerLog(bot);
 
   bot.callbackQuery("nav:balance", async (ctx) => {
