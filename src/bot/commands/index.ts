@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { clearPending } from "../lib/pending.js";
 import { registerActivate } from "./activate.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
@@ -55,6 +56,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   bot.callbackQuery("nav:balance", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendPortfolioScreen(ctx);
   });
 
@@ -67,30 +69,35 @@ export function registerCommands(bot: Bot<BotContext>) {
   bot.callbackQuery("nav:withdraw", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendWithdrawAmountPrompt(ctx);
   });
 
   bot.callbackQuery("nav:positions", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendPositionsScreen(ctx);
   });
 
   bot.callbackQuery("nav:history", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendHistoryScreen(ctx);
   });
 
   bot.callbackQuery("nav:long", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendSymbolPicker(ctx, "long");
   });
 
   bot.callbackQuery("nav:short", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendSymbolPicker(ctx, "short");
   });
 

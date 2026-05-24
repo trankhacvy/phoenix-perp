@@ -2,6 +2,8 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+
+const INVITE_SEARCH_URL = "https://x.com/search?q=%23PhoenixPerp+invite";
 import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
@@ -44,8 +46,7 @@ export function registerActivate(bot: Bot<BotContext>) {
 
     const code = ctx.match?.trim();
     if (!code) {
-      const msg = fmt`${FormattedString.b("Activate Trading")}\n\nUsage: ${FormattedString.code("/activate <code>")}\n\nEnter your Phoenix invite code or a referral code from an existing trader.`;
-      await ctx.reply(msg.text, { entities: msg.entities });
+      await sendActivatePrompt(ctx);
       return;
     }
 
@@ -87,4 +88,20 @@ export function registerActivate(bot: Bot<BotContext>) {
       throw err;
     }
   });
+
+  bot.callbackQuery("nav:activate", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    if (ctx.user.phoenixActivated) {
+      await ctx.reply("✅ Already activated. Use /long or /short to trade.");
+      return;
+    }
+    await sendActivatePrompt(ctx);
+  });
+}
+
+async function sendActivatePrompt(ctx: BotContext): Promise<void> {
+  const kb = new InlineKeyboard().url("Find an invite code on X →", INVITE_SEARCH_URL);
+  const msg = fmt`🔑 ${FormattedString.b("Activate Trading")}\n\nYou need an ${FormattedString.b("invite code")} or ${FormattedString.b("access code")} to unlock trading.\n\n${FormattedString.b("Have a code?")} Send it now:\n${FormattedString.code("/activate <code>")}\n\n${FormattedString.b("No code?")} Ask an existing trader, or search for one on X.`;
+  await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

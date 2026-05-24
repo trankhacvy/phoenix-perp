@@ -4,6 +4,7 @@ import { InlineKeyboard } from "grammy";
 import { type TradeHistoryEntry, getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
 import { cryptoSize, price as fmtPrice, pnlEmoji, signedUsd, solscanUrl, usd } from "../lib/fmt.js";
+import { requireActivation } from "../lib/activation.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 
 const PAGE_SIZE = 5;
@@ -219,12 +220,14 @@ export function registerHistory(bot: Bot<BotContext>) {
       await ctx.reply("Type /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     await sendHistoryScreen(ctx);
   });
 
   bot.callbackQuery(/^hist:list:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendHistoryScreen(ctx, Number(ctx.match[1]), true);
   });
 }

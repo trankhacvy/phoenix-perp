@@ -6,6 +6,7 @@ import { config } from "../../config/index.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { pnlEmoji, shortAddr, signedUsd, usd } from "../lib/fmt.js";
 import { buildPositionRows } from "./positions.js";
 
@@ -40,6 +41,7 @@ export function registerPortfolio(bot: Bot<BotContext>) {
       await ctx.reply("Type /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     await sendPortfolioScreen(ctx);
   });
 }

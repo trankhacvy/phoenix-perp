@@ -6,6 +6,7 @@ import { redis } from "../../lib/redis.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { withdrawCollateral } from "../../services/phoenix/trade.js";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { renderBotError } from "../lib/errors.js";
 import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
@@ -18,6 +19,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       await ctx.reply("Type /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     const raw = ctx.match?.trim();
     if (!raw) {
       await sendWithdrawAmountPrompt(ctx);

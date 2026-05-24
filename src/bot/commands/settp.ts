@@ -6,6 +6,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
+import { requireActivation } from "../lib/activation.js";
 import { price as fmtPrice, parseAmount, pct, signedUsd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
@@ -38,6 +39,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
       await ctx.reply("Type /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
     if (!parts[0]) {
       await ctx.reply("Usage: /settp <symbol> <price>\nExample: /settp BTC 55000");

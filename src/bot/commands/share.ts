@@ -2,6 +2,7 @@ import { type Bot, InputFile } from "grammy";
 import { generatePnlCard } from "../../services/image.js";
 import { getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 
 export function registerShare(bot: Bot<BotContext>) {
   bot.command("share", async (ctx) => {
@@ -9,6 +10,7 @@ export function registerShare(bot: Bot<BotContext>) {
       await ctx.reply("Use /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
 
     const parts = ctx.match?.trim().split(" ");
     const symbol = parts?.[0]?.toUpperCase();

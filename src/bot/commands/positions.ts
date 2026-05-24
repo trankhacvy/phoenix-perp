@@ -18,6 +18,7 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
+import { requireActivation } from "../lib/activation.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
@@ -212,6 +213,7 @@ export function registerPositions(bot: Bot<BotContext>) {
       await ctx.reply("Type /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     await sendPositionsScreen(ctx);
   });
 
