@@ -8,7 +8,7 @@ import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { initTestSigner } from "./services/wallet.js";
-import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
+import { stopLeaderboardScanner } from "./workers/leaderboard.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
