@@ -19,7 +19,7 @@ import { renderBotError, toBotError } from "../lib/errors.js";
 import {
   price as fmtPrice,
   fundingDailyUsd,
-  liqDistanceLabel,
+  num,
   parseAmount,
   parseLeverage,
   solscanUrl,
@@ -197,13 +197,14 @@ export function registerLong(bot: Bot<BotContext>) {
       ctx.actionLog = { skip: true };
       await subscribeUser(wallet, telegramId);
 
-      const liqHint = liqDistanceLabel("long", pf.snapshot.markPrice, pf.liqPrice);
+      const tokenSize = pf.notional / pf.snapshot.markPrice;
       const kb = new InlineKeyboard()
-        .text("🛑 Set stop loss", `editsl:${symbol}:long`)
+        .text("🛑 Set SL", `editsl:${symbol}:long`)
+        .text("🎯 Set TP", `edittp:${symbol}:long`)
         .row()
         .text("📊 View position", "nav:positions");
 
-      const msg = fmt`✅ ${FormattedString.b(`Opened — Long ${usd(pf.notional, 0, 0)} of ${symbol}`)}\n\nEntry: ~${fmtPrice(pf.snapshot.markPrice)}\nFee paid: ${usd(pf.feeUsdc)}\n\n⚠️ No stop loss set. If price ${liqHint} you get stopped out.\n\n${FormattedString.link("Solscan ↗", solscanUrl(sig))}`;
+      const msg = fmt`✅ ${FormattedString.b(`Long ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
       await ctx.editMessageText(msg.text, {
         entities: msg.entities,
         reply_markup: kb,
@@ -345,12 +346,15 @@ export async function sendLevStep(
   const totalFeeRate = snapshot.takerFee + config.BUILDER_FEE_BPS / 10_000;
   const maxSafeMargin = available / (1 + snapshot.maxLeverage * totalFeeRate);
   if (sizeUsdc > maxSafeMargin + 0.01) {
-    const kb = new InlineKeyboard().text("← Pick size", `trade:${side}:${symbol}`);
+    const kb = new InlineKeyboard()
+      .text("← Pick size", `trade:${side}:${symbol}`)
+      .text("✕ Cancel", "cancel");
     const msg =
       sizeUsdc > available
-        ? fmt`${FormattedString.b(usd(sizeUsdc))} exceeds your available balance of ${FormattedString.b(usd(available))}. Enter a smaller amount.`
-        : fmt`${FormattedString.b(usd(sizeUsdc))} leaves no room for fees (max at ${snapshot.maxLeverage}×: ${FormattedString.b(usd(maxSafeMargin))}). Enter a smaller amount.`;
+        ? fmt`${FormattedString.b(usd(sizeUsdc))} exceeds your balance of ${FormattedString.b(usd(available))}.\n\nEnter a smaller amount:`
+        : fmt`${FormattedString.b(usd(sizeUsdc))} leaves no room for fees at max leverage (max: ${FormattedString.b(usd(maxSafeMargin))}).\n\nEnter a smaller amount:`;
     await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+    if (ctx.from) await setPending(ctx.from.id, `trade_size_input:${side}:${symbol}`);
     return;
   }
 
@@ -407,7 +411,8 @@ export async function sendTradeConfirm(
   const entry = snapshot.markPrice;
   const feePct = ((feeUsdc / notional) * 100).toFixed(3);
 
-  const liqLine = liqDistanceLabel(side, entry, liqPrice);
+  const liqDist = liqPrice > 0 ? Math.abs((liqPrice - entry) / entry) * 100 : null;
+  const liqDistStr = liqDist !== null ? ` (${liqDist.toFixed(1)}% away)` : "";
 
   const isLongPaying = snapshot.fundingRate > 0;
   const youPay = side === "long" ? isLongPaying : !isLongPaying;
@@ -433,7 +438,7 @@ export async function sendTradeConfirm(
     .row()
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n\nYou risk:       ${FormattedString.b(usd(sizeUsdc))}\nYou control:    ${FormattedString.b(usd(notional))} of ${symbol}\nEntry near:     ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:            ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nYou pay:        ${FormattedString.b(usd(totalCost))}${fundingLine}\n\nStop-out if price ${liqLine}\n\n${FormattedString.i("(Quote based on current price)")}`;
+  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n\nYou risk:       ${FormattedString.b(usd(sizeUsdc))}\nYou control:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:     ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:            ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nYou pay:        ${FormattedString.b(usd(totalCost))}${fundingLine}\n\nLiq price:      ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}\n\n${FormattedString.i("(Quote based on current price)")}`;
 
   const opts = {
     entities: msg.entities,

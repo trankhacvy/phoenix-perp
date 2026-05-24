@@ -45,9 +45,6 @@ export function registerShare(bot: Bot<BotContext>) {
       size: `${size.toFixed(4)} ${baseToken}`,
     });
 
-    const emoji = pnl >= 0 ? "🟢" : "🔴";
-    await ctx.replyWithPhoto(new InputFile(card, "pnl.png"), {
-      caption: `${emoji} ${symbol} · ${pnl >= 0 ? "+" : ""}$${Math.abs(pnl).toFixed(2)} USDC`,
-    });
+    await ctx.replyWithPhoto(new InputFile(card, "pnl.png"));
   });
 }

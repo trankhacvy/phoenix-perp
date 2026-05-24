@@ -133,8 +133,12 @@ export function registerSetTp(bot: Bot<BotContext>) {
         tpPrice: Number(priceStr),
         tpMode: mode,
       });
+      const navKb = new InlineKeyboard()
+        .text("🛑 Set SL", `editsl:${symbol}:${side}`)
+        .row()
+        .text("📊 View position", "nav:positions");
       const msg = fmt`✅ ${FormattedString.b("Take profit set")}\n\n${symbol} — ${fmtPrice(Number(priceStr))}\nYou'll be notified when it triggers.`;
-      await ctx.editMessageText(msg.text, { entities: msg.entities });
+      await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: navKb });
     } catch (e) {
       logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (TP) failed");
       await renderBotError(ctx, e, { action: "Set take profit", edit: true });
@@ -163,21 +167,19 @@ export async function sendTpPrompt(
   const pcts = [5, 10, 20, 30, 50];
   const kb = new InlineKeyboard();
 
-  for (let i = 0; i < pcts.length; i++) {
-    const p = pcts[i];
+  for (const p of pcts) {
     const triggerPrice =
       positionSide === "long" ? markPrice * (1 + p / 100) : markPrice * (1 - p / 100);
     const pnl = estimatePnlFromEntry(pos, triggerPrice);
     const sign = positionSide === "long" ? "+" : "-";
 
     kb.text(
-      `${sign}${p}%  ${fmtPrice(triggerPrice)}  ${signedUsd(pnl)}`,
+      `${sign}${p}%  →  ${fmtPrice(triggerPrice)}  (${signedUsd(pnl)})`,
       `tp:mode:${symbol}:${priceForCallback(triggerPrice)}:limit:${positionSide}`,
-    );
-    if (i === 1 || i === 3) kb.row();
+    ).row();
   }
 
-  kb.row().text("Enter price manually →", `tp_custom:${symbol}:${positionSide}`);
+  kb.text("Enter price manually →", `tp_custom:${symbol}:${positionSide}`);
 
   if (pos.takeProfit) {
     kb.row()
@@ -190,7 +192,7 @@ export async function sendTpPrompt(
   const sideLabel = positionSide === "long" ? "LONG" : "SHORT";
   const pnlLine = fmt`${FormattedString.b(signedUsd(unrealizedPnl))} uPnL`;
 
-  const msg = fmt`🎯 ${FormattedString.b(`Take Profit — ${symbol} ${sideLabel}`)}\n\nEntry       ${FormattedString.b(fmtPrice(entryPrice))}\nMark now  ${FormattedString.b(fmtPrice(markPrice))}  (${pnlLine})\nCurrent TP  ${FormattedString.b(currentTpLabel)}\n\nSelect a take profit level:`;
+  const msg = fmt`🎯 ${FormattedString.b(`Take Profit — ${symbol} ${sideLabel}`)}\n\nEntry       ${FormattedString.b(fmtPrice(entryPrice))}\nMark now  ${FormattedString.b(fmtPrice(markPrice))}  (${pnlLine})\nCurrent TP  ${FormattedString.b(currentTpLabel)}\n\nSelect a take profit level ${FormattedString.i("(% move  →  trigger price  (est. P&L))")}:`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 

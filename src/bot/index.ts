@@ -114,13 +114,15 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "addmargin") {
-    await clearPending(ctx.from.id);
+    if (!ctx.from) return;
     const symbol = parts[1];
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount < 1) {
-      await ctx.reply("Minimum margin to add is $1.");
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "cancel");
+      await ctx.reply("Invalid amount. Enter $1 or more:", { reply_markup: cancelKb });
       return;
     }
+    await clearPending(ctx.from.id);
     const kb = new InlineKeyboard()
       .text(`✅ Add ${usd(amount)}`, `addmargin:exec:${symbol}:${amount}`)
       .text("✕ Cancel", "cancel");

@@ -11,7 +11,7 @@ import { subscribeUser } from "../../workers/ws.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
 import {
   price as fmtPrice,
-  liqDistanceLabel,
+  num,
   parseAmount,
   parseLeverage,
   solscanUrl,
@@ -197,13 +197,14 @@ export function registerShort(bot: Bot<BotContext>) {
       ctx.actionLog = { skip: true };
       await subscribeUser(wallet, telegramId);
 
-      const liqHint = liqDistanceLabel("short", pf.snapshot.markPrice, pf.liqPrice);
+      const tokenSize = pf.notional / pf.snapshot.markPrice;
       const kb = new InlineKeyboard()
-        .text("🛑 Set stop loss", `editsl:${symbol}:short`)
+        .text("🛑 Set SL", `editsl:${symbol}:short`)
+        .text("🎯 Set TP", `edittp:${symbol}:short`)
         .row()
         .text("📊 View position", "nav:positions");
 
-      const msg = fmt`✅ ${FormattedString.b(`Opened — Short ${usd(pf.notional, 0, 0)} of ${symbol}`)}\n\nEntry: ~${fmtPrice(pf.snapshot.markPrice)}\nFee paid: ${usd(pf.feeUsdc)}\n\n⚠️ No stop loss set. If price ${liqHint} you get stopped out.\n\n${FormattedString.link("Solscan ↗", solscanUrl(sig))}`;
+      const msg = fmt`✅ ${FormattedString.b(`Short ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
       await ctx.editMessageText(msg.text, {
         entities: msg.entities,
         reply_markup: kb,

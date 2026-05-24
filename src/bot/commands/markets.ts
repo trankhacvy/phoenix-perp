@@ -167,8 +167,8 @@ export async function sendMarketDetail(
 
   const kb = new InlineKeyboard();
   if (!isolated) {
-    kb.text("🟢 Buy / Long", `trade:long:${symbol}`)
-      .text("🔴 Sell / Short", `trade:short:${symbol}`)
+    kb.text("🟢 Long", `trade:long:${symbol}`)
+      .text("🔴 Short", `trade:short:${symbol}`)
       .row();
   }
   kb.text("🔔 Price alert", `pricealert:${symbol}`).text("← Markets", `markets:page:${fromPage}`);

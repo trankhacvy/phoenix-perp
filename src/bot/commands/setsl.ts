@@ -149,8 +149,12 @@ export function registerSetSl(bot: Bot<BotContext>) {
         slPrice: Number(priceStr),
         slMode: mode,
       });
+      const navKb = new InlineKeyboard()
+        .text("🎯 Set TP", `edittp:${symbol}:${side}`)
+        .row()
+        .text("📊 View position", "nav:positions");
       const msg = fmt`✅ ${FormattedString.b("Stop loss set")}\n\n${symbol} — ${fmtPrice(Number(priceStr))}\nYou'll be notified when it triggers.`;
-      await ctx.editMessageText(msg.text, { entities: msg.entities });
+      await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: navKb });
     } catch (e) {
       logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (SL) failed");
       await renderBotError(ctx, e, { action: "Set stop loss", edit: true });
@@ -181,21 +185,19 @@ export async function sendSlPrompt(
   const pcts = [2, 5, 10, 15, 20];
   const kb = new InlineKeyboard();
 
-  for (let i = 0; i < pcts.length; i++) {
-    const p = pcts[i];
+  for (const p of pcts) {
     const triggerPrice =
       positionSide === "long" ? markPrice * (1 - p / 100) : markPrice * (1 + p / 100);
     const pnl = estimatePnlFromEntry(pos, triggerPrice);
     const sign = positionSide === "long" ? "-" : "+";
 
     kb.text(
-      `${sign}${p}%  ${fmtPrice(triggerPrice)}  ${signedUsd(pnl)}`,
+      `${sign}${p}%  →  ${fmtPrice(triggerPrice)}  (${signedUsd(pnl)})`,
       `sl:mode:${symbol}:${priceForCallback(triggerPrice)}:market:${positionSide}`,
-    );
-    if (i === 1 || i === 3) kb.row();
+    ).row();
   }
 
-  kb.row().text("Enter price manually →", `sl_custom:${symbol}:${positionSide}`);
+  kb.text("Enter price manually →", `sl_custom:${symbol}:${positionSide}`);
 
   if (pos.stopLoss) {
     kb.row()
@@ -208,7 +210,7 @@ export async function sendSlPrompt(
   const sideLabel = positionSide === "long" ? "LONG" : "SHORT";
   const pnlLine = fmt`${FormattedString.b(signedUsd(unrealizedPnl))} uPnL`;
 
-  const msg = fmt`⛔ ${FormattedString.b(`Stop Loss — ${symbol} ${sideLabel}`)}\n\nEntry       ${FormattedString.b(fmtPrice(entryPrice))}\nMark now  ${FormattedString.b(fmtPrice(markPrice))}  (${pnlLine})\nLiq price   ${FormattedString.b(liqLabel)}\nCurrent SL  ${FormattedString.b(currentSlLabel)}\n\nSelect a stop loss level:`;
+  const msg = fmt`⛔ ${FormattedString.b(`Stop Loss — ${symbol} ${sideLabel}`)}\n\nEntry       ${FormattedString.b(fmtPrice(entryPrice))}\nMark now  ${FormattedString.b(fmtPrice(markPrice))}  (${pnlLine})\nLiq price   ${FormattedString.b(liqLabel)}\nCurrent SL  ${FormattedString.b(currentSlLabel)}\n\nSelect a stop loss level ${FormattedString.i("(% move  →  trigger price  (est. P&L))")}:`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
