@@ -4,10 +4,11 @@ import WebSocket from "ws";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
 import { alertSubscriptions, users, walletMonitors } from "../db/schema/index.js";
-import { alertQueue } from "../jobs/queues.js";
+import { type AlertButton, alertQueue } from "../jobs/queues.js";
 import { MONITOR_EVENTS_CHANNEL } from "../lib/constants.js";
 import { logger } from "../lib/logger.js";
 import { redis } from "../lib/redis.js";
+import { isIsolatedOnly } from "../services/phoenix/market.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { RiskTier, TraderStateEvent } from "../types/index.js";
 
@@ -40,22 +41,35 @@ const RISK_ALERT_TIERS: RiskTier[] = [
   "highRisk",
 ];
 
-const TIER_MESSAGES: Record<string, string> = {
-  atRisk: "⚠️ <b>Account At Risk</b>\nYour margin is below initial requirement.",
-  at_risk: "⚠️ <b>Account At Risk</b>\nYour margin is below initial requirement.",
-  cancellable: "🟠 <b>Orders May Be Cancelled</b>\nRisk-increasing orders can be force-cancelled.",
-  liquidatable: "🔴 <b>Liquidation Warning</b>\nYour account can be liquidated now.",
-  backstopLiquidatable: "🆘 <b>Backstop Liquidation</b>\nAccount beyond normal liquidation.",
-  highRisk: "🆘 <b>High Risk — ADL Eligible</b>\nAccount deeply stressed.",
-};
+const NAV_RISK_KB: AlertButton[][] = [
+  [
+    { text: "📊 Positions", callback_data: "nav:positions" },
+    { text: "📥 Deposit", callback_data: "nav:deposit" },
+  ],
+];
 
-function buildRiskAlertMessage(event: TraderStateEvent): string | null {
+interface AlertPayload {
+  message: string;
+  keyboard?: AlertButton[][];
+}
+
+function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
   if (!RISK_ALERT_TIERS.includes(event.riskTier)) return null;
-  return [
-    TIER_MESSAGES[event.riskTier] ?? "",
-    `Effective collateral: <code>${event.effectiveCollateral} USDC</code>`,
-    `Risk score: <code>${event.riskScore}</code>`,
-  ].join("\n");
+  const col = `$${Number(event.effectiveCollateral).toFixed(2)}`;
+  const tier = event.riskTier;
+
+  const messages: Record<string, string> = {
+    atRisk: `⚠️ <b>Account At Risk</b>\n\nYour margin is below initial requirement.\nCollateral: <code>${col}</code>\n\nDeposit more or reduce positions.`,
+    at_risk: `⚠️ <b>Account At Risk</b>\n\nYour margin is below initial requirement.\nCollateral: <code>${col}</code>\n\nDeposit more or reduce positions.`,
+    cancellable: `🟠 <b>Orders May Be Cancelled</b>\n\nRisk-increasing orders can be force-cancelled.\nCollateral: <code>${col}</code>\n\nClose positions or add margin.`,
+    liquidatable: `🚨 <b>LIQUIDATION WARNING</b>\n\nYour account can be liquidated NOW.\nCollateral: <code>${col}</code>\n\nAct immediately — deposit or close positions.`,
+    backstopLiquidatable: `🆘 <b>CRITICAL — Backstop Liquidation</b>\n\nAccount beyond normal liquidation threshold.\nCollateral: <code>${col}</code>\n\nDeposit immediately.`,
+    highRisk: `🆘 <b>CRITICAL — High Risk</b>\n\nAccount is deeply stressed and ADL-eligible.\nCollateral: <code>${col}</code>\n\nDeposit immediately.`,
+  };
+
+  const msg = messages[tier];
+  if (!msg) return null;
+  return { message: msg, keyboard: NAV_RISK_KB };
 }
 
 function addWatcher(walletAddress: string, telegramId: string) {
@@ -124,10 +138,11 @@ async function ensureConnection(walletAddress: string) {
         alertQueue
           .add("ws-error", {
             telegramId: ownerTid,
-            type: "fill",
+            type: "ws_error",
             symbol: undefined,
             message:
-              "⚠️ <b>Live alerts interrupted</b>\n\nWe lost connection to the market feed. Reconnecting…\n\nUse /positions to check your account.",
+              "⚠️ <b>Live alerts interrupted</b>\n\nLost connection to market feed. Reconnecting…",
+            keyboard: [[{ text: "📊 Check positions", callback_data: "nav:positions" }]],
           })
           .catch(() => undefined);
       }
@@ -166,38 +181,43 @@ async function handleOwnAccountEvent(
           type: "tpsl_flip",
           symbol: pos.symbol,
           message: [
-            `🔄 <b>Position Flipped: ${pos.symbol}</b>`,
-            "Your TP/SL orders were cancelled by the protocol.",
-            "Tap /positions to reattach TP/SL.",
+            `🔄 <b>Position Reversed: ${pos.symbol}</b>`,
+            "",
+            `Your ${pos.symbol} position flipped sides — existing TP/SL orders were cleared.`,
+            "Set new TP/SL to protect your position.",
           ].join("\n"),
+          keyboard: [[{ text: "📊 Manage position", callback_data: "nav:positions" }]],
         });
       }
     }
   }
   await redis.set(prevKey, JSON.stringify(event.positions ?? []), "EX", 3600);
 
-  const alertMsg = buildRiskAlertMessage(event);
-  if (alertMsg) {
+  const riskAlert = buildRiskAlert(event);
+  if (riskAlert) {
     const symbols = (event.positions ?? []).map((p) => p.symbol).join(",");
     await alertQueue.add("risk-tier", {
       telegramId,
       type: event.riskTier.toLowerCase(),
       symbol: symbols || undefined,
-      message: alertMsg,
+      message: riskAlert.message,
+      keyboard: riskAlert.keyboard,
     });
   }
 
   for (const fill of event.fills ?? []) {
+    const notional = (Number(fill.size) * Number(fill.price)).toFixed(2);
     await alertQueue.add("fill", {
       telegramId,
       type: "fill",
       symbol: fill.symbol,
       message: [
         `✅ <b>Order Filled: ${fill.symbol}</b>`,
-        `Side: ${fill.side.toUpperCase()}`,
-        `Size: ${fill.size} | Price: $${fill.price}`,
-        `Fee: $${fill.fee}`,
+        "",
+        `${fill.side.toUpperCase()} · ${fill.size} ${fill.symbol} @ $${fill.price}`,
+        `Notional: $${notional}  ·  Fee: $${fill.fee}`,
       ].join("\n"),
+      keyboard: [[{ text: "📊 View position", callback_data: "nav:positions" }]],
     });
 
     const userId = await getOwnerUserId(walletAddress);
@@ -210,16 +230,38 @@ async function handleOwnAccountEvent(
   }
 }
 
+function copyCounterKb(
+  symbol: string,
+  side: "long" | "short",
+  walletAddress: string,
+): AlertButton[][] {
+  const counter = side === "long" ? "short" : "long";
+  const copyLabel = side === "long" ? "🟢 Copy Long" : "🔴 Copy Short";
+  const counterLabel = counter === "long" ? "🟢 Counter Long" : "🔴 Counter Short";
+  const rows: AlertButton[][] = [];
+  if (!isIsolatedOnly(symbol)) {
+    rows.push([
+      { text: `${copyLabel} ${symbol}`, callback_data: `trade:${side}:${symbol}` },
+      { text: `${counterLabel} ${symbol}`, callback_data: `trade:${counter}:${symbol}` },
+    ]);
+  }
+  rows.push([{ text: "📊 Trader", callback_data: `walletinfo:back:${walletAddress}` }]);
+  return rows;
+}
+
+function traderKb(walletAddress: string): AlertButton[][] {
+  return [[{ text: "📊 Trader", callback_data: `walletinfo:back:${walletAddress}` }]];
+}
+
 async function handleMonitoredWalletEvent(
   walletAddress: string,
   watcherTelegramIds: string[],
   event: TraderStateEvent,
 ) {
-  const short = `${walletAddress.slice(0, 4)}…${walletAddress.slice(-4)}`;
+  const short = walletAddress;
 
   const prevKey = `ws:positions:${walletAddress}`;
   const prev = await redis.get(prevKey);
-  const prevPositions: TraderStateEvent["positions"] = prev ? JSON.parse(prev) : [];
 
   const positions = event.positions ?? [];
 
@@ -227,22 +269,31 @@ async function handleMonitoredWalletEvent(
     await redis.set(prevKey, JSON.stringify(positions), "EX", 3600);
   }
 
-  const alerts: { type: string; symbol: string; message: string }[] = [];
+  // First event after subscribe / Redis TTL expiry — seed cache, skip diff
+  // to avoid false "opened" alerts for already-existing positions.
+  if (!prev) return;
+
+  const prevPositions = JSON.parse(prev) as TraderStateEvent["positions"];
+
+  const alerts: { type: string; symbol: string; message: string; keyboard?: AlertButton[][] }[] =
+    [];
 
   for (const pos of positions) {
     const existed = prevPositions.find((p) => p.symbol === pos.symbol);
     if (!existed) {
-      const levPart = pos.leverage ? `\nLeverage: ${pos.leverage}x` : "";
+      const levPart = pos.leverage ? ` · ${pos.leverage}x` : "";
       alerts.push({
         type: "monitor_open",
         symbol: pos.symbol,
         message: `👁 <b>${short} opened ${pos.symbol}</b>\n${pos.side.toUpperCase()} · ${pos.size} ${pos.symbol} @ $${pos.entryPrice}${levPart}`,
+        keyboard: copyCounterKb(pos.symbol, pos.side, walletAddress),
       });
     } else if (existed.side !== pos.side) {
       alerts.push({
         type: "monitor_flip",
         symbol: pos.symbol,
         message: `👁 <b>${short} flipped ${pos.symbol}</b>\n${existed.side.toUpperCase()} → ${pos.side.toUpperCase()}`,
+        keyboard: copyCounterKb(pos.symbol, pos.side, walletAddress),
       });
     }
   }
@@ -254,6 +305,7 @@ async function handleMonitoredWalletEvent(
         type: "monitor_close",
         symbol: prevPos.symbol,
         message: `👁 <b>${short} closed ${prevPos.symbol}</b>\nWas ${prevPos.side.toUpperCase()} · ${prevPos.size} ${prevPos.symbol}`,
+        keyboard: traderKb(walletAddress),
       });
     }
   }
@@ -263,6 +315,7 @@ async function handleMonitoredWalletEvent(
       type: "monitor_fill",
       symbol: fill.symbol,
       message: `👁 <b>${short} filled ${fill.symbol}</b>\n${fill.side.toUpperCase()} · ${fill.size} @ $${fill.price}`,
+      keyboard: traderKb(walletAddress),
     });
   }
 
@@ -273,6 +326,7 @@ async function handleMonitoredWalletEvent(
         type: alert.type,
         symbol: alert.symbol,
         message: alert.message,
+        keyboard: alert.keyboard,
       });
     }
   }
@@ -415,6 +469,9 @@ async function checkPriceAlerts(mids: Record<string, number>) {
         type: "price",
         symbol: sub.symbol,
         message: `🔔 <b>Price Alert: ${sub.symbol}</b>\n\nPrice reached <code>$${current}</code>\n(Your target: <code>$${Math.abs(trigger)}</code>)`,
+        keyboard: [
+          [{ text: `📊 ${sub.symbol} Market`, callback_data: `market:detail:${sub.symbol}:0` }],
+        ],
       });
     }
   }

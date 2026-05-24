@@ -1,19 +1,65 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { type Bot, InputFile } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "../../db/index.js";
+import { walletMonitors } from "../../db/schema/index.js";
 import { type WalletMetadata, leaderboardSnapshots } from "../../db/schema/leaderboard.js";
+import { MONITOR_EVENTS_CHANNEL } from "../../lib/constants.js";
+import { redis } from "../../lib/redis.js";
 import { generateWalletCard } from "../../services/image.js";
+import { isIsolatedOnly } from "../../services/phoenix/market.js";
 import {
   computeWalletAnalytics,
   fetchAllTradeHistory,
   getTraderState,
 } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
-import { compactUsd, pnlEmoji, shortAddr, signedUsd, timeAgo, usd } from "../lib/fmt.js";
+import {
+  compactUsd,
+  price as fmtPrice,
+  pnlEmoji,
+  shortAddr,
+  signedUsd,
+  timeAgo,
+  usd,
+} from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryScreen } from "./history.js";
+
+function buildExternalPositionRow(
+  pos: {
+    symbol: string;
+    side: "long" | "short";
+    leverage?: number;
+    entryPrice: string;
+    markPrice: string;
+    unrealizedPnl: string;
+  },
+  botUsername: string,
+): FormattedString {
+  const upnl = Number(pos.unrealizedPnl);
+  const sideIcon = pos.side === "long" ? "🟢" : "🔴";
+  const sideLabel = pos.side === "long" ? "LONG" : "SHORT";
+  const levLabel = pos.leverage ? ` ${pos.leverage}x` : "";
+  const counterSide = pos.side === "long" ? "short" : "long";
+  const isolated = isIsolatedOnly(pos.symbol);
+  const title = `${sideIcon} ${pos.symbol} · ${sideLabel}${levLabel}`;
+  const titleLine = isolated
+    ? FormattedString.b(title)
+    : FormattedString.link(title, `https://t.me/${botUsername}?start=${pos.side}_${pos.symbol}`);
+  const actionLinks = isolated
+    ? fmt``
+    : fmt`   ${FormattedString.link("Copy", `https://t.me/${botUsername}?start=${pos.side}_${pos.symbol}`)} · ${FormattedString.link("Counter", `https://t.me/${botUsername}?start=${counterSide}_${pos.symbol}`)}`;
+
+  return FormattedString.join(
+    [
+      fmt`${titleLine}   ${FormattedString.b(signedUsd(upnl))} ${pnlEmoji(upnl)}`,
+      fmt`   Entry ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}  →  ${FormattedString.b(fmtPrice(Number(pos.markPrice)))}${actionLinks}`,
+    ],
+    "\n",
+  );
+}
 
 export async function sendWalletScreen(
   ctx: BotContext,
@@ -46,9 +92,7 @@ export async function sendWalletScreen(
   const meta = lbRow?.metadata as WalletMetadata | null;
   const sections: FormattedString[] = [];
 
-  const headerParts: FormattedString[] = [
-    fmt`📊 ${FormattedString.code(shortAddr(walletAddress))}`,
-  ];
+  const headerParts: FormattedString[] = [fmt`📊 ${FormattedString.code(walletAddress)}`];
   if (meta?.name) {
     const nameStr = `${meta.avatar ?? ""} ${meta.name}`.trim();
     headerParts.push(fmt`${FormattedString.b(nameStr)}`);
@@ -72,6 +116,24 @@ export async function sendWalletScreen(
       "\n",
     ),
   );
+
+  // ── Live Positions ──────────────────────────────────────────────────────────
+  const positions = state.positions ?? [];
+  const validPositions = positions.filter(
+    (p) => Number(p.entryPrice) > 0 && Number(p.markPrice) > 0,
+  );
+  if (!isOwn && validPositions.length > 0) {
+    const shown = validPositions.slice(0, 5);
+    const botUsername = ctx.me.username ?? "bot";
+    const posLines: FormattedString[] = [fmt`📍 ${FormattedString.b("Live Positions")}`];
+    for (const pos of shown) {
+      posLines.push(buildExternalPositionRow(pos, botUsername));
+    }
+    if (validPositions.length > shown.length) {
+      posLines.push(fmt`${FormattedString.i(`+ ${validPositions.length - shown.length} more`)}`);
+    }
+    sections.push(FormattedString.join(posLines, "\n\n"));
+  }
 
   // ── Performance ──────────────────────────────────────────────────────────────
   if (analytics.totalFills > 0) {
@@ -139,12 +201,33 @@ export async function sendWalletScreen(
         .text("📋 History", "nav:history")
         .row()
         .text("🖼 Generate Card", `wc:gen:${walletAddress}`)
-    : new InlineKeyboard()
-        .text("📋 Trade History", `walletinfo:hist:${walletAddress}:0`)
-        .row()
-        .text("👁 Monitor", `monitor:add:${walletAddress}`)
-        .row()
-        .text("🖼 Generate Card", `wc:gen:${walletAddress}`);
+    : await (async () => {
+        const k = new InlineKeyboard();
+        const alreadyFollowing = ctx.user
+          ? await db.query.walletMonitors.findFirst({
+              where: and(
+                eq(walletMonitors.userId, ctx.user.id),
+                eq(walletMonitors.watchedWallet, walletAddress),
+                eq(walletMonitors.enabled, true),
+              ),
+            })
+          : null;
+        if (alreadyFollowing) {
+          k.text("✅ Following", `walletinfo:unfollow:${walletAddress}`).row();
+        } else {
+          k.text("👁 Follow this trader", `walletinfo:follow:${walletAddress}`).row();
+        }
+        const actionRow: [string, string][] = [
+          ["📋 Trade History", `walletinfo:histopen:${walletAddress}`],
+        ];
+        if (validPositions.length > 5) {
+          actionRow.push(["📊 All Positions", `walletinfo:pos:${walletAddress}`]);
+        }
+        for (const [label, data] of actionRow) k.text(label, data);
+        k.row();
+        k.text("🖼 Generate Card", `wc:gen:${walletAddress}`);
+        return k;
+      })();
 
   await ctx.api.editMessageText(chatId, loadingMsgId, msg.text, {
     entities: msg.entities,
@@ -180,12 +263,141 @@ export function registerWallet(bot: Bot<BotContext>) {
     }
   });
 
+  bot.callbackQuery(/^walletinfo:histopen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendHistoryScreen(ctx, 0, false, ctx.match[1]);
+  });
+
   bot.callbackQuery(/^walletinfo:hist:([1-9A-HJ-NP-Za-km-z]{32,44}):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    await sendHistoryScreen(ctx, Number(ctx.match[2]), true, ctx.match[1]);
+  });
+
+  bot.callbackQuery(/^walletinfo:back:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Loading…");
+    if (!ctx.user) return;
     const address = ctx.match[1];
-    const page = Number(ctx.match[2]);
-    await sendHistoryScreen(ctx, page, true, address);
+    const loading = await ctx.reply("Fetching trader info…");
+    try {
+      await sendWalletScreen(ctx, address, loading.chat.id, loading.message_id);
+    } catch {
+      await ctx.api.editMessageText(
+        loading.chat.id,
+        loading.message_id,
+        "Failed to fetch trader data. Try again.",
+      );
+    }
+  });
+
+  bot.callbackQuery(/^walletinfo:follow:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    if (!ctx.user) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const address = ctx.match[1];
+
+    if (address === ctx.user.walletAddress) {
+      await ctx.answerCallbackQuery({ text: "That's your own wallet.", show_alert: true });
+      return;
+    }
+
+    const existing = await db
+      .select({ id: walletMonitors.id, watchedWallet: walletMonitors.watchedWallet })
+      .from(walletMonitors)
+      .where(and(eq(walletMonitors.userId, ctx.user.id), eq(walletMonitors.enabled, true)));
+
+    const alreadyFollowing = existing.some((r) => r.watchedWallet === address);
+    if (!alreadyFollowing && existing.length >= 10) {
+      await ctx.answerCallbackQuery({
+        text: "Max 10 monitors. Remove one first via /monitor.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    await db
+      .insert(walletMonitors)
+      .values({
+        id: crypto.randomUUID(),
+        userId: ctx.user.id,
+        watchedWallet: address,
+        alertOnFill: true,
+        alertOnPositionChange: true,
+        enabled: true,
+      })
+      .onConflictDoUpdate({
+        target: [walletMonitors.userId, walletMonitors.watchedWallet],
+        set: { enabled: true },
+      });
+
+    await redis.publish(
+      MONITOR_EVENTS_CHANNEL,
+      JSON.stringify({ action: "subscribe", wallet: address, telegramId: ctx.user.telegramId }),
+    );
+
+    await ctx.answerCallbackQuery({ text: "✅ Now following this trader", show_alert: false });
+    const loading = await ctx.reply("Refreshing…");
+    try {
+      await sendWalletScreen(ctx, address, loading.chat.id, loading.message_id);
+    } catch {
+      await ctx.api.deleteMessage(loading.chat.id, loading.message_id).catch(() => {});
+    }
+  });
+
+  bot.callbackQuery(/^walletinfo:unfollow:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    if (!ctx.user) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const address = ctx.match[1];
+
+    await db
+      .update(walletMonitors)
+      .set({ enabled: false })
+      .where(
+        and(eq(walletMonitors.userId, ctx.user.id), eq(walletMonitors.watchedWallet, address)),
+      );
+
+    await redis.publish(
+      MONITOR_EVENTS_CHANNEL,
+      JSON.stringify({ action: "unsubscribe", wallet: address, telegramId: ctx.user.telegramId }),
+    );
+
+    await ctx.answerCallbackQuery({ text: "Unfollowed", show_alert: false });
+    const loading = await ctx.reply("Refreshing…");
+    try {
+      await sendWalletScreen(ctx, address, loading.chat.id, loading.message_id);
+    } catch {
+      await ctx.api.deleteMessage(loading.chat.id, loading.message_id).catch(() => {});
+    }
+  });
+
+  bot.callbackQuery(/^walletinfo:pos:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    const address = ctx.match[1];
+    const state = await getTraderState(address);
+    const positions = (state.positions ?? []).filter(
+      (p) => Number(p.entryPrice) > 0 && Number(p.markPrice) > 0,
+    );
+
+    if (positions.length === 0) {
+      await ctx.reply(`No open positions for ${shortAddr(address)}.`);
+      return;
+    }
+
+    const botUsername = ctx.me.username ?? "bot";
+    const totalUpnl = positions.reduce((s, p) => s + Number(p.unrealizedPnl), 0);
+    const header = fmt`📊 ${FormattedString.b(`Open Positions (${positions.length})`)} · ${FormattedString.code(shortAddr(address))}\nTotal uPnL: ${FormattedString.b(signedUsd(totalUpnl))} ${pnlEmoji(totalUpnl)}`;
+    const rows = positions.map((pos) => buildExternalPositionRow(pos, botUsername));
+    const msg = FormattedString.join([header, ...rows], "\n\n");
+
+    await ctx.reply(msg.text, {
+      entities: msg.entities,
+      link_preview_options: { is_disabled: true },
+    });
   });
 
   bot.callbackQuery(/^wc:gen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {

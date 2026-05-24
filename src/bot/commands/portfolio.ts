@@ -161,9 +161,9 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
         return k;
       })()
     : new InlineKeyboard()
-        .text("📋 Trade History", `walletinfo:hist:${targetWallet}:0`)
+        .text("📋 Trade History", `walletinfo:histopen:${targetWallet}`)
         .row()
-        .text("👁 Monitor", `monitor:add:${targetWallet}`);
+        .text("👁 Follow", `walletinfo:follow:${targetWallet}`);
 
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

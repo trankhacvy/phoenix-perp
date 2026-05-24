@@ -20,7 +20,7 @@ export function usd(n: number | string, minDec = 2, maxDec = 2): string {
 
 export function price(n: number | string): string {
   const v = Number(n);
-  if (Number.isNaN(v)) return "$—";
+  if (Number.isNaN(v) || v === 0) return "$—";
   if (v >= 1000) return usd(v);
   if (v >= 1) return `$${num(v, 2, 2)}`;
   if (v >= 0.01) return `$${num(v, 4, 4)}`;
