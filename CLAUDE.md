@@ -14,10 +14,8 @@ This project uses **pnpm** as its package manager. Install with `brew install pn
 # Install dependencies
 pnpm install
 
-# Development (run each in a separate terminal)
-pnpm dev                     # bot + webhook server (long-polling in dev)
-pnpm dev:worker:ws           # WebSocket worker (Phoenix traderState subscriptions)
-pnpm dev:worker:alert        # BullMQ alert dispatcher
+# Development (single process — runs bot + all workers)
+pnpm dev                     # bot + WS manager + alert worker + leaderboard scanner
 
 # Build & type-check
 pnpm build                   # tsc --noEmit then emit to dist/
@@ -43,15 +41,16 @@ To run a single test file: `pnpm exec vitest run tests/unit/services/referral.te
 
 ### Process model
 
-Three independently deployed processes (Railway services):
+Single process — all components start from `src/main.ts`:
 
-| Process | Entry point | Role |
-|---------|------------|------|
-| Bot | `src/main.ts` | grammY bot + Fastify webhook server |
-| WS worker | `src/workers/ws.ts` | Phoenix WS subscriptions, risk/fill detection |
-| Alert worker | `src/workers/alert.ts` | BullMQ consumer, Telegram message dispatch |
+| Component | Module | Role |
+|-----------|--------|------|
+| Bot | `src/bot/index.ts` | grammY bot + Fastify webhook server |
+| WS manager | `src/workers/ws.ts` | Phoenix WS subscriptions, risk/fill detection |
+| Alert worker | `src/jobs/processors/alert.ts` | BullMQ consumer, Telegram message dispatch |
+| Leaderboard | `src/workers/leaderboard.ts` | GPA + bot-user discovery, periodic REST hydration |
 
-The WS worker writes jobs to BullMQ (`alertQueue`). The alert worker processes them and calls `bot.api.sendMessage`. They never call each other directly.
+Workers are modules with `start/stop` exports, not standalone scripts. The WS manager writes jobs to BullMQ (`alertQueue`). The alert worker processes them and calls `bot.api.sendMessage`.
 
 ### Bot request flow
 

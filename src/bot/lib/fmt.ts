@@ -111,6 +111,12 @@ export function liqDistanceLabel(
   return `${dir} ${num(dist, 0, 1)}% to ~${price(liqPrice)}`;
 }
 
+export function fundingDot(rateDecimal: number): string {
+  const apr = Math.abs(rateDecimal * 1095 * 100);
+  if (apr < 1) return "⚪";
+  return rateDecimal >= 0 ? "🟢" : "🔴";
+}
+
 export function fundingTrend(rates: number[]): string {
   if (rates.length < 3) return "";
   const recent = rates.slice(-3);

@@ -23,6 +23,7 @@ import { registerSetTp } from "./settp.js";
 import { registerShare } from "./share.js";
 import { registerShort } from "./short.js";
 import { registerStart } from "./start.js";
+import { registerStatus } from "./status.js";
 import { registerWalletMonitor } from "./wallet-monitor.js";
 import { registerWallet } from "./wallet.js";
 import { clearWithdrawExtState, registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
@@ -52,6 +53,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerWallet(bot);
   registerLeaderboard(bot);
   registerLog(bot);
+  registerStatus(bot);
 
   bot.callbackQuery("nav:balance", async (ctx) => {
     await ctx.answerCallbackQuery();

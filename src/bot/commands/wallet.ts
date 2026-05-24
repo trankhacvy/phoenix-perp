@@ -1,6 +1,9 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { eq } from "drizzle-orm";
 import { type Bot, InputFile } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { db } from "../../db/index.js";
+import { type WalletMetadata, leaderboardSnapshots } from "../../db/schema/leaderboard.js";
 import { generateWalletCard } from "../../services/image.js";
 import {
   computeWalletAnalytics,
@@ -12,7 +15,7 @@ import { compactUsd, pnlEmoji, shortAddr, signedUsd, timeAgo, usd } from "../lib
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryScreen } from "./history.js";
 
-async function sendWalletScreen(
+export async function sendWalletScreen(
   ctx: BotContext,
   walletAddress: string,
   chatId: number,
@@ -20,9 +23,12 @@ async function sendWalletScreen(
 ): Promise<void> {
   const isOwn = walletAddress === ctx.user?.walletAddress;
 
-  const [state, allTrades] = await Promise.all([
+  const [state, allTrades, lbRow] = await Promise.all([
     getTraderState(walletAddress),
     fetchAllTradeHistory(walletAddress),
+    db.query.leaderboardSnapshots.findFirst({
+      where: eq(leaderboardSnapshots.walletAddress, walletAddress),
+    }),
   ]);
 
   const analytics = computeWalletAnalytics(allTrades);
@@ -37,10 +43,20 @@ async function sendWalletScreen(
     return;
   }
 
+  const meta = lbRow?.metadata as WalletMetadata | null;
   const sections: FormattedString[] = [];
 
-  // ── Header ──────────────────────────────────────────────────────────────────
-  sections.push(fmt`📊 ${FormattedString.code(shortAddr(walletAddress))}`);
+  const headerParts: FormattedString[] = [
+    fmt`📊 ${FormattedString.code(shortAddr(walletAddress))}`,
+  ];
+  if (meta?.name) {
+    const nameStr = `${meta.avatar ?? ""} ${meta.name}`.trim();
+    headerParts.push(fmt`${FormattedString.b(nameStr)}`);
+  }
+  if (meta?.twitter) {
+    headerParts.push(FormattedString.link(`@${meta.twitter}`, `https://x.com/${meta.twitter}`));
+  }
+  sections.push(FormattedString.join(headerParts, "\n"));
 
   // ── Portfolio ────────────────────────────────────────────────────────────────
   const openPnl = Number(state.unrealizedPnl);

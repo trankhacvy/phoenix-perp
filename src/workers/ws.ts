@@ -19,6 +19,7 @@ const connections = new Map<string, WebSocket>();
 const reconnecting = new Set<string>();
 const reconnectFailures = new Map<string, number>();
 const MAX_RECONNECT_FAILURES = 3;
+let shuttingDown = false;
 
 // wallet → Set of telegramIds that want alerts for this wallet (all watchers)
 const watcherIndex = new Map<string, Set<string>>();
@@ -96,10 +97,11 @@ async function ensureConnection(walletAddress: string) {
     connections.delete(walletAddress);
     logger.info({ walletAddress }, "WS closed");
 
-    if (reconnecting.has(walletAddress)) return;
+    if (shuttingDown || reconnecting.has(walletAddress)) return;
     reconnecting.add(walletAddress);
     setTimeout(() => {
       reconnecting.delete(walletAddress);
+      if (shuttingDown) return;
       const hasWatchers =
         (watcherIndex.get(walletAddress)?.size ?? 0) > 0 || ownerMap.has(walletAddress);
       if (hasWatchers) {
@@ -176,9 +178,11 @@ async function handleOwnAccountEvent(
 
   const alertMsg = buildRiskAlertMessage(event);
   if (alertMsg) {
+    const symbols = (event.positions ?? []).map((p) => p.symbol).join(",");
     await alertQueue.add("risk-tier", {
       telegramId,
       type: event.riskTier.toLowerCase(),
+      symbol: symbols || undefined,
       message: alertMsg,
     });
   }
@@ -299,9 +303,13 @@ export function unsubscribeMonitored(watchedWallet: string, telegramId: string) 
 }
 
 export function unsubscribeUser(walletAddress: string) {
+  const tid = ownerMap.get(walletAddress);
   ownerMap.delete(walletAddress);
   ownerUserIdCache.delete(walletAddress);
+
   const watchers = watcherIndex.get(walletAddress);
+  if (tid && watchers) watchers.delete(tid);
+
   if (!watchers || watchers.size === 0) {
     const ws = connections.get(walletAddress);
     ws?.close();
@@ -343,11 +351,11 @@ function subscribeAllMids() {
 
   allMidsWs.on("close", () => {
     allMidsWs = null;
-    if (allMidsReconnecting) return;
+    if (shuttingDown || allMidsReconnecting) return;
     allMidsReconnecting = true;
     setTimeout(() => {
       allMidsReconnecting = false;
-      subscribeAllMids();
+      if (!shuttingDown) subscribeAllMids();
     }, 5000);
   });
 
@@ -412,7 +420,7 @@ async function checkPriceAlerts(mids: Record<string, number>) {
   }
 }
 
-async function bootstrap() {
+export async function startWsManager() {
   const ownWallets = await db
     .select({ walletAddress: users.walletAddress, telegramId: users.telegramId })
     .from(users);
@@ -434,14 +442,28 @@ async function bootstrap() {
     await subscribeMonitored(m.watchedWallet, m.telegramId);
   }
 
-  logger.info(
-    { ownWallets: ownWallets.length, monitors: monitors.length },
-    "WS worker bootstrapped",
-  );
+  logger.info({ ownWallets: ownWallets.length, monitors: monitors.length }, "WS manager started");
 
   subscribeMonitorEvents();
   subscribeAllMids();
 }
+
+export function stopWsManager() {
+  shuttingDown = true;
+  for (const [, ws] of connections) ws.close();
+  if (allMidsWs) allMidsWs.close();
+  if (monitorSub) monitorSub.disconnect();
+}
+
+export function getWsStats() {
+  return {
+    connections: connections.size,
+    owners: ownerMap.size,
+    watchers: watcherIndex.size,
+  };
+}
+
+let monitorSub: Redis | null = null;
 
 function subscribeMonitorEvents() {
   const sub = new Redis(config.REDIS_URL, {
@@ -470,17 +492,6 @@ function subscribeMonitorEvents() {
   });
 
   sub.on("error", (err: Error) => logger.error({ err }, "monitor:events Redis error"));
+
+  monitorSub = sub;
 }
-
-process.on("SIGTERM", () => {
-  for (const [, ws] of connections) {
-    ws.close();
-  }
-  if (allMidsWs) allMidsWs.close();
-  process.exit(0);
-});
-
-bootstrap().catch((err) => {
-  logger.error({ err }, "WS worker bootstrap failed");
-  process.exit(1);
-});

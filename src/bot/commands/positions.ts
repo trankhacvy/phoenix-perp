@@ -7,6 +7,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
+import { requireActivation } from "../lib/activation.js";
 import { renderBotError } from "../lib/errors.js";
 import {
   cryptoSize,
@@ -18,7 +19,6 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
-import { requireActivation } from "../lib/activation.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
@@ -102,9 +102,7 @@ export async function sendPositionsScreen(ctx: BotContext, edit = false): Promis
   const positions = state.positions ?? [];
 
   if (positions.length === 0) {
-    const kb = new InlineKeyboard()
-      .text("🟢 Long", "nav:long")
-      .text("🔴 Short", "nav:short");
+    const kb = new InlineKeyboard().text("🟢 Long", "nav:long").text("🔴 Short", "nav:short");
     const text = "You have no open positions.\n\nReady to trade?";
     if (edit && ctx.callbackQuery) {
       await ctx.editMessageText(text, { reply_markup: kb });
@@ -332,7 +330,10 @@ export function registerPositions(bot: Bot<BotContext>) {
         link_preview_options: { is_disabled: true },
       });
     } catch (editErr) {
-      logger.warn({ err: editErr, symbol, sig }, "editMessageText failed after closePosition succeeded");
+      logger.warn(
+        { err: editErr, symbol, sig },
+        "editMessageText failed after closePosition succeeded",
+      );
     }
 
     if (pos) {

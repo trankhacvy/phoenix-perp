@@ -9,14 +9,7 @@ import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
-import {
-  price as fmtPrice,
-  num,
-  parseAmount,
-  parseLeverage,
-  solscanUrl,
-  usd,
-} from "../lib/fmt.js";
+import { price as fmtPrice, num, parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 import {

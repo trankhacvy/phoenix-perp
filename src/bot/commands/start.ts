@@ -6,11 +6,13 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
+import { logger } from "../../lib/logger.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
 import { createEmbeddedWallet } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { usd } from "../lib/fmt.js";
+import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryDetail } from "./history.js";
 import { sendSizeStep } from "./long.js";
 import { sendMarketDetail } from "./markets.js";
@@ -50,6 +52,25 @@ export function registerStart(bot: Bot<BotContext>) {
         const fromPage = Number(parts[1] ?? "0");
         if (symbol) {
           await sendMarketDetail(ctx, symbol, Number.isNaN(fromPage) ? 0 : fromPage);
+          return;
+        }
+      }
+
+      if (payload.startsWith("wallet_")) {
+        const address = payload.slice(7);
+        if (BASE58_RE.test(address)) {
+          const loading = await ctx.reply("Fetching wallet analytics…");
+          try {
+            const { sendWalletScreen } = await import("./wallet.js");
+            await sendWalletScreen(ctx, address, loading.chat.id, loading.message_id);
+          } catch (err) {
+            logger.error({ err, walletAddress: address }, "wallet deep link failed");
+            await ctx.api.editMessageText(
+              loading.chat.id,
+              loading.message_id,
+              "Failed to fetch wallet data. Try again.",
+            );
+          }
           return;
         }
       }
@@ -112,7 +133,10 @@ export function registerStart(bot: Bot<BotContext>) {
 
     // ── New user: create wallet ───────────────────────────────────────────────
     const telegramId = String(ctx.from.id);
-    const referredBy = ctx.match ? String(ctx.match).trim() || undefined : undefined;
+    const rawPayload = ctx.match ? String(ctx.match).trim() : "";
+    const DEEP_LINK_PREFIXES = ["pos_", "hist_", "mkt_", "wallet_", "long_", "short_"];
+    const isDeepLink = DEEP_LINK_PREFIXES.some((p) => rawPayload.startsWith(p));
+    const referredBy = rawPayload && !isDeepLink ? rawPayload : undefined;
 
     const setupMsg = await ctx.reply("Creating your wallet... ⏳");
     const msgId = setupMsg.message_id;

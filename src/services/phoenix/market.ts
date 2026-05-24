@@ -1,10 +1,39 @@
-import type { ExchangeMarketConfig } from "@ellipsis-labs/rise";
+import type { ExchangeConfig, ExchangeMarketConfig } from "@ellipsis-labs/rise";
 import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
 
 export const ISOLATED_ONLY_MARKETS = new Set(["GOLD", "SILVER", "SKR", "WTIOIL"]);
 
+let _exchangeCache: { data: ExchangeConfig; ts: number } | null = null;
+const EXCHANGE_TTL_MS = 5 * 60_000;
+
+export async function getExchangeConfig(): Promise<ExchangeConfig> {
+  if (_exchangeCache && Date.now() - _exchangeCache.ts < EXCHANGE_TTL_MS) {
+    return _exchangeCache.data;
+  }
+  const data = await withRetry(() => getPhoenixClient().api.exchange().getExchange());
+  _exchangeCache = { data, ts: Date.now() };
+  return data;
+}
+
+export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
+  const exchange = await getExchangeConfig();
+  return exchange.markets;
+}
+
+export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
+  const markets = await getMarkets();
+  const upper = symbol.toUpperCase();
+  const found = markets.find((m) => m.symbol === upper);
+  if (!found) throw new Error(`Market ${upper} not found`);
+  return found;
+}
+
 export function isIsolatedOnly(symbol: string): boolean {
+  if (_exchangeCache) {
+    const market = _exchangeCache.data.markets.find((m) => m.symbol === symbol.toUpperCase());
+    if (market) return market.isolatedOnly;
+  }
   return ISOLATED_ONLY_MARKETS.has(symbol.toUpperCase());
 }
 
@@ -22,22 +51,30 @@ export interface MarketSnapshot {
   leverageTiers: Array<{ maxLeverage: number; maxNotionalUsdc: number }>;
 }
 
-let _marketsCache: { data: ExchangeMarketConfig[]; ts: number } | null = null;
-const MARKETS_TTL_MS = 60_000;
+export interface MarketListItem {
+  symbol: string;
+  markPrice: number;
+  fundingRate: number;
+  maxLeverage: number;
+  isIsolatedOnly: boolean;
+}
 
-export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
-  if (_marketsCache && Date.now() - _marketsCache.ts < MARKETS_TTL_MS) return _marketsCache.data;
-  const data = await getPhoenixClient().api.markets().getMarkets();
-  _marketsCache = { data, ts: Date.now() };
+const _snapshotCache = new Map<string, { data: MarketSnapshot; ts: number }>();
+const SNAPSHOT_TTL_MS = 30_000;
+
+export async function getMarketSnapshot(
+  symbol: string,
+  opts?: { skipCache?: boolean },
+): Promise<MarketSnapshot> {
+  const key = symbol.toUpperCase();
+  if (!opts?.skipCache) {
+    const cached = _snapshotCache.get(key);
+    if (cached && Date.now() - cached.ts < SNAPSHOT_TTL_MS) return cached.data;
+  }
+
+  const data = await withRetry(() => _getMarketSnapshot(symbol));
+  _snapshotCache.set(key, { data, ts: Date.now() });
   return data;
-}
-
-export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
-  return getPhoenixClient().api.markets().getMarket(symbol.toUpperCase());
-}
-
-export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
-  return withRetry(() => _getMarketSnapshot(symbol));
 }
 
 async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
@@ -74,6 +111,47 @@ async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
     isIsolatedOnly: isIsolatedOnly(symbol),
     leverageTiers,
   };
+}
+
+export async function getMarketListItems(
+  markets: ExchangeMarketConfig[],
+): Promise<MarketListItem[]> {
+  const results = await Promise.allSettled(
+    markets.map((m) =>
+      withRetry(async () => {
+        const [orderbook, fundingHistory] = await Promise.all([
+          getOrderbook(m.symbol),
+          getPhoenixClient()
+            .api.funding()
+            .getFundingRateHistory(m.symbol.toUpperCase(), { limit: 1 })
+            .catch(() => null),
+        ]);
+        const fundingRate = fundingHistory?.rates?.[0]
+          ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
+          : 0;
+        return {
+          symbol: m.symbol,
+          markPrice: orderbook.mid ?? 0,
+          fundingRate,
+          maxLeverage: m.leverageTiers.length > 0 ? m.leverageTiers[0].maxLeverage : 20,
+          isIsolatedOnly: isIsolatedOnly(m.symbol),
+        };
+      }),
+    ),
+  );
+
+  return results.map((r, i) =>
+    r.status === "fulfilled"
+      ? r.value
+      : {
+          symbol: markets[i].symbol,
+          markPrice: 0,
+          fundingRate: 0,
+          maxLeverage:
+            markets[i].leverageTiers.length > 0 ? markets[i].leverageTiers[0].maxLeverage : 20,
+          isIsolatedOnly: isIsolatedOnly(markets[i].symbol),
+        },
+  );
 }
 
 export async function getOrderbook(symbol: string) {

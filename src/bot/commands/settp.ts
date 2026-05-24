@@ -5,8 +5,8 @@ import { logger } from "../../lib/logger.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
-import { renderBotError } from "../lib/errors.js";
 import { requireActivation } from "../lib/activation.js";
+import { renderBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, pct, signedUsd } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 

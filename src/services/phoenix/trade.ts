@@ -12,16 +12,16 @@ import {
   symbol as riseSymbol,
 } from "@ellipsis-labs/rise";
 import {
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+} from "@solana-program/compute-budget";
+import { getTransferSolInstruction } from "@solana-program/system";
+import {
   TOKEN_PROGRAM_ADDRESS,
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
   getTransferCheckedInstruction,
 } from "@solana-program/token";
-import {
-  getSetComputeUnitLimitInstruction,
-  getSetComputeUnitPriceInstruction,
-} from "@solana-program/compute-budget";
-import { getTransferSolInstruction } from "@solana-program/system";
 import {
   type Address,
   appendTransactionMessageInstructions,
@@ -531,7 +531,7 @@ export async function transferUsdc(
 ): Promise<string> {
   const signer = await getSigner(fromAddress);
   const from = fromAddress as Address;
-  const to   = toAddress   as Address;
+  const to = toAddress as Address;
 
   const [sourceAta] = await findAssociatedTokenPda({
     owner: from,
@@ -571,9 +571,7 @@ export async function getUsdcAtaBalanceNative(walletAddress: string): Promise<bi
     tokenProgram: TOKEN_PROGRAM_ADDRESS,
   });
   try {
-    const result = await getRpc()
-      .getTokenAccountBalance(ata, { commitment: "confirmed" })
-      .send();
+    const result = await getRpc().getTokenAccountBalance(ata, { commitment: "confirmed" }).send();
     return BigInt(result.value.amount);
   } catch {
     return 0n;

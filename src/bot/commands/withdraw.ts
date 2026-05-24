@@ -14,8 +14,8 @@ import {
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
 import { renderBotError } from "../lib/errors.js";
+import { shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
-import { parseAmount, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 
 const MIN_WITHDRAW_USD = 1;
 const MIN_SOL_FOR_GAS = 0.001 * 1e9;
@@ -30,12 +30,7 @@ async function storeExtConfirm(
   amount: number,
   toAddress: string,
 ): Promise<void> {
-  await redis.set(
-    `wd:ext:${telegramId}`,
-    JSON.stringify({ amount, toAddress }),
-    "EX",
-    600,
-  );
+  await redis.set(`wd:ext:${telegramId}`, JSON.stringify({ amount, toAddress }), "EX", 600);
 }
 
 // Atomically consumes the ext confirm key — only the first concurrent caller
@@ -134,7 +129,7 @@ export async function sendWithdrawAmountScreen(
   const pcts = [25, 50, 75, 100];
   for (let i = 0; i < pcts.length; i++) {
     const p = pcts[i];
-    const amt = Math.floor((safe * p) / 100 * 100) / 100;
+    const amt = Math.floor(((safe * p) / 100) * 100) / 100;
     if (amt >= MIN_WITHDRAW_USD) {
       const btnLabel = p === 100 ? "All safe" : `${p}%`;
       kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:${prefix}:${amt.toFixed(2)}`);
@@ -143,10 +138,9 @@ export async function sendWithdrawAmountScreen(
   }
 
   if (deposited > safe + 0.01) {
-    kb.row().text(
-      `⚠️ Max all  ${usd(deposited)}`,
-      `wd:amt:${prefix}:${deposited.toFixed(2)}`,
-    ).row();
+    kb.row()
+      .text(`⚠️ Max all  ${usd(deposited)}`, `wd:amt:${prefix}:${deposited.toFixed(2)}`)
+      .row();
   }
 
   kb.text("Enter custom amount", `wd:custom:${prefix}`)
@@ -174,10 +168,7 @@ How much?`;
   }
 }
 
-export async function sendWithdrawConfirmInternal(
-  ctx: BotContext,
-  amount: number,
-): Promise<void> {
+export async function sendWithdrawConfirmInternal(ctx: BotContext, amount: number): Promise<void> {
   if (!ctx.user) return;
 
   const { safe, deposited } = await getWithdrawBalances(ctx.user.walletAddress);
@@ -214,10 +205,7 @@ Funds arrive in your bot wallet immediately after the transaction confirms.`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
-export async function sendWithdrawAddrStep(
-  ctx: BotContext,
-  amount: number,
-): Promise<void> {
+export async function sendWithdrawAddrStep(ctx: BotContext, amount: number): Promise<void> {
   if (!ctx.user || !ctx.from) return;
 
   const kb = new InlineKeyboard().text("✕ Cancel", "cancel");
@@ -290,7 +278,10 @@ Double-check the address — transfers cannot be reversed.`;
 
 export function registerWithdraw(bot: Bot<BotContext>) {
   bot.command("withdraw", async (ctx) => {
-    if (!ctx.user) { await ctx.reply("Type /start first."); return; }
+    if (!ctx.user) {
+      await ctx.reply("Type /start first.");
+      return;
+    }
     if (!(await requireActivation(ctx))) return;
     await sendWithdrawDestScreen(ctx);
   });
@@ -358,7 +349,10 @@ export function registerWithdraw(bot: Bot<BotContext>) {
   // ── Execute: internal ──────────────────────────────────────────────────────
 
   bot.callbackQuery(/^wd:exec:int:([\d.]+)$/, async (ctx) => {
-    if (!ctx.user) { await ctx.answerCallbackQuery(); return; }
+    if (!ctx.user) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
 
     const lockKey = `wd:lock:int:${ctx.user.id}`;
     const locked = await redis.set(lockKey, "1", "EX", EXEC_LOCK_TTL, "NX");
@@ -406,7 +400,10 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
   // ── Execute: external ──────────────────────────────────────────────────────
 
   bot.callbackQuery("wd:exec:ext", async (ctx) => {
-    if (!ctx.user || !ctx.from) { await ctx.answerCallbackQuery(); return; }
+    if (!ctx.user || !ctx.from) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
 
     // Atomically consume the pending confirm — only first concurrent call proceeds
     const confirm = await consumeExtConfirm(String(ctx.from.id));
