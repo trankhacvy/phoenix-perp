@@ -25,7 +25,7 @@ import { registerShort } from "./short.js";
 import { registerStart } from "./start.js";
 import { registerWalletMonitor } from "./wallet-monitor.js";
 import { registerWallet } from "./wallet.js";
-import { registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
+import { clearWithdrawExtState, registerWithdraw, sendWithdrawAmountPrompt } from "./withdraw.js";
 
 export function registerCommands(bot: Bot<BotContext>) {
   registerStart(bot);
@@ -115,7 +115,10 @@ export function registerCommands(bot: Bot<BotContext>) {
 
   bot.callbackQuery("cancel", async (ctx) => {
     await ctx.answerCallbackQuery("Cancelled");
-    if (ctx.from) await clearPending(ctx.from.id);
+    if (ctx.from) {
+      await clearPending(ctx.from.id);
+      await clearWithdrawExtState(String(ctx.from.id));
+    }
     await ctx.editMessageText("Cancelled.");
   });
 }

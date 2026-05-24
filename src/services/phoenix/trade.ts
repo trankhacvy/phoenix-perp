@@ -12,6 +12,12 @@ import {
   symbol as riseSymbol,
 } from "@ellipsis-labs/rise";
 import {
+  TOKEN_PROGRAM_ADDRESS,
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getTransferCheckedInstruction,
+} from "@solana-program/token";
+import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
 } from "@solana-program/compute-budget";
@@ -513,4 +519,63 @@ export async function withdrawCollateral(
   });
 
   return dispatchInstructions(result.instructions, walletAddress);
+}
+
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" as Address;
+const USDC_DECIMALS = 6;
+
+export async function transferUsdc(
+  fromAddress: string,
+  toAddress: string,
+  amountNative: bigint,
+): Promise<string> {
+  const signer = await getSigner(fromAddress);
+  const from = fromAddress as Address;
+  const to   = toAddress   as Address;
+
+  const [sourceAta] = await findAssociatedTokenPda({
+    owner: from,
+    mint: USDC_MINT,
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+
+  const [destAta] = await findAssociatedTokenPda({
+    owner: to,
+    mint: USDC_MINT,
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+
+  const createAtaIx = getCreateAssociatedTokenIdempotentInstruction({
+    payer: signer,
+    ata: destAta,
+    owner: to,
+    mint: USDC_MINT,
+  });
+
+  const transferIx = getTransferCheckedInstruction({
+    source: sourceAta,
+    mint: USDC_MINT,
+    destination: destAta,
+    authority: signer,
+    amount: amountNative,
+    decimals: USDC_DECIMALS,
+  });
+
+  return dispatchInstructions([createAtaIx, transferIx], fromAddress);
+}
+
+export async function getUsdcAtaBalanceNative(walletAddress: string): Promise<bigint> {
+  const [ata] = await findAssociatedTokenPda({
+    owner: walletAddress as Address,
+    mint: USDC_MINT,
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  try {
+    const result = await getRpc()
+      .getTokenAccountBalance(ata, { commitment: "confirmed" })
+      .send();
+    return BigInt(result.value.amount);
+  } catch {
+    return 0n;
+  }
 }

@@ -13,7 +13,11 @@ import { sendPriceAlertConfirm } from "./commands/pricealert.js";
 import { sendRemoveSlConfirm, sendSlFinalConfirm, validateSlPrice } from "./commands/setsl.js";
 import { sendRemoveTpConfirm, sendTpFinalConfirm, validateTpPrice } from "./commands/settp.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
-import { sendWithdrawConfirm } from "./commands/withdraw.js";
+import {
+  sendWithdrawAddrStep,
+  sendWithdrawConfirmExternal,
+  sendWithdrawConfirmInternal,
+} from "./commands/withdraw.js";
 import { renderBotError } from "./lib/errors.js";
 import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
 import { clearPending, getPending } from "./lib/pending.js";
@@ -46,14 +50,37 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
   const parts = pending.split(":");
 
-  if (pending === "withdraw_amount") {
+  if (pending === "withdraw_custom:internal") {
     await clearPending(ctx.from.id);
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.reply("Invalid amount. Try /withdraw again.");
+      await ctx.reply("Invalid amount. Enter a number like 50.");
       return;
     }
-    await sendWithdrawConfirm(ctx, amount);
+    await sendWithdrawConfirmInternal(ctx, amount);
+    return;
+  }
+
+  if (pending === "withdraw_custom:external") {
+    await clearPending(ctx.from.id);
+    const amount = parseAmount(text);
+    if (Number.isNaN(amount) || amount <= 0) {
+      await ctx.reply("Invalid amount. Enter a number like 50.");
+      return;
+    }
+    await sendWithdrawAddrStep(ctx, amount);
+    return;
+  }
+
+  if (parts[0] === "withdraw_ext_addr") {
+    const amount = Number(parts[1]);
+    const address = text.trim();
+    if (!BASE58_RE.test(address)) {
+      await ctx.reply("Invalid Solana address. Send a valid base58 address.");
+      return;
+    }
+    await clearPending(ctx.from.id);
+    await sendWithdrawConfirmExternal(ctx, amount, address);
     return;
   }
 
