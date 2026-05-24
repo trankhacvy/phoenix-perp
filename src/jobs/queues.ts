@@ -11,9 +11,12 @@ export const alertQueue = new Queue("alerts", {
   },
 });
 
+export type AlertButton = { text: string; callback_data: string };
+
 export interface AlertJobData {
   telegramId: string;
   type: string;
   message: string;
   symbol?: string;
+  keyboard?: AlertButton[][];
 }

@@ -4,7 +4,15 @@ import { InlineKeyboard } from "grammy";
 import { type TradeHistoryEntry, getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { cryptoSize, price as fmtPrice, pnlEmoji, signedUsd, solscanUrl, usd } from "../lib/fmt.js";
+import {
+  cryptoSize,
+  price as fmtPrice,
+  pnlEmoji,
+  shortAddr,
+  signedUsd,
+  solscanUrl,
+  usd,
+} from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 
 const PAGE_SIZE = 5;
@@ -51,10 +59,13 @@ function buildListText(
   totalPages: number,
   botUsername: string,
   external: boolean,
+  walletAddress?: string,
 ): FormattedString {
   const pageLabel =
     totalPages > 1 ? fmt`  ·  ${FormattedString.i(`Page ${page + 1}/${totalPages}`)}` : fmt``;
-  const header = fmt`📋 ${FormattedString.b("Trade History")}${pageLabel}\nRealized PnL: ${FormattedString.b(signedUsd(totalRealizedPnl))} ${pnlEmoji(totalRealizedPnl)}`;
+  const walletLabel =
+    external && walletAddress ? fmt` · ${FormattedString.code(shortAddr(walletAddress))}` : fmt``;
+  const header = fmt`📋 ${FormattedString.b("Trade History")}${walletLabel}${pageLabel}\nRealized PnL: ${FormattedString.b(signedUsd(totalRealizedPnl))} ${pnlEmoji(totalRealizedPnl)}`;
 
   const rows = pageItems.map((t, localIdx) => {
     const globalIdx = page * PAGE_SIZE + localIdx;
@@ -90,11 +101,14 @@ function buildListKeyboard(
   totalPages: number,
   prefix: string,
   external: boolean,
+  walletAddress?: string,
 ): InlineKeyboard {
   const kb = new InlineKeyboard();
   addPaginationRow(kb, prefix, page, totalPages);
   if (!external) {
     kb.text("📊 Positions", "nav:positions").text("📊 Portfolio", "nav:balance");
+  } else if (walletAddress) {
+    kb.text("← Trader", `walletinfo:back:${walletAddress}`);
   }
   return kb;
 }
@@ -168,8 +182,16 @@ export async function sendHistoryScreen(
   const totalRealizedPnl = history.trades
     .filter(isClose)
     .reduce((sum, t) => sum + Number(t.realizedPnl), 0);
-  const msg = buildListText(items, totalRealizedPnl, safePage, totalPages, botUsername, external);
-  const kb = buildListKeyboard(safePage, totalPages, prefix, external);
+  const msg = buildListText(
+    items,
+    totalRealizedPnl,
+    safePage,
+    totalPages,
+    botUsername,
+    external,
+    targetWallet,
+  );
+  const kb = buildListKeyboard(safePage, totalPages, prefix, external, targetWallet);
   const opts = {
     entities: msg.entities,
     reply_markup: kb,

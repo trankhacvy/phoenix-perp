@@ -23,7 +23,11 @@ export function startAlertWorker() {
       }
 
       try {
-        await bot.api.sendMessage(telegramId, message, { parse_mode: "HTML" });
+        await bot.api.sendMessage(telegramId, message, {
+          parse_mode: "HTML",
+          reply_markup: job.data.keyboard ? { inline_keyboard: job.data.keyboard } : undefined,
+          link_preview_options: { is_disabled: true },
+        });
         logger.info({ telegramId, type: job.data.type }, "Alert sent");
       } catch (err) {
         const be = toBotError(err);

@@ -363,10 +363,16 @@ export function registerPositions(bot: Bot<BotContext>) {
     if (!ctx.user) return;
     const symbol = ctx.match[1];
     const state = await getTraderState(ctx.user.walletAddress);
-    const available = Number(state.effectiveCollateral);
     const pos = state.positions.find((p) => p.symbol === symbol);
+
+    if (!pos) {
+      await ctx.reply(`No open ${symbol} position found. It may have been closed.`);
+      return;
+    }
+
+    const available = Number(state.effectiveCollateral);
     const liqLabel =
-      pos?.liquidationPrice === "N/A" ? "Safe" : fmtPrice(Number(pos?.liquidationPrice ?? 0));
+      pos.liquidationPrice === "N/A" ? "Safe" : fmtPrice(Number(pos.liquidationPrice));
 
     const promptMsg = fmt`💰 ${FormattedString.b(`Add Margin — ${symbol}`)}\n\nAvailable:         ${FormattedString.code(usd(available))}\nCurrent liq price: ${FormattedString.code(liqLabel)}\n\nHow much do you want to add? (USD)`;
     await ctx.reply(promptMsg.text, { entities: promptMsg.entities });
