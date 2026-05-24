@@ -42,9 +42,9 @@ async function main() {
 
   await startWsManager();
 
-  startLeaderboardScanner().catch((err) => {
-    logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
-  });
+  // startLeaderboardScanner().catch((err) => {
+  //   logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
+  // });
 
   if (config.NODE_ENV === "production" && config.WEBHOOK_URL) {
     server = await createServer();
