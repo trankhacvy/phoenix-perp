@@ -72,6 +72,21 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
+      const name = ctx.from.first_name ?? "trader";
+
+      if (!ctx.user.phoenixActivated) {
+        const kb = new InlineKeyboard()
+          .text("🔑 Enter invite code", "nav:activate")
+          .row()
+          .url("Find an invite code on X →", "https://x.com/search?q=%23PhoenixPerp+invite")
+          .row()
+          .text("💰 Deposit", "nav:deposit")
+          .text("📈 Markets", "nav:markets");
+        const msg = fmt`👋 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n🔒 ${FormattedString.b("Account not activated")}\n\nYou need an invite or access code to start trading.\n\nUse /activate <code> — or tap below to find one.\n\n${FormattedString.code(ctx.user.walletAddress)}`;
+        await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+        return;
+      }
+
       const [solLamports, solBook] = await Promise.all([
         new Connection(config.HELIUS_RPC_URL, "confirmed")
           .getBalance(new PublicKey(ctx.user.walletAddress))
@@ -81,7 +96,6 @@ export function registerStart(bot: Bot<BotContext>) {
       const sol = solLamports / 1e9;
       const solPrice = solBook?.mid ?? 0;
       const solUsd = sol * solPrice;
-      const name = ctx.from.first_name ?? "trader";
       const kb = new InlineKeyboard()
         .text("📊 Portfolio", "nav:balance")
         .text("📊 Positions", "nav:positions")
