@@ -3,8 +3,8 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { type TradeHistoryEntry, getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
-import { cryptoSize, price as fmtPrice, pnlEmoji, signedUsd, solscanUrl, usd } from "../lib/fmt.js";
 import { requireActivation } from "../lib/activation.js";
+import { cryptoSize, price as fmtPrice, pnlEmoji, signedUsd, solscanUrl, usd } from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 
 const PAGE_SIZE = 5;

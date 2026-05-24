@@ -1,6 +1,6 @@
 import "dotenv/config";
-import type { FastifyInstance } from "fastify";
 import { sql } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { bot } from "./bot/index.js";
 import { config } from "./config/index.js";
 import { db } from "./db/index.js";

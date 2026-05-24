@@ -7,6 +7,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
+import { requireActivation } from "../lib/activation.js";
 import { renderBotError } from "../lib/errors.js";
 import {
   cryptoSize,
@@ -18,7 +19,6 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
-import { requireActivation } from "../lib/activation.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
