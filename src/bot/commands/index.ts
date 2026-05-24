@@ -8,6 +8,7 @@ import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
 import { registerExport } from "./export.js";
 import { registerFunding } from "./funding.js";
+import { registerHelp } from "./help.js";
 import { registerHistory, sendHistoryScreen } from "./history.js";
 import { registerLeaderboard } from "./leaderboard.js";
 import { registerLog } from "./log.js";
@@ -30,6 +31,7 @@ import { clearWithdrawExtState, registerWithdraw, sendWithdrawAmountPrompt } fro
 
 export function registerCommands(bot: Bot<BotContext>) {
   registerStart(bot);
+  registerHelp(bot);
   registerActivate(bot);
   registerDeposit(bot);
   registerWithdraw(bot);
