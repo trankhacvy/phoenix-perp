@@ -5,39 +5,57 @@ import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import type { AlertJobData } from "../queues.js";
 
-export const alertWorker = new Worker<AlertJobData>(
-  "alerts",
-  async (job) => {
-    const { telegramId, message } = job.data;
+let alertWorker: Worker<AlertJobData> | null = null;
 
-    const dedupKey = `alert:dedup:${telegramId}:${job.data.type}:${job.data.symbol ?? ""}`;
-    const already = await redis.set(dedupKey, "1", "EX", 5, "NX");
-    if (!already) {
-      logger.debug({ telegramId, type: job.data.type }, "Alert deduped");
-      return;
-    }
+export function startAlertWorker() {
+  if (alertWorker) return alertWorker;
 
-    try {
-      await bot.api.sendMessage(telegramId, message, { parse_mode: "HTML" });
-      logger.info({ telegramId, type: job.data.type }, "Alert sent");
-    } catch (err) {
-      const be = toBotError(err);
-      if (!be.retryable) {
-        logger.warn(
-          { code: be.code, telegramId, type: job.data.type },
-          "Dropping non-retryable alert",
-        );
+  alertWorker = new Worker<AlertJobData>(
+    "alerts",
+    async (job) => {
+      const { telegramId, message } = job.data;
+
+      const dedupKey = `alert:dedup:${telegramId}:${job.data.type}:${job.data.symbol ?? ""}`;
+      const already = await redis.set(dedupKey, "1", "EX", 5, "NX");
+      if (!already) {
+        logger.debug({ telegramId, type: job.data.type }, "Alert deduped");
         return;
       }
-      throw err;
-    }
-  },
-  {
-    connection: redis,
-    concurrency: 10,
-  },
-);
 
-alertWorker.on("failed", (job, err) => {
-  logger.error({ jobId: job?.id, err }, "Alert job failed");
-});
+      try {
+        await bot.api.sendMessage(telegramId, message, { parse_mode: "HTML" });
+        logger.info({ telegramId, type: job.data.type }, "Alert sent");
+      } catch (err) {
+        const be = toBotError(err);
+        if (!be.retryable) {
+          logger.warn(
+            { code: be.code, telegramId, type: job.data.type },
+            "Dropping non-retryable alert",
+          );
+          return;
+        }
+        throw err;
+      }
+    },
+    {
+      connection: redis,
+      concurrency: 10,
+    },
+  );
+
+  alertWorker.on("failed", (job, err) => {
+    logger.error({ jobId: job?.id, err }, "Alert job failed");
+  });
+
+  logger.info("Alert worker started");
+  return alertWorker;
+}
+
+export async function stopAlertWorker() {
+  if (alertWorker) await alertWorker.close();
+}
+
+export function getAlertWorkerStats() {
+  if (!alertWorker) return { running: false };
+  return { running: !alertWorker.closing };
+}

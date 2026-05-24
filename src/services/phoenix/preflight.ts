@@ -66,7 +66,7 @@ export async function preflightOpen(input: PreflightInput): Promise<PreflightRes
 
   let snapshot: MarketSnapshot;
   try {
-    snapshot = await getMarketSnapshot(symbol);
+    snapshot = await getMarketSnapshot(symbol, { skipCache: !!anchorPrice });
   } catch (e) {
     throw new BotError({
       category: "validation",

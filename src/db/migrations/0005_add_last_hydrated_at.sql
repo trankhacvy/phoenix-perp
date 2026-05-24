@@ -1,0 +1,1 @@
+ALTER TABLE "leaderboard_snapshots" ADD COLUMN "last_hydrated_at" TIMESTAMP DEFAULT NULL;

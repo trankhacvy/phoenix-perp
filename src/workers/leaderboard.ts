@@ -3,28 +3,28 @@ import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { redis } from "../lib/redis.js";
 import {
+  backfillStaleTraders,
+  discoverBotUserWallets,
   discoverTraderWallets,
   hydrateTradersBatch,
-  upsertDiscoveredWallet,
+  seedFromGpa,
+  syncWalletTags,
+  upsertAndHydrateWallet,
 } from "../services/leaderboard.js";
 import { getMarkets } from "../services/phoenix/market.js";
 
 const log = logger.child({ worker: "leaderboard" });
 
-const SCAN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const HISTORY_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const HYDRATION_CONCURRENCY = 5;
-const WS_DEDUP_TTL = 3600; // 1 hour
+const SCAN_INTERVAL_MS = 30 * 60 * 1000;
+const HISTORY_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const HYDRATION_CONCURRENCY = 2;
+const WS_DEDUP_TTL = 3600;
 const MAX_RECONNECT_FAILURES = 3;
 
 let shuttingDown = false;
 let scanInFlight: Promise<void> | null = null;
 let scanIntervalId: ReturnType<typeof setInterval> | null = null;
 let historyIntervalId: ReturnType<typeof setInterval> | null = null;
-
-// ---------------------------------------------------------------------------
-// WS: Subscribe to trades channel per market to discover new wallets
-// ---------------------------------------------------------------------------
 
 const tradeWsConnections = new Map<string, WebSocket>();
 const reconnectFailures = new Map<string, number>();
@@ -59,7 +59,7 @@ function subscribeTradesForMarket(symbol: string) {
         if (!isNew) continue;
 
         log.debug({ taker, symbol }, "New trader discovered via WS");
-        await upsertDiscoveredWallet(taker);
+        await upsertAndHydrateWallet(taker);
       } catch (err) {
         log.warn({ taker, symbol, err }, "Failed to process discovered trader");
       }
@@ -103,50 +103,52 @@ async function subscribeAllMarketTrades() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scan cycle: GPA discovery + REST hydration
-// ---------------------------------------------------------------------------
+export async function startLeaderboardScanner() {
+  log.info("Leaderboard scanner starting");
 
-async function runFullScan(includeHistory: boolean) {
-  const start = Date.now();
-  log.info({ includeHistory }, "Starting leaderboard scan");
+  await syncWalletTags().catch((err) => log.warn({ err }, "Wallet tags sync failed"));
 
-  try {
-    const wallets = await discoverTraderWallets();
-    const walletsArray = Array.from(wallets);
+  const traders = await discoverTraderWallets().catch((err) => {
+    log.warn({ err }, "GPA discovery failed");
+    return [];
+  });
 
-    const upserted = await hydrateTradersBatch(walletsArray, HYDRATION_CONCURRENCY, includeHistory);
-
-    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    log.info(
-      { discovered: wallets.size, upserted, includeHistory, elapsedSec: elapsed },
-      "Leaderboard scan complete",
-    );
-  } catch (err) {
-    log.error({ err }, "Leaderboard scan failed");
+  if (traders.length > 0) {
+    await seedFromGpa(traders);
   }
-}
 
-// ---------------------------------------------------------------------------
-// Bootstrap
-// ---------------------------------------------------------------------------
+  const botWallets = await discoverBotUserWallets();
+  if (botWallets.size > 0) {
+    const hydrated = await hydrateTradersBatch(Array.from(botWallets), HYDRATION_CONCURRENCY, true);
+    log.info({ botUsers: botWallets.size, hydrated }, "Bot users hydrated");
+  }
 
-async function bootstrap() {
-  log.info("Leaderboard worker starting");
-
-  // Phase 1: Initial full scan with trade history
-  await runFullScan(true);
-
-  // Phase 2: Subscribe to WS trades for all markets to discover new traders
   await subscribeAllMarketTrades();
 
-  // Phase 3: Schedule periodic re-scans
   scanIntervalId = setInterval(() => {
-    scanInFlight = runFullScan(false);
+    if (scanInFlight) return;
+    scanInFlight = backfillStaleTraders(false)
+      .then((n) => log.info({ backfilled: n }, "Backfill cycle done"))
+      .catch((err) => log.error({ err }, "Backfill failed"))
+      .finally(() => {
+        scanInFlight = null;
+      });
   }, SCAN_INTERVAL_MS);
 
   historyIntervalId = setInterval(() => {
-    scanInFlight = runFullScan(true);
+    if (scanInFlight) return;
+    scanInFlight = (async () => {
+      const fresh = await discoverTraderWallets().catch((err) => {
+        log.warn({ err }, "GPA re-scan failed");
+        return [];
+      });
+      if (fresh.length > 0) await seedFromGpa(fresh);
+      await backfillStaleTraders(true);
+    })()
+      .catch((err) => log.error({ err }, "Full scan failed"))
+      .finally(() => {
+        scanInFlight = null;
+      });
   }, HISTORY_INTERVAL_MS);
 
   log.info(
@@ -154,21 +156,21 @@ async function bootstrap() {
       scanIntervalMin: SCAN_INTERVAL_MS / 60_000,
       historyIntervalMin: HISTORY_INTERVAL_MS / 60_000,
     },
-    "Leaderboard worker ready",
+    "Leaderboard scanner ready",
   );
 }
 
-bootstrap().catch((err) => {
-  log.fatal({ err }, "Leaderboard worker bootstrap failed");
-  process.exit(1);
-});
-
-process.on("SIGTERM", async () => {
-  log.info("SIGTERM received, shutting down");
+export async function stopLeaderboardScanner() {
   shuttingDown = true;
   if (scanIntervalId) clearInterval(scanIntervalId);
   if (historyIntervalId) clearInterval(historyIntervalId);
   for (const [, ws] of tradeWsConnections) ws.close();
   if (scanInFlight) await scanInFlight.catch(() => {});
-  process.exit(0);
-});
+}
+
+export function getLeaderboardScannerStats() {
+  return {
+    wsConnections: tradeWsConnections.size,
+    isScanning: scanInFlight !== null,
+  };
+}

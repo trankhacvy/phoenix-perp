@@ -1,4 +1,20 @@
-import { index, integer, numeric, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
+
+export interface WalletMetadata {
+  name?: string;
+  twitter?: string;
+  avatar?: string;
+  tags?: string[];
+}
 
 export const leaderboardSnapshots = pgTable(
   "leaderboard_snapshots",
@@ -26,6 +42,8 @@ export const leaderboardSnapshots = pgTable(
     discoveredVia: text("discovered_via").notNull().default("gpa"),
     firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    lastHydratedAt: timestamp("last_hydrated_at"),
+    metadata: jsonb("metadata").$type<WalletMetadata>(),
   },
   (t) => [
     index("lb_portfolio_value_idx").on(t.portfolioValue),

@@ -1,10 +1,39 @@
-import type { ExchangeMarketConfig } from "@ellipsis-labs/rise";
+import type { ExchangeConfig, ExchangeMarketConfig } from "@ellipsis-labs/rise";
 import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
 
 export const ISOLATED_ONLY_MARKETS = new Set(["GOLD", "SILVER", "SKR", "WTIOIL"]);
 
+let _exchangeCache: { data: ExchangeConfig; ts: number } | null = null;
+const EXCHANGE_TTL_MS = 5 * 60_000;
+
+export async function getExchangeConfig(): Promise<ExchangeConfig> {
+  if (_exchangeCache && Date.now() - _exchangeCache.ts < EXCHANGE_TTL_MS) {
+    return _exchangeCache.data;
+  }
+  const data = await withRetry(() => getPhoenixClient().api.exchange().getExchange());
+  _exchangeCache = { data, ts: Date.now() };
+  return data;
+}
+
+export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
+  const exchange = await getExchangeConfig();
+  return exchange.markets;
+}
+
+export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
+  const markets = await getMarkets();
+  const upper = symbol.toUpperCase();
+  const found = markets.find((m) => m.symbol === upper);
+  if (!found) throw new Error(`Market ${upper} not found`);
+  return found;
+}
+
 export function isIsolatedOnly(symbol: string): boolean {
+  if (_exchangeCache) {
+    const market = _exchangeCache.data.markets.find((m) => m.symbol === symbol.toUpperCase());
+    if (market) return market.isolatedOnly;
+  }
   return ISOLATED_ONLY_MARKETS.has(symbol.toUpperCase());
 }
 
@@ -30,27 +59,18 @@ export interface MarketListItem {
   isIsolatedOnly: boolean;
 }
 
-let _marketsCache: { data: ExchangeMarketConfig[]; ts: number } | null = null;
-const MARKETS_TTL_MS = 60_000;
-
-export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
-  if (_marketsCache && Date.now() - _marketsCache.ts < MARKETS_TTL_MS) return _marketsCache.data;
-  const data = await getPhoenixClient().api.markets().getMarkets();
-  _marketsCache = { data, ts: Date.now() };
-  return data;
-}
-
-export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
-  return getPhoenixClient().api.markets().getMarket(symbol.toUpperCase());
-}
-
 const _snapshotCache = new Map<string, { data: MarketSnapshot; ts: number }>();
 const SNAPSHOT_TTL_MS = 30_000;
 
-export async function getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
+export async function getMarketSnapshot(
+  symbol: string,
+  opts?: { skipCache?: boolean },
+): Promise<MarketSnapshot> {
   const key = symbol.toUpperCase();
-  const cached = _snapshotCache.get(key);
-  if (cached && Date.now() - cached.ts < SNAPSHOT_TTL_MS) return cached.data;
+  if (!opts?.skipCache) {
+    const cached = _snapshotCache.get(key);
+    if (cached && Date.now() - cached.ts < SNAPSHOT_TTL_MS) return cached.data;
+  }
 
   const data = await withRetry(() => _getMarketSnapshot(symbol));
   _snapshotCache.set(key, { data, ts: Date.now() });
