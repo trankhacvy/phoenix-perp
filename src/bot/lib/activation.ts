@@ -1,7 +1,6 @@
 import { InlineKeyboard } from "grammy";
+import { INVITE_SEARCH_URL } from "../../lib/constants.js";
 import type { BotContext } from "../../types/index.js";
-
-const INVITE_SEARCH_URL = "https://x.com/search?q=%23PhoenixPerp+invite";
 
 export async function requireActivation(ctx: BotContext): Promise<boolean> {
   if (ctx.user?.phoenixActivated) return true;

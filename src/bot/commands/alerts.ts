@@ -9,7 +9,7 @@ import type { BotContext } from "../../types/index.js";
 const ALERT_DEFS = [
   { type: "fill", label: "Order filled", default: true },
   { type: "at_risk", label: "Account at risk", default: true },
-  { type: "cancellable", label: "Orders may cancel", default: true },
+  { type: "cancellable", label: "Margin warning", default: true },
   { type: "liquidatable", label: "Near liquidation", default: true },
   { type: "tpsl_flip", label: "TP/SL triggered", default: true },
   { type: "funding_flip", label: "Funding direction change", default: false },
@@ -43,7 +43,7 @@ export async function sendAlertsScreen(ctx: BotContext): Promise<void> {
 export function registerAlerts(bot: Bot<BotContext>) {
   bot.command("alerts", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     await sendAlertsScreen(ctx);

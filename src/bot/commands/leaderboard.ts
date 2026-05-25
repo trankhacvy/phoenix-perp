@@ -49,7 +49,7 @@ function buildLeaderboardMessage(
   const lines: FormattedString[] = [header];
 
   if (rows.length === 0) {
-    lines.push(fmt`${FormattedString.i("No trader data available yet.")}`);
+    lines.push(fmt`${FormattedString.i("Leaderboard is loading — check back in a few minutes.")}`);
   }
 
   for (let i = 0; i < rows.length; i++) {

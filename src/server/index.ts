@@ -10,7 +10,16 @@ export async function createServer() {
   await app.register(cors);
   await app.register(healthRoutes);
 
-  app.post(`/webhook/${config.TELEGRAM_BOT_TOKEN}`, handleWebhook());
+  const webhookHandler = handleWebhook();
+  app.post(`/webhook/${config.TELEGRAM_BOT_TOKEN}`, async (req, reply) => {
+    if (config.WEBHOOK_SECRET) {
+      const token = req.headers["x-telegram-bot-api-secret-token"];
+      if (token !== config.WEBHOOK_SECRET) {
+        return reply.code(401).send("Unauthorized");
+      }
+    }
+    return webhookHandler(req, reply);
+  });
 
   return app;
 }

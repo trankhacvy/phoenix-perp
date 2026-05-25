@@ -8,7 +8,7 @@ import { addMargin, closePosition } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { requireActivation } from "../lib/activation.js";
-import { renderBotError } from "../lib/errors.js";
+import { toBotError } from "../lib/errors.js";
 import {
   cryptoSize,
   price as fmtPrice,
@@ -19,6 +19,7 @@ import {
   solscanUrl,
   usd,
 } from "../lib/fmt.js";
+import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
@@ -208,7 +209,7 @@ export async function sendPositionDetail(
 export function registerPositions(bot: Bot<BotContext>) {
   bot.command("positions", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;
@@ -275,7 +276,7 @@ export function registerPositions(bot: Bot<BotContext>) {
         closePct < 100
           ? fmt`\nRemaining:   ${FormattedString.b(`${num(remainingSize, 2, 4)} ${symbol}`)}`
           : fmt``;
-      detailLines = fmt`\n\n${FormattedString.b(`${symbol} ${sideLabel} — close ${closePct}%`)}\n\nPrice now:   ${FormattedString.b(`~${fmtPrice(markPrice)}`)}\nClosing:     ${FormattedString.b(`${num(closingSize, 2, 4)} ${symbol}  (${usd(closingUsdc, 0, 0)})`)}\nEst. P&L:    ${FormattedString.b(signedUsd(estimatedPnl))}${remainingLine}`;
+      detailLines = fmt`\n\n${FormattedString.b(`${symbol} ${sideLabel} — close ${closePct}%`)}\n\nPrice now:   ${FormattedString.b(`~${fmtPrice(markPrice)}`)}\nClosing:     ${FormattedString.b(`${num(closingSize, 2, 4)} ${symbol}  (${usd(closingUsdc, 0, 0)})`)}\nEst. P&L:    ${FormattedString.b(signedUsd(estimatedPnl))} ${FormattedString.i("(excl. fees)")}${remainingLine}`;
     }
     const label = closePct === 100 ? "Close all" : `Close ${closePct}%`;
     const kb = new InlineKeyboard()
@@ -296,65 +297,89 @@ export function registerPositions(bot: Bot<BotContext>) {
     const [symbol, pctStr, side] = ctx.match.slice(1) as [string, string, "long" | "short"];
     const fraction = Number(pctStr) / 100;
 
-    const state = await getTraderState(ctx.user.walletAddress);
-    const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 
-    let sig: string;
-    try {
-      sig = await closePosition(symbol, ctx.user.walletAddress, fraction);
-    } catch (e) {
-      logger.error({ err: e, symbol, fraction }, "closePosition failed");
-      const kb = new InlineKeyboard().text("← Back", "nav:positions");
-      await renderBotError(ctx, e, { action: "Close position", edit: true, replyMarkup: kb });
-      return;
-    }
+    await ctx.editMessageText("⏳ Closing position…");
 
-    const closedPct = fraction * 100;
-    const afterKb =
-      fraction === 1
-        ? new InlineKeyboard()
-            .text("🟢 Long", "nav:long")
-            .text("🔴 Short", "nav:short")
-            .row()
-            .text("📋 Positions", "nav:positions")
-        : new InlineKeyboard()
-            .text("📊 View position", `pos:detail:${symbol}:${side}`)
-            .row()
-            .text("📋 Positions", "nav:positions");
-    const closedLabel = closedPct === 100 ? "closed" : `${closedPct}% closed`;
-    const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(closedLabel)}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
-    try {
-      await ctx.editMessageText(successMsg.text, {
-        entities: successMsg.entities,
-        reply_markup: afterKb,
-        link_preview_options: { is_disabled: true },
-      });
-    } catch (editErr) {
-      logger.warn(
-        { err: editErr, symbol, sig },
-        "editMessageText failed after closePosition succeeded",
-      );
-    }
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    const api = ctx.api;
 
-    if (pos) {
+    if (!chatId || !msgId) return;
+
+    (async () => {
+      const state = await getTraderState(user.walletAddress);
+      const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
+
+      let sig: string;
       try {
-        const pnl = Number(pos.unrealizedPnl) * fraction;
-        const leverage = pos.leverage ?? 1;
-        const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
-        const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
-        const card = await generatePnlCard({
-          symbol,
-          side: pos.side,
-          entryPrice: pos.entryPrice,
-          exitPrice: pos.markPrice,
-          roiPercent: Number(roiPct),
-          pnlUsdc: pnl,
-        });
-        await ctx.replyWithPhoto(new InputFile(card, "pnl.png"));
-      } catch (cardErr) {
-        logger.error({ err: cardErr, symbol }, "PnL card generation failed");
+        sig = await closePosition(symbol, user.walletAddress, fraction);
+      } catch (e) {
+        logger.error({ err: e, symbol, fraction }, "closePosition failed");
+        const kb = new InlineKeyboard().text("← Back", "nav:positions");
+        const be = toBotError(e);
+        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+        const errorText = fmt`${FormattedString.b("❌ Close position failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        try {
+          await api.editMessageText(chatId, msgId, errorText.text, {
+            entities: errorText.entities,
+            reply_markup: kb,
+          });
+        } catch (editErr) {
+          logger.warn({ err: editErr }, "failed to edit error message after close failure");
+        }
+        return;
       }
-    }
+
+      const closedPct = fraction * 100;
+      const afterKb =
+        fraction === 1
+          ? new InlineKeyboard()
+              .text("🟢 Long", "nav:long")
+              .text("🔴 Short", "nav:short")
+              .row()
+              .text("📋 Positions", "nav:positions")
+          : new InlineKeyboard()
+              .text("📊 View position", `pos:detail:${symbol}:${side}`)
+              .row()
+              .text("📋 Positions", "nav:positions");
+      const closedLabel = closedPct === 100 ? "closed" : `${closedPct}% closed`;
+      const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(closedLabel)}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      try {
+        await api.editMessageText(chatId, msgId, successMsg.text, {
+          entities: successMsg.entities,
+          reply_markup: afterKb,
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (editErr) {
+        logger.warn(
+          { err: editErr, symbol, sig },
+          "editMessageText failed after closePosition succeeded",
+        );
+      }
+
+      if (pos) {
+        try {
+          const pnl = Number(pos.unrealizedPnl) * fraction;
+          const leverage = pos.leverage ?? 1;
+          const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
+          const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
+          const card = await generatePnlCard({
+            symbol,
+            side: pos.side,
+            entryPrice: pos.entryPrice,
+            exitPrice: pos.markPrice,
+            roiPercent: Number(roiPct),
+            pnlUsdc: pnl,
+          });
+          await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));
+        } catch (cardErr) {
+          logger.error({ err: cardErr, symbol }, "PnL card generation failed");
+        }
+      }
+    })().catch((err) => logger.error({ err }, "close position async error"));
   });
 
   // Add margin — prompt
@@ -385,14 +410,40 @@ export function registerPositions(bot: Bot<BotContext>) {
     if (!ctx.user) return;
     const [symbol, amtStr] = ctx.match.slice(1) as [string, string];
     const amount = Number(amtStr);
-    try {
-      await addMargin(symbol, ctx.user.walletAddress, amount);
-      const doneMsg = fmt`✅ Added ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}.`;
-      await ctx.editMessageText(doneMsg.text, { entities: doneMsg.entities });
-    } catch (e) {
-      logger.error({ err: e, symbol, amount }, "addMargin failed");
-      await renderBotError(ctx, e, { action: "Add margin", edit: true });
-    }
+
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+
+    await ctx.editMessageText("⏳ Adding margin…");
+
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    const api = ctx.api;
+
+    if (!chatId || !msgId) return;
+
+    (async () => {
+      try {
+        await addMargin(symbol, user.walletAddress, amount);
+        const doneMsg = fmt`✅ Added ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}.`;
+        await api.editMessageText(chatId, msgId, doneMsg.text, {
+          entities: doneMsg.entities,
+        });
+      } catch (e) {
+        logger.error({ err: e, symbol, amount }, "addMargin failed");
+        const be = toBotError(e);
+        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+        const errorText = fmt`${FormattedString.b("❌ Add margin failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        try {
+          await api.editMessageText(chatId, msgId, errorText.text, {
+            entities: errorText.entities,
+          });
+        } catch (editErr) {
+          logger.warn({ err: editErr }, "failed to edit error message after addMargin failure");
+        }
+      }
+    })().catch((err) => logger.error({ err }, "add margin async error"));
   });
 
   // SL/TP edit callbacks
