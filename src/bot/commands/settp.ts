@@ -6,8 +6,9 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { renderBotError } from "../lib/errors.js";
+import { toBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, pct, signedUsd } from "../lib/fmt.js";
+import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 
 function priceForCallback(p: number): string {
@@ -36,7 +37,7 @@ export function validateTpPrice(pos: PhoenixPosition, triggerPrice: number): str
 export function registerSetTp(bot: Bot<BotContext>) {
   bot.command("settp", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;
@@ -104,47 +105,82 @@ export function registerSetTp(bot: Bot<BotContext>) {
   bot.callbackQuery(/^tp:remove:([A-Z0-9]+):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Removing…");
     if (!ctx.user) return;
+
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+
     const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    try {
-      await cancelStopLoss(
-        symbol,
-        ctx.user.walletAddress,
-        side === "long" ? "long_tp" : "short_tp",
-      );
-      await ctx.editMessageText(`✅ Take profit removed for ${symbol}.`);
-    } catch (e) {
-      logger.error({ err: e, symbol }, "cancelStopLoss (TP) failed");
-      await renderBotError(ctx, e, { action: "Remove take profit", edit: true });
-    }
+
+    await ctx.editMessageText("⏳ Removing take profit…");
+
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    if (!chatId || !msgId) return;
+    const api = ctx.api;
+
+    void (async () => {
+      try {
+        await cancelStopLoss(symbol, user.walletAddress, side === "long" ? "long_tp" : "short_tp");
+        await api.editMessageText(chatId, msgId, `✅ Take profit removed for ${symbol}.`);
+      } catch (e) {
+        logger.error({ err: e, symbol }, "cancelStopLoss (TP) failed");
+        const be = toBotError(e);
+        const errMsg = fmt`${FormattedString.b("❌ Remove take profit failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}${be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``}`;
+        await api.editMessageText(chatId, msgId, errMsg.text, {
+          entities: errMsg.entities,
+        });
+      }
+    })().catch((err) => logger.error({ err }, "remove TP async error"));
   });
 
   bot.callbackQuery(/^tp:exec:([A-Z0-9]+):([\d.]+):(market|limit):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Setting…");
     if (!ctx.user) return;
+
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+
     const [symbol, priceStr, mode, side] = ctx.match.slice(1) as [
       string,
       string,
       "market" | "limit",
       "long" | "short",
     ];
-    try {
-      await setTpSl({
-        symbol,
-        walletAddress: ctx.user.walletAddress,
-        positionSide: side,
-        tpPrice: Number(priceStr),
-        tpMode: mode,
-      });
-      const navKb = new InlineKeyboard()
-        .text("🛑 Set SL", `editsl:${symbol}:${side}`)
-        .row()
-        .text("📊 View position", "nav:positions");
-      const msg = fmt`✅ ${FormattedString.b("Take profit set")}\n\n${symbol} — ${fmtPrice(Number(priceStr))}\nYou'll be notified when it triggers.`;
-      await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: navKb });
-    } catch (e) {
-      logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (TP) failed");
-      await renderBotError(ctx, e, { action: "Set take profit", edit: true });
-    }
+
+    await ctx.editMessageText("⏳ Setting take profit…");
+
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    if (!chatId || !msgId) return;
+    const api = ctx.api;
+
+    void (async () => {
+      try {
+        await setTpSl({
+          symbol,
+          walletAddress: user.walletAddress,
+          positionSide: side,
+          tpPrice: Number(priceStr),
+          tpMode: mode,
+        });
+        const navKb = new InlineKeyboard()
+          .text("🛑 Set SL", `editsl:${symbol}:${side}`)
+          .row()
+          .text("📊 View position", "nav:positions");
+        const msg = fmt`✅ ${FormattedString.b("Take profit set")}\n\n${symbol} — ${fmtPrice(Number(priceStr))}\nYou'll be notified when it triggers.`;
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: navKb,
+        });
+      } catch (e) {
+        logger.error({ err: e, symbol, priceStr, mode }, "setTpSl (TP) failed");
+        const be = toBotError(e);
+        const errMsg = fmt`${FormattedString.b("❌ Set take profit failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}${be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``}`;
+        await api.editMessageText(chatId, msgId, errMsg.text, {
+          entities: errMsg.entities,
+        });
+      }
+    })().catch((err) => logger.error({ err }, "set TP async error"));
   });
 }
 

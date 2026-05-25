@@ -26,9 +26,15 @@ importers:
       '@fontsource/space-grotesk':
         specifier: ^5.2.10
         version: 5.2.10
+      '@grammyjs/auto-retry':
+        specifier: ^2.0.2
+        version: 2.0.2(grammy@1.43.0)
       '@grammyjs/parse-mode':
         specifier: ^2.3.0
         version: 2.3.0(grammy@1.43.0)
+      '@grammyjs/runner':
+        specifier: ^2.0.3
+        version: 2.0.3(grammy@1.43.0)
       '@privy-io/node':
         specifier: ^0.19.0
         version: 0.19.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))(viem@2.50.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))
@@ -831,11 +837,23 @@ packages:
   '@fontsource/space-grotesk@5.2.10':
     resolution: {integrity: sha512-XNXEbT74OIITPqw2H6HXwPDp85fy43uxfBwFR5PU+9sLnjuLj12KlhVM9nZVN6q6dlKjkuN8JisW/OBxwxgUew==}
 
+  '@grammyjs/auto-retry@2.0.2':
+    resolution: {integrity: sha512-b4A4p5jlYDiQtW0c0FXYe11WMkYoiW+5rvOaDMCOk1h7Pu2SDl7B7gmFF8cthWCx2+M2nWLOsBxAgbBG4kKWYg==}
+    engines: {node: '>=12.20.0 || >=14.13.1'}
+    peerDependencies:
+      grammy: ^1.10.0
+
   '@grammyjs/parse-mode@2.3.0':
     resolution: {integrity: sha512-kEEM1B5z4lNH/99HEzXvw6wuJEAmadZ4cfcNn/F5UMOsCRogFK5lMYrA4GLLoNQ0kY3e/GJkGUBTCagfyHzn4g==}
     engines: {node: '>=14.13.1'}
     peerDependencies:
       grammy: ^1.41.0
+
+  '@grammyjs/runner@2.0.3':
+    resolution: {integrity: sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A==}
+    engines: {node: '>=12.20.0 || >=14.13.1'}
+    peerDependencies:
+      grammy: ^1.13.1
 
   '@grammyjs/types@3.27.3':
     resolution: {integrity: sha512-yUKMLliGsGbnxu96YUJ7km7B0zy4PzeH/Jvti5705R/LeKDMqkDV4DckMSt+OrliWQpTwQljHE0QLol5zgxBkg==}
@@ -3682,8 +3700,20 @@ snapshots:
 
   '@fontsource/space-grotesk@5.2.10': {}
 
+  '@grammyjs/auto-retry@2.0.2(grammy@1.43.0)':
+    dependencies:
+      debug: 4.4.3
+      grammy: 1.43.0
+    transitivePeerDependencies:
+      - supports-color
+
   '@grammyjs/parse-mode@2.3.0(grammy@1.43.0)':
     dependencies:
+      grammy: 1.43.0
+
+  '@grammyjs/runner@2.0.3(grammy@1.43.0)':
+    dependencies:
+      abort-controller: 3.0.0
       grammy: 1.43.0
 
   '@grammyjs/types@3.27.3': {}

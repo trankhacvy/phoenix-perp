@@ -6,6 +6,7 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
+import { INVITE_SEARCH_URL } from "../../lib/constants.js";
 import { logger } from "../../lib/logger.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
@@ -99,11 +100,11 @@ export function registerStart(bot: Bot<BotContext>) {
         const kb = new InlineKeyboard()
           .text("🔑 Enter invite code", "nav:activate")
           .row()
-          .url("Find an invite code on X →", "https://x.com/search?q=%23PhoenixPerp+invite")
+          .url("Find an invite code on X →", INVITE_SEARCH_URL)
           .row()
           .text("💰 Deposit", "nav:deposit")
           .text("📈 Markets", "nav:markets");
-        const msg = fmt`👋 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n🔒 ${FormattedString.b("Account not activated")}\n\nYou need an invite or access code to start trading.\n\nUse /activate <code> — or tap below to find one.\n\n${FormattedString.code(ctx.user.walletAddress)}`;
+        const msg = fmt`👋 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n🔒 ${FormattedString.b("Account not activated")}\n\nYou need an invite or access code to start trading.\n\nUse /activate <code> — or tap below to find one.\n\n${FormattedString.code(ctx.user.walletAddress)}\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
         await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
         return;
       }
@@ -126,7 +127,7 @@ export function registerStart(bot: Bot<BotContext>) {
         .row()
         .text("📈 Markets", "nav:markets")
         .text("📋 History", "nav:history");
-      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n💰 ${FormattedString.b("Wallet Balance")}\n${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt`  (${FormattedString.b(usd(solUsd))})` : fmt``}\n\n${FormattedString.code(ctx.user.walletAddress)}\n\nDeposit USDC to fund your account and start trading.`;
+      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n💰 ${FormattedString.b("Wallet Balance")}\n${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt`  (${FormattedString.b(usd(solUsd))})` : fmt``}\n\n${FormattedString.code(ctx.user.walletAddress)}\n\nDeposit USDC to fund your account and start trading.\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
       await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
       return;
     }
@@ -177,7 +178,7 @@ export function registerStart(bot: Bot<BotContext>) {
         .text("💰 Deposit", "nav:deposit")
         .text("📈 Markets", "nav:markets");
 
-      const msg = fmt`🔥 ${FormattedString.b("Welcome to PhoenixPerpBot!")}\n\n${FormattedString.b("Your wallet:")}\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account.\n\n⚠️ ${FormattedString.b("Activate trading:")}\nUse /activate <code> with your Phoenix invite or referral code to unlock trading.`;
+      const msg = fmt`🔥 ${FormattedString.b("Welcome to SuperNova!")}\n\nWe created a Solana wallet for you:\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account.\n\n⚠️ ${FormattedString.b("Activate trading:")}\nUse /activate <code> with your Phoenix invite or referral code to unlock trading.\n\n${FormattedString.i("⚠️ SuperNova is in beta. Trade at your own risk. Perpetual futures involve significant risk of loss.")}`;
 
       await ctx.api.editMessageText(chatId, msgId, msg.text, {
         entities: msg.entities,

@@ -140,12 +140,12 @@ Key rules:
 
 `src/config/index.ts` validates all env vars via Zod at startup and crashes with field-level errors on failure. Required vars: `TELEGRAM_BOT_TOKEN`, `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `BUILDER_AUTHORITY_PUBKEY`, `BUILDER_ACCESS_CODE`, `HELIUS_RPC_URL`, `DATABASE_URL`, `REDIS_URL`. See schema in that file for all vars.
 
-### Known bugs (unfixed)
+### Known bugs (all verified fixed)
 
-1. `src/bot/commands/alerts.ts` — alert toggle `findFirst` missing `type` filter
-2. `src/bot/commands/deposit.ts` + `share.ts` — `replyWithPhoto` gets raw `Uint8Array`, needs `new InputFile(...)`
-3. `src/services/referral.ts` — T2 chain lookup can pick T2 row as parent; needs `eq(referrals.tier, "t1")` filter
-4. `ws` / `@types/ws` not in `package.json` (imported in `src/workers/ws.ts`)
+1. ~~`alerts.ts` — alert toggle missing `type` filter~~ — fixed: query uses `eq(alertSubscriptions.type, type)` + `isNull(alertSubscriptions.symbol)`
+2. ~~`deposit.ts` + `share.ts` — `replyWithPhoto` gets raw `Uint8Array`~~ — fixed: both use `new InputFile(...)`
+3. ~~`referral.ts` — T2 chain lookup picks T2 row as parent~~ — fixed: `linkReferral` already has `eq(referrals.tier, "t1")` filter
+4. ~~`ws` / `@types/ws` not in `package.json`~~ — fixed: both listed in dependencies/devDependencies
 
 ### Trade flow (redesigned — see plan.md)
 

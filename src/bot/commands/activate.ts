@@ -2,11 +2,10 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-
-const INVITE_SEARCH_URL = "https://x.com/search?q=%23PhoenixPerp+invite";
 import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
+import { INVITE_SEARCH_URL } from "../../lib/constants.js";
 import type { BotContext } from "../../types/index.js";
 
 async function phoenixPost(path: string, body: Record<string, string>): Promise<Response> {
@@ -84,7 +83,11 @@ export function registerActivate(bot: Bot<BotContext>) {
         reply_markup: kb,
       });
     } catch (err) {
-      await ctx.api.editMessageText(chatId, msgId, "❌ Activation failed. Please try again.");
+      await ctx.api.editMessageText(
+        chatId,
+        msgId,
+        "❌ Activation failed — the code may be invalid or expired. Try a different code.",
+      );
       throw err;
     }
   });

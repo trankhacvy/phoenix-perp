@@ -125,7 +125,7 @@ async function handleRemoveMonitor(ctx: BotContext, monitorId: string): Promise<
 export function registerWalletMonitor(bot: Bot<BotContext>) {
   bot.command("monitor", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
 

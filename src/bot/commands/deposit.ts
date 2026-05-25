@@ -5,8 +5,9 @@ import { logger } from "../../lib/logger.js";
 import { depositCollateral } from "../../services/phoenix/trade.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { renderBotError } from "../lib/errors.js";
+import { toBotError } from "../lib/errors.js";
 import { parseAmount, solscanUrl, usd } from "../lib/fmt.js";
+import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
 
 const MIN_DEPOSIT_USD = 1;
@@ -14,7 +15,7 @@ const MIN_DEPOSIT_USD = 1;
 export function registerDeposit(bot: Bot<BotContext>) {
   bot.command("deposit", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     await sendDepositScreen(ctx);
@@ -60,7 +61,6 @@ export function registerDeposit(bot: Bot<BotContext>) {
     await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
   });
 
-  // Confirmed amount → execute on-chain
   bot.callbackQuery(/^deposit:confirm:(\d+(?:\.\d{1,2})?)$/, async (ctx) => {
     if (!ctx.user) {
       await ctx.answerCallbackQuery();
@@ -68,23 +68,44 @@ export function registerDeposit(bot: Bot<BotContext>) {
     }
     await ctx.answerCallbackQuery("Submitting…");
 
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+
     const amount = Number(ctx.match[1]);
     if (!Number.isFinite(amount) || amount < MIN_DEPOSIT_USD) {
       await ctx.reply(`Invalid amount. Minimum is ${usd(MIN_DEPOSIT_USD)}.`);
       return;
     }
-    try {
-      const amountNative = BigInt(Math.round(amount * 1_000_000));
-      const sig = await depositCollateral(ctx.user.walletAddress, amountNative);
-      const msg = fmt`✅ ${FormattedString.b("Collateral added")}\n\n${FormattedString.b(usd(amount))} is now in your trading account.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nYou're ready to trade — try /long or /short.`;
-      await ctx.editMessageText(msg.text, {
-        entities: msg.entities,
-        link_preview_options: { is_disabled: true },
-      });
-    } catch (err) {
-      logger.error({ err }, "Deposit collateral failed");
-      await renderBotError(ctx, err, { action: "Add collateral", edit: true });
-    }
+
+    await ctx.editMessageText("⏳ Adding collateral…");
+
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    if (!chatId || !msgId) return;
+    const api = ctx.api;
+
+    void (async () => {
+      try {
+        const amountNative = BigInt(Math.round(amount * 1_000_000));
+        const sig = await depositCollateral(user.walletAddress, amountNative);
+        const msg = fmt`✅ ${FormattedString.b("Collateral added")}\n\n${FormattedString.b(usd(amount))} is now in your trading account.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nYou're ready to trade — try /long or /short.`;
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (err) {
+        logger.error({ err }, "Deposit collateral failed");
+        const be = toBotError(err);
+        const errMsg = fmt`${FormattedString.b("❌ Add collateral failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}${be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``}`;
+        try {
+          await api.editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+          });
+        } catch (editErr) {
+          logger.warn({ err: editErr }, "failed to edit error message after deposit failure");
+        }
+      }
+    })().catch((err) => logger.error({ err }, "deposit async error"));
   });
 }
 
@@ -158,7 +179,7 @@ If you just sent it, give it ${FormattedString.b("~30 seconds")} to confirm on-c
 
 Wallet balance: ${FormattedString.b(usd(balance))} USDC
 
-Move it into your trading account to start trading. Collateral can be withdrawn back to your wallet anytime.`;
+Move your USDC into your trading account to start trading. Collateral can be withdrawn back to your wallet anytime.`;
 
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }

@@ -10,6 +10,7 @@ import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
 import { price as fmtPrice, num, parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
+import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 import {
@@ -23,7 +24,7 @@ import {
 export function registerShort(bot: Bot<BotContext>) {
   bot.command("short", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!ctx.user.phoenixActivated) {
@@ -127,6 +128,8 @@ export function registerShort(bot: Bot<BotContext>) {
     if (!ctx.user) return;
     if (!(await checkOrderRateLimit(ctx))) return;
 
+    if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+
     const [symbol, leverageStr, sizeStr, anchorStr] = ctx.match.slice(1);
     const lev = Number(leverageStr);
     const sizeUsdc = Number(sizeStr);
@@ -160,56 +163,77 @@ export function registerShort(bot: Bot<BotContext>) {
       return;
     }
 
-    try {
-      const baseUnits = marginToTokens(
-        pf.snapshot,
-        sizeUsdc,
-        pf.effectiveLeverage,
-        anchorPrice > 0 ? anchorPrice : undefined,
-      );
-      const { walletAddress: wallet, telegramId } = ctx.user;
-      const sig = await trackAction(
-        {
-          userId: ctx.user.id,
-          command: "trade.short",
-          args: {
-            symbol,
-            leverage: pf.effectiveLeverage,
-            marginUsdc: sizeUsdc,
-            notional: pf.notional,
+    ctx.actionLog = { skip: true };
+    await ctx.editMessageText("⏳ Submitting order to Solana…");
+
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    const api = ctx.api;
+
+    if (!chatId || !msgId) return;
+
+    (async () => {
+      try {
+        const baseUnits = marginToTokens(
+          pf.snapshot,
+          sizeUsdc,
+          pf.effectiveLeverage,
+          anchorPrice > 0 ? anchorPrice : undefined,
+        );
+        const { walletAddress: wallet, telegramId } = user;
+        const sig = await trackAction(
+          {
+            userId: user.id,
+            command: "trade.short",
+            args: {
+              symbol,
+              leverage: pf.effectiveLeverage,
+              marginUsdc: sizeUsdc,
+              notional: pf.notional,
+            },
           },
-        },
-        () =>
-          placeMarketOrder({
-            symbol,
-            side: "short",
-            baseUnits,
-            walletAddress: wallet,
-          }),
-      );
-      ctx.actionLog = { skip: true };
-      await subscribeUser(wallet, telegramId);
+          () =>
+            placeMarketOrder({
+              symbol,
+              side: "short",
+              baseUnits,
+              walletAddress: wallet,
+            }),
+        );
+        await subscribeUser(wallet, telegramId);
 
-      const tokenSize = pf.notional / pf.snapshot.markPrice;
-      const kb = new InlineKeyboard()
-        .text("🛑 Set SL", `editsl:${symbol}:short`)
-        .text("🎯 Set TP", `edittp:${symbol}:short`)
-        .row()
-        .text("📊 View position", "nav:positions");
+        const tokenSize = pf.notional / pf.snapshot.markPrice;
+        const kb = new InlineKeyboard()
+          .text("🛑 Set SL", `editsl:${symbol}:short`)
+          .text("🎯 Set TP", `edittp:${symbol}:short`)
+          .row()
+          .text("📊 View position", "nav:positions");
 
-      const msg = fmt`✅ ${FormattedString.b(`Short ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
-      await ctx.editMessageText(msg.text, {
-        entities: msg.entities,
-        reply_markup: kb,
-        link_preview_options: { is_disabled: true },
-      });
-    } catch (e) {
-      logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
-      ctx.actionLog = { skip: true };
-      const kb = new InlineKeyboard()
-        .text("Try again", `trade:short:${symbol}`)
-        .text("← Back", "nav:positions");
-      await renderBotError(ctx, e, { action: "Trade", edit: true, replyMarkup: kb });
-    }
+        const msg = fmt`✅ ${FormattedString.b(`Short ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: kb,
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (e) {
+        logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
+        const be = toBotError(e);
+        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+        const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        const kb = new InlineKeyboard()
+          .text("Try again", `trade:short:${symbol}`)
+          .text("← Back", "nav:positions");
+        try {
+          await api.editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+            reply_markup: kb,
+          });
+        } catch (editErr) {
+          logger.error({ err: editErr }, "failed to edit error message for short trade");
+        }
+      }
+    })().catch((err) => logger.error({ err }, "short trade async error"));
   });
 }

@@ -6,6 +6,7 @@ const schema = z.object({
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   WEBHOOK_URL: z.string().url().optional(),
+  WEBHOOK_SECRET: z.string().min(16).optional(),
 
   // Privy
   PRIVY_APP_ID: z.string().min(1),

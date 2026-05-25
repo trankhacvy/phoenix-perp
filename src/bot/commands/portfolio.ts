@@ -38,7 +38,7 @@ const riskLabel: Record<string, string> = {
 export function registerPortfolio(bot: Bot<BotContext>) {
   bot.command("portfolio", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;

@@ -9,7 +9,7 @@ import type { BotContext } from "../../types/index.js";
 export function registerClaim(bot: Bot<BotContext>) {
   bot.command("claim", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
 

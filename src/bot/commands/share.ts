@@ -7,7 +7,7 @@ import { requireActivation } from "../lib/activation.js";
 export function registerShare(bot: Bot<BotContext>) {
   bot.command("share", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Use /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;

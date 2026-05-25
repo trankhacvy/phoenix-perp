@@ -75,24 +75,14 @@ jobs:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - name: bot
-            webhook_secret: COOLIFY_WEBHOOK_BOT
-          - name: ws-worker
-            webhook_secret: COOLIFY_WEBHOOK_WS_WORKER
-          - name: alert-worker
-            webhook_secret: COOLIFY_WEBHOOK_ALERT_WORKER
     steps:
-      - name: Trigger Coolify deploy (${{ matrix.service.name }})
+      - name: Trigger Coolify deploy
         env:
-          WEBHOOK_URL: ${{ secrets[matrix.service.webhook_secret] }}
+          WEBHOOK_URL: ${{ secrets.COOLIFY_WEBHOOK_BOT }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
         run: |
           if [ -z "$WEBHOOK_URL" ]; then
-            echo "::error::Missing secret ${{ matrix.service.webhook_secret }}"
+            echo "::error::Missing secret COOLIFY_WEBHOOK_BOT"
             exit 1
           fi
           curl --fail-with-body --silent --show-error \

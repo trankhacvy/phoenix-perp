@@ -13,7 +13,7 @@ import {
 } from "../../services/phoenix/trade.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { renderBotError } from "../lib/errors.js";
+import { toBotError } from "../lib/errors.js";
 import { shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
 
@@ -131,7 +131,7 @@ export async function sendWithdrawAmountScreen(
     const p = pcts[i];
     const amt = Math.floor(((safe * p) / 100) * 100) / 100;
     if (amt >= MIN_WITHDRAW_USD) {
-      const btnLabel = p === 100 ? "All safe" : `${p}%`;
+      const btnLabel = p === 100 ? "Max safe" : `${p}%`;
       kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:${prefix}:${amt.toFixed(2)}`);
     }
     if (i % 2 === 1) kb.row();
@@ -279,7 +279,7 @@ Double-check the address — transfers cannot be reversed.`;
 export function registerWithdraw(bot: Bot<BotContext>) {
   bot.command("withdraw", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;
@@ -365,7 +365,6 @@ export function registerWithdraw(bot: Bot<BotContext>) {
     const amount = Number(ctx.match[1]);
     const amountNative = BigInt(Math.round(amount * 1_000_000));
 
-    // Recheck balance — user may have opened positions or withdrawn elsewhere since confirm
     const { deposited } = await getWithdrawBalances(ctx.user.walletAddress);
     if (amount > deposited + 0.01) {
       await redis.del(lockKey);
@@ -375,10 +374,19 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       return;
     }
 
-    try {
-      const sig = await withdrawCollateral(ctx.user.walletAddress, amountNative);
+    await ctx.editMessageText("⏳ Processing withdrawal…");
 
-      const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
+    const user = ctx.user;
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    if (!chatId || !msgId) return;
+    const api = ctx.api;
+
+    void (async () => {
+      try {
+        const sig = await withdrawCollateral(user.walletAddress, amountNative);
+
+        const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
 
 ${FormattedString.b(usd(amount))} USDC is now in your bot wallet.
 
@@ -386,15 +394,24 @@ ${FormattedString.link("View on Solscan →", solscanUrl(sig))}
 
 Use /deposit to re-add it for trading, or send it to an external wallet from your Privy wallet.`;
 
-      await ctx.editMessageText(msg.text, {
-        entities: msg.entities,
-        link_preview_options: { is_disabled: true },
-      });
-    } catch (err) {
-      logger.error({ err, amount }, "withdrawCollateral failed");
-      await redis.del(lockKey);
-      await renderBotError(ctx, err, { action: "Withdrawal", edit: true });
-    }
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (err) {
+        logger.error({ err, amount }, "withdrawCollateral failed");
+        await redis.del(lockKey);
+        const be = toBotError(err);
+        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+        const errMsg = fmt`${FormattedString.b("❌ Withdrawal failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        try {
+          await api.editMessageText(chatId, msgId, errMsg.text, { entities: errMsg.entities });
+        } catch (editErr) {
+          logger.warn({ err: editErr }, "failed to edit error message after withdraw failure");
+        }
+      }
+    })().catch((err) => logger.error({ err }, "withdraw internal async error"));
   });
 
   // ── Execute: external ──────────────────────────────────────────────────────
@@ -405,7 +422,6 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
       return;
     }
 
-    // Atomically consume the pending confirm — only first concurrent call proceeds
     const confirm = await consumeExtConfirm(String(ctx.from.id));
     if (!confirm) {
       await ctx.answerCallbackQuery();
@@ -416,40 +432,57 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
     const lockKey = `wd:lock:ext:${ctx.user.id}`;
     const locked = await redis.set(lockKey, "1", "EX", EXEC_LOCK_TTL, "NX");
     if (!locked) {
-      // Race: restore the key so the user can retry
       await storeExtConfirm(String(ctx.from.id), confirm.amount, confirm.toAddress);
       await ctx.answerCallbackQuery({ text: "Already processing…", show_alert: true });
       return;
     }
 
     await ctx.answerCallbackQuery("Processing…");
+    await ctx.editMessageText("⏳ Processing external withdrawal…");
+
+    const user = ctx.user;
+    const fromId = String(ctx.from.id);
+    const chatId = ctx.chat?.id;
+    const msgId = ctx.callbackQuery.message?.message_id;
+    if (!chatId || !msgId) return;
+    const api = ctx.api;
+
     const { amount, toAddress } = confirm;
     const amountNative = BigInt(Math.round(amount * 1_000_000));
 
-    let sig1: string;
-    try {
-      sig1 = await withdrawCollateral(ctx.user.walletAddress, amountNative);
-    } catch (err) {
-      logger.error({ err, amount, toAddress }, "External withdraw step 1 failed");
-      await redis.del(lockKey);
-      // Restore confirm key so user can retry
-      await storeExtConfirm(String(ctx.from.id), amount, toAddress);
-      await renderBotError(ctx, err, { action: "Withdrawal (step 1)", edit: true });
-      return;
-    }
+    void (async () => {
+      let sig1: string;
+      try {
+        sig1 = await withdrawCollateral(user.walletAddress, amountNative);
+      } catch (err) {
+        logger.error({ err, amount, toAddress }, "External withdraw step 1 failed");
+        await redis.del(lockKey);
+        await storeExtConfirm(fromId, amount, toAddress);
+        const be = toBotError(err);
+        const errMsg = fmt`${FormattedString.b("❌ Withdrawal (step 1) failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}`;
+        try {
+          await api.editMessageText(chatId, msgId, errMsg.text, { entities: errMsg.entities });
+        } catch (editErr) {
+          logger.warn({ err: editErr }, "failed to edit error after ext withdraw step 1");
+        }
+        return;
+      }
 
-    await ctx.editMessageText("⏳ Step 1 done — moving funds to your address…");
+      try {
+        await api.editMessageText(chatId, msgId, "⏳ Step 1 done — moving funds to your address…");
+      } catch {
+        /* best effort */
+      }
 
-    // Read actual ATA balance — Phoenix may round down; use the real amount
-    const actualBalance = await getUsdcAtaBalanceNative(ctx.user.walletAddress);
-    const transferAmount = actualBalance < amountNative ? actualBalance : amountNative;
+      const actualBalance = await getUsdcAtaBalanceNative(user.walletAddress);
+      const transferAmount = actualBalance < amountNative ? actualBalance : amountNative;
 
-    let sig2: string;
-    try {
-      sig2 = await transferUsdc(ctx.user.walletAddress, toAddress, transferAmount);
-    } catch (err) {
-      logger.error({ err, amount, toAddress }, "External withdraw step 2 failed");
-      const recoveryMsg = fmt`⚠️ ${FormattedString.b("Partial failure")}
+      let sig2: string;
+      try {
+        sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount);
+      } catch (err) {
+        logger.error({ err, amount, toAddress }, "External withdraw step 2 failed");
+        const recoveryMsg = fmt`⚠️ ${FormattedString.b("Partial failure")}
 
 ${FormattedString.b(usd(amount))} USDC reached your bot wallet (step 1 ✅) but the transfer to your address failed.
 
@@ -457,15 +490,22 @@ Your funds are safe. Use /withdraw → ${FormattedString.b("To bot wallet")} is 
 Use /deposit to re-add to trading, or retry the external send from /withdraw.
 
 ${FormattedString.link("Step 1 tx →", solscanUrl(sig1))}`;
-      await ctx.editMessageText(recoveryMsg.text, {
-        entities: recoveryMsg.entities,
-        link_preview_options: { is_disabled: true },
-      });
-      return;
-    }
+        try {
+          await api.editMessageText(chatId, msgId, recoveryMsg.text, {
+            entities: recoveryMsg.entities,
+            link_preview_options: { is_disabled: true },
+          });
+        } catch (editErr) {
+          logger.warn(
+            { err: editErr },
+            "failed to edit recovery message after ext withdraw step 2",
+          );
+        }
+        return;
+      }
 
-    const displayAmount = Number(transferAmount) / 1_000_000;
-    const msg = fmt`✅ ${FormattedString.b("External withdrawal complete")}
+      const displayAmount = Number(transferAmount) / 1_000_000;
+      const msg = fmt`✅ ${FormattedString.b("External withdrawal complete")}
 
 ${FormattedString.b(usd(displayAmount))} USDC sent to:
 ${FormattedString.code(toAddress)}
@@ -473,10 +513,15 @@ ${FormattedString.code(toAddress)}
 ${FormattedString.link("Step 1 (Phoenix → bot wallet) →", solscanUrl(sig1))}
 ${FormattedString.link("Step 2 (bot wallet → you) →", solscanUrl(sig2))}`;
 
-    await ctx.editMessageText(msg.text, {
-      entities: msg.entities,
-      link_preview_options: { is_disabled: true },
-    });
+      try {
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (editErr) {
+        logger.warn({ err: editErr }, "failed to edit success message after ext withdraw");
+      }
+    })().catch((err) => logger.error({ err }, "withdraw external async error"));
   });
 }
 

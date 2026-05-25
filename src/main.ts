@@ -8,7 +8,7 @@ import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { initTestSigner } from "./services/wallet.js";
-import { stopLeaderboardScanner } from "./workers/leaderboard.js";
+import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
@@ -42,16 +42,50 @@ async function main() {
 
   await startWsManager();
 
-  // startLeaderboardScanner().catch((err) => {
-  //   logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
-  // });
+  if (config.NODE_ENV === "production") {
+    startLeaderboardScanner().catch((err) => {
+      logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
+    });
+  }
+
+  try {
+    await bot.api.setMyCommands([
+      { command: "start", description: "Create wallet & get started" },
+      { command: "portfolio", description: "Full account overview" },
+      { command: "long", description: "Open a long position" },
+      { command: "short", description: "Open a short position" },
+      { command: "positions", description: "View open positions" },
+      { command: "markets", description: "Browse all markets" },
+      { command: "deposit", description: "Add USDC to your account" },
+      { command: "withdraw", description: "Move funds out" },
+      { command: "history", description: "Trade history with P&L" },
+      { command: "alerts", description: "Toggle alert types" },
+      { command: "settings", description: "Slippage & leverage defaults" },
+      { command: "referral", description: "Your referral link & stats" },
+      { command: "funding", description: "Top funding rates" },
+      { command: "leaderboard", description: "Top traders" },
+      { command: "help", description: "All commands & help" },
+    ]);
+    await bot.api.setMyDescription(
+      "SuperNova — trade perpetual futures on Phoenix, directly from Telegram.",
+    );
+    await bot.api.setMyShortDescription("SuperNova — Phoenix perps trading bot on Solana");
+  } catch (err) {
+    logger.warn({ err }, "Failed to set bot commands/description (non-fatal)");
+  }
 
   if (config.NODE_ENV === "production" && config.WEBHOOK_URL) {
     server = await createServer();
     await server.listen({ port: config.PORT, host: config.HOST });
 
+    if (!config.WEBHOOK_SECRET) {
+      logger.warn("WEBHOOK_SECRET not set — webhook endpoint has no secret token validation");
+    }
+
     const webhookUrl = `${config.WEBHOOK_URL}/webhook/${config.TELEGRAM_BOT_TOKEN}`;
-    await bot.api.setWebhook(webhookUrl);
+    await bot.api.setWebhook(webhookUrl, {
+      secret_token: config.WEBHOOK_SECRET,
+    });
 
     logger.info({ port: config.PORT, webhookUrl }, "Bot running in webhook mode");
   } else {
@@ -66,11 +100,14 @@ main().catch((err) => {
   process.exit(1);
 });
 
-process.on("SIGTERM", async () => {
-  logger.info("SIGTERM received, shutting down");
+async function shutdown() {
+  logger.info("Shutting down…");
   await bot.stop();
   if (server) await server.close();
   stopWsManager();
   await Promise.all([stopAlertWorker(), stopLeaderboardScanner()]);
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

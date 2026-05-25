@@ -3,10 +3,12 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import type { BotContext } from "../../types/index.js";
 
-const HEADER = fmt`🔥 ${FormattedString.b("PhoenixPerpBot")}
+const HEADER = fmt`🔥 ${FormattedString.b("SuperNova")}
 
 Trade perpetual futures on ${FormattedString.link("Phoenix", "https://www.phoenix.trade")} — directly from Telegram.
 Long, short, set TP/SL, track P&L, follow top traders.
+
+${FormattedString.i("⚠️ Beta — trade at your own risk.")}
 
 What can I help with?`;
 
@@ -31,8 +33,6 @@ const CATEGORIES: { key: string; label: string; content: FormattedString }[] = [
 /long — Open a long position
 /short — Open a short position
 /positions — View & manage open positions
-/setsl — Set stop loss
-/settp — Set take profit
 /markets — Browse all markets
 /market <symbol> — Market detail + technicals`,
   },

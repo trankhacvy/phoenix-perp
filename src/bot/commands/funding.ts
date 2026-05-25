@@ -21,7 +21,7 @@ export function registerFunding(bot: Bot<BotContext>) {
       .slice(0, 10);
 
     if (rows.length === 0) {
-      const msg = fmt`💸 ${FormattedString.b("Top Funding Rates")}\n\nNo significant funding rates right now.`;
+      const msg = fmt`💸 ${FormattedString.b("Top Funding Rates")}\n\nAll funding rates are near zero right now.`;
       await ctx.reply(msg.text, { entities: msg.entities });
       return;
     }

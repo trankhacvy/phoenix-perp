@@ -239,7 +239,7 @@ export async function sendHistoryDetail(
 export function registerHistory(bot: Bot<BotContext>) {
   bot.command("history", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
     if (!(await requireActivation(ctx))) return;

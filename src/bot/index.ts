@@ -1,5 +1,7 @@
+import { autoRetry } from "@grammyjs/auto-retry";
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import { Bot, webhookCallback } from "grammy";
+import { sequentialize } from "@grammyjs/runner";
+import { Bot, GrammyError, HttpError, webhookCallback } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
@@ -27,6 +29,19 @@ import { authMiddleware } from "./middleware/auth.js";
 import { orderRateLimitMiddleware, rateLimitMiddleware } from "./middleware/rate-limit.js";
 
 export const bot = new Bot<BotContext>(config.TELEGRAM_BOT_TOKEN);
+
+bot.api.config.use(
+  autoRetry({
+    maxRetryAttempts: 2,
+    maxDelaySeconds: 5,
+  }),
+);
+
+function getSessionKey(ctx: BotContext): string | undefined {
+  return ctx.from?.id.toString();
+}
+
+bot.use(sequentialize(getSessionKey));
 
 bot.use(authMiddleware);
 bot.use(actionLogMiddleware);
@@ -242,12 +257,27 @@ bot.on("message:text", async (ctx) => {
   }
 });
 
+bot.on("callback_query:data", async (ctx) => {
+  logger.warn({ data: ctx.callbackQuery.data, from: ctx.from?.id }, "unmatched callback query");
+  await ctx.answerCallbackQuery();
+});
+
 bot.catch(async (err) => {
-  logger.error({ err: err.error, update: err.ctx.update }, "Bot error");
+  const e = err.error;
+  if (e instanceof GrammyError) {
+    logger.error(
+      { description: e.description, method: e.method, code: e.error_code },
+      "GrammyError",
+    );
+  } else if (e instanceof HttpError) {
+    logger.error({ err: e.error }, "HttpError — could not contact Telegram");
+  } else {
+    logger.error({ err: e, update: err.ctx.update }, "Bot error");
+  }
   try {
-    await renderBotError(err.ctx, err.error);
+    await renderBotError(err.ctx, e);
   } catch {
-    // ctx may be invalid (e.g. callback query already answered)
+    // ctx may be invalid
   }
 });
 

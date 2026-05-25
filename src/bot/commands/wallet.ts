@@ -239,7 +239,7 @@ export async function sendWalletScreen(
 export function registerWallet(bot: Bot<BotContext>) {
   bot.command("wallet", async (ctx) => {
     if (!ctx.user) {
-      await ctx.reply("Type /start first.");
+      await ctx.reply("Please run /start first to set up your account.");
       return;
     }
 
