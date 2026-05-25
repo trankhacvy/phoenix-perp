@@ -1,10 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { config } from "../../config/index.js";
-import { db } from "../../db/index.js";
-import { userSettings } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { trackAction } from "../../services/action-log.js";
@@ -12,7 +9,8 @@ import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot, getMarkets, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
-import { placeMarketOrder } from "../../services/phoenix/trade.js";
+import { getFeeConfig, placeMarketOrder, setTpSl } from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
@@ -122,6 +120,11 @@ export function registerLong(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, amtStr, levStr] = ctx.match.slice(1);
+    const settings = await getSettings(ctx.user.id);
+    if (!settings.confirmTrades) {
+      await executeTrade(ctx, "long", symbol, Number(levStr), Number(amtStr));
+      return;
+    }
     await sendTradeConfirm(ctx, "long", symbol, Number(levStr), Number(amtStr));
   });
 
@@ -151,132 +154,14 @@ export function registerLong(bot: Bot<BotContext>) {
     if (!claimed) return;
 
     const [symbol, leverageStr, sizeStr, anchorStr] = ctx.match.slice(1);
-    const lev = Number(leverageStr);
-    const sizeUsdc = Number(sizeStr);
-    const anchorPrice = Number(anchorStr);
-
-    let pf: PreflightResult;
-    try {
-      pf = await preflightOpen({
-        user: ctx.user,
-        symbol,
-        side: "long",
-        marginUsdc: sizeUsdc,
-        leverage: lev,
-        anchorPrice,
-      });
-    } catch (e) {
-      const be = toBotError(e);
-      ctx.actionLog = { outcome: "error", errorCode: be.code, errorCategory: be.category };
-      if (be.code === "PRICE_DRIFT") {
-        const kb = new InlineKeyboard()
-          .text("🔄 Refresh price", `trade_refresh:long:${symbol}:${lev}:${sizeUsdc}`)
-          .row()
-          .text("✕ Cancel", "cancel");
-        await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
-        return;
-      }
-      const kb = new InlineKeyboard()
-        .text("← Resize", `trade:long:${symbol}`)
-        .text("✕ Cancel", "cancel");
-      await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
-      return;
-    }
-
-    const tradeLockKey = `trade:lock:${ctx.user.id}`;
-    const tradeLocked = await redis.set(tradeLockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
-    if (!tradeLocked) {
-      await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
-      return;
-    }
-
-    ctx.actionLog = { skip: true };
-    await ctx.editMessageText("⏳ Submitting order to Solana…");
-
-    const user = ctx.user;
-    const chatId = ctx.chat?.id;
-    const msgId = ctx.callbackQuery.message?.message_id;
-    const api = ctx.api;
-
-    void (async () => {
-      try {
-        const baseUnits = marginToTokens(pf.snapshot, sizeUsdc, pf.effectiveLeverage);
-        const { walletAddress: wallet, telegramId } = user;
-        const sig = await trackAction(
-          {
-            userId: user.id,
-            command: "trade.long",
-            args: {
-              symbol,
-              leverage: pf.effectiveLeverage,
-              marginUsdc: sizeUsdc,
-              notional: pf.notional,
-            },
-          },
-          () =>
-            placeMarketOrder({
-              symbol,
-              side: "long",
-              baseUnits,
-              walletAddress: wallet,
-            }),
-        );
-
-        recordTrade({
-          userId: user.id,
-          walletAddress: wallet,
-          symbol,
-          side: "long",
-          action: "open",
-          marginUsdc: sizeUsdc,
-          leverage: pf.effectiveLeverage,
-          notionalUsdc: pf.notional,
-          baseUnits,
-          markPrice: pf.snapshot.markPrice,
-          feeUsdc: pf.feeUsdc,
-          txSignature: sig,
-        });
-
-        await subscribeUser(wallet, telegramId);
-
-        const tokenSize = pf.notional / pf.snapshot.markPrice;
-        const kb = new InlineKeyboard()
-          .text("🛑 Set SL", `editsl:${symbol}:long`)
-          .text("🎯 Set TP", `edittp:${symbol}:long`)
-          .row()
-          .text("📊 View position", "nav:positions");
-
-        const msg = fmt`✅ ${FormattedString.b(`Long ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
-        if (chatId && msgId) {
-          await api.editMessageText(chatId, msgId, msg.text, {
-            entities: msg.entities,
-            reply_markup: kb,
-            link_preview_options: { is_disabled: true },
-          });
-        }
-      } catch (e) {
-        logger.error({ err: e, symbol, side: "long" }, "placeMarketOrder failed");
-        const be = toBotError(e);
-        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-        const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
-        const kb = new InlineKeyboard()
-          .text("Try again", `trade:long:${symbol}`)
-          .text("← Back", "nav:positions");
-        try {
-          if (chatId && msgId) {
-            await api.editMessageText(chatId, msgId, errMsg.text, {
-              entities: errMsg.entities,
-              reply_markup: kb,
-            });
-          }
-        } catch (editErr) {
-          logger.error({ err: editErr, symbol, side: "long" }, "failed to edit error message");
-        }
-      }
-    })()
-      .finally(() => redis.del(tradeLockKey))
-      .catch((err) => logger.error({ err, symbol, side: "long" }, "unhandled trade IIFE error"));
+    await executeTrade(
+      ctx,
+      "long",
+      symbol,
+      Number(leverageStr),
+      Number(sizeStr),
+      Number(anchorStr),
+    );
   });
 }
 
@@ -396,9 +281,7 @@ export async function sendLevStep(
     return;
   }
 
-  const settings = (await db.query.userSettings.findFirst({
-    where: eq(userSettings.userId, ctx.user.id),
-  })) ?? { defaultLeverage: 5 };
+  const settings = await getSettings(ctx.user.id);
 
   const state = await getTraderState(ctx.user.walletAddress);
   const available = Number(state.effectiveCollateral);
@@ -508,4 +391,181 @@ export async function sendTradeConfirm(
   } else {
     await ctx.reply(msg.text, opts);
   }
+}
+
+export async function executeTrade(
+  ctx: BotContext,
+  side: "long" | "short",
+  symbol: string,
+  lev: number,
+  sizeUsdc: number,
+  anchorPrice?: number,
+): Promise<void> {
+  if (!ctx.user) return;
+
+  const settings = await getSettings(ctx.user.id);
+  const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
+
+  let pf: PreflightResult;
+  try {
+    pf = await preflightOpen({
+      user: ctx.user,
+      symbol,
+      side,
+      marginUsdc: sizeUsdc,
+      leverage: lev,
+      anchorPrice,
+    });
+  } catch (e) {
+    const be = toBotError(e);
+    ctx.actionLog = { outcome: "error", errorCode: be.code, errorCategory: be.category };
+    if (be.code === "PRICE_DRIFT") {
+      const kb = new InlineKeyboard()
+        .text("🔄 Refresh price", `trade_refresh:${side}:${symbol}:${lev}:${sizeUsdc}`)
+        .row()
+        .text("✕ Cancel", "cancel");
+      await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
+      return;
+    }
+    const kb = new InlineKeyboard()
+      .text("← Resize", `trade:${side}:${symbol}`)
+      .text("✕ Cancel", "cancel");
+    await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
+    return;
+  }
+
+  const tradeLockKey = `trade:lock:${ctx.user.id}`;
+  const tradeLocked = await redis.set(tradeLockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
+  if (!tradeLocked) {
+    const lockMsg = "Another trade is in progress. Wait a moment and try again.";
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(lockMsg);
+    } else {
+      await ctx.reply(lockMsg);
+    }
+    return;
+  }
+
+  ctx.actionLog = { skip: true };
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText("⏳ Submitting order to Solana…");
+  } else {
+    await ctx.reply("⏳ Submitting order to Solana…");
+  }
+
+  const user = ctx.user;
+  const chatId = ctx.chat?.id;
+  const msgId = ctx.callbackQuery?.message?.message_id;
+  const api = ctx.api;
+
+  void (async () => {
+    try {
+      const baseUnits = marginToTokens(pf.snapshot, sizeUsdc, pf.effectiveLeverage);
+      const { walletAddress: wallet, telegramId } = user;
+      const sig = await trackAction(
+        {
+          userId: user.id,
+          command: `trade.${side}`,
+          args: {
+            symbol,
+            leverage: pf.effectiveLeverage,
+            marginUsdc: sizeUsdc,
+            notional: pf.notional,
+          },
+        },
+        () => placeMarketOrder({ symbol, side, baseUnits, walletAddress: wallet }, fee),
+      );
+
+      recordTrade({
+        userId: user.id,
+        walletAddress: wallet,
+        symbol,
+        side,
+        action: "open",
+        marginUsdc: sizeUsdc,
+        leverage: pf.effectiveLeverage,
+        notionalUsdc: pf.notional,
+        baseUnits,
+        markPrice: pf.snapshot.markPrice,
+        feeUsdc: pf.feeUsdc,
+        txSignature: sig,
+      });
+
+      await subscribeUser(wallet, telegramId);
+
+      let autoTpSlNote = fmt``;
+      if (settings.autoTpPct || settings.autoSlPct) {
+        const entryPrice = pf.snapshot.markPrice;
+        const tpPrice = settings.autoTpPct
+          ? side === "long"
+            ? entryPrice * (1 + settings.autoTpPct / 100)
+            : entryPrice * (1 - settings.autoTpPct / 100)
+          : undefined;
+        const slPrice = settings.autoSlPct
+          ? side === "long"
+            ? entryPrice * (1 - settings.autoSlPct / 100)
+            : entryPrice * (1 + settings.autoSlPct / 100)
+          : undefined;
+        try {
+          await setTpSl(
+            {
+              symbol,
+              walletAddress: wallet,
+              positionSide: side,
+              tpPrice,
+              slPrice,
+              tpMode: "limit",
+              slMode: "market",
+            },
+            fee,
+          );
+          const parts: string[] = [];
+          if (tpPrice) parts.push(`TP ${fmtPrice(tpPrice)}`);
+          if (slPrice) parts.push(`SL ${fmtPrice(slPrice)}`);
+          autoTpSlNote = fmt`\n🤖 Auto ${parts.join(" · ")} set`;
+        } catch (err) {
+          logger.warn({ err, symbol, side }, "Auto TP/SL failed (non-fatal)");
+          autoTpSlNote = fmt`\n⚠️ Auto TP/SL could not be set — set manually.`;
+        }
+      }
+
+      const tokenSize = pf.notional / pf.snapshot.markPrice;
+      const sideLabel = side === "long" ? "Long" : "Short";
+      const kb = new InlineKeyboard()
+        .text("🛑 Set SL", `editsl:${symbol}:${side}`)
+        .text("🎯 Set TP", `edittp:${symbol}:${side}`)
+        .row()
+        .text("📊 View position", "nav:positions");
+
+      const msg = fmt`✅ ${FormattedString.b(`${sideLabel} ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}${autoTpSlNote}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      if (chatId && msgId) {
+        await api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: kb,
+          link_preview_options: { is_disabled: true },
+        });
+      }
+    } catch (e) {
+      logger.error({ err: e, symbol, side }, "placeMarketOrder failed");
+      const be = toBotError(e);
+      const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+      const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+      const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+      const kb = new InlineKeyboard()
+        .text("Try again", `trade:${side}:${symbol}`)
+        .text("← Back", "nav:positions");
+      try {
+        if (chatId && msgId) {
+          await api.editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+            reply_markup: kb,
+          });
+        }
+      } catch (editErr) {
+        logger.error({ err: editErr, symbol, side }, "failed to edit error message");
+      }
+    }
+  })()
+    .finally(() => redis.del(tradeLockKey))
+    .catch((err) => logger.error({ err, symbol, side }, "unhandled trade IIFE error"));
 }

@@ -7,10 +7,12 @@ import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import {
+  getFeeConfig,
   getUsdcAtaBalanceNative,
   transferUsdc,
   withdrawCollateral,
 } from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
 import { toBotError } from "../lib/errors.js";
@@ -389,7 +391,9 @@ export function registerWithdraw(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        const sig = await withdrawCollateral(user.walletAddress, amountNative);
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        const sig = await withdrawCollateral(user.walletAddress, amountNative, fee);
         await redis.del(lockKey);
 
         const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
@@ -461,9 +465,12 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
     const amountNative = BigInt(Math.round(amount * 1_000_000));
 
     void (async () => {
+      const s = await getSettings(user.id);
+      const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+
       let sig1: string;
       try {
-        sig1 = await withdrawCollateral(user.walletAddress, amountNative);
+        sig1 = await withdrawCollateral(user.walletAddress, amountNative, fee);
       } catch (err) {
         logger.error({ err, amount, toAddress }, "External withdraw step 1 failed");
         await redis.del(lockKey);
@@ -489,7 +496,7 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
 
       let sig2: string;
       try {
-        sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount);
+        sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount, fee);
       } catch (err) {
         logger.error({ err, amount, toAddress }, "External withdraw step 2 failed");
         await redis.del(lockKey);

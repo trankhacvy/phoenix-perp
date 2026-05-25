@@ -85,8 +85,28 @@ export interface TpSlParams {
 
 type AnyInstruction = Parameters<typeof addSignersToInstruction>[1];
 
-const JITO_TIP_LAMPORTS = 200_000n;
-const COMPUTE_UNIT_PRICE = 200_000;
+export interface FeeConfig {
+  tipLamports: bigint;
+  cuPrice: number;
+}
+
+const FEE_PRESETS: Record<string, FeeConfig> = {
+  eco: { tipLamports: 600_000n, cuPrice: 100_000 },
+  normal: { tipLamports: 1_500_000n, cuPrice: 200_000 },
+  turbo: { tipLamports: 7_500_000n, cuPrice: 1_000_000 },
+};
+
+const DEFAULT_FEE: FeeConfig = FEE_PRESETS.normal;
+
+export function getFeeConfig(mode: string, customSol?: number | null): FeeConfig {
+  if (mode === "custom" && customSol && customSol > 0) {
+    const tipLamports = BigInt(Math.round(customSol * 1e9));
+    const cuPrice = Math.max(Math.round((customSol * 1e15) / 250_000), 10_000);
+    return { tipLamports, cuPrice };
+  }
+  return FEE_PRESETS[mode] ?? DEFAULT_FEE;
+}
+
 const COMPUTE_UNIT_LIMIT = 250_000;
 const JITO_TIP_ACCOUNTS = [
   "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
@@ -190,13 +210,13 @@ async function pollConfirmation(
 async function sendInstruction(
   ix: AnyInstruction,
   signer: TransactionPartialSigner,
+  fee: FeeConfig = DEFAULT_FEE,
 ): Promise<string> {
   const latestBlockhash = await getBlockhash();
   const tipAccount = JITO_TIP_ACCOUNTS[
     Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)
   ] as Address;
 
-  // Attach signer to the Rise SDK instruction accounts before appending.
   const signedIx = addSignersToInstruction([signer], ix);
 
   const message = pipe(
@@ -207,14 +227,14 @@ async function sendInstruction(
       appendTransactionMessageInstructions(
         [
           getSetComputeUnitPriceInstruction({
-            microLamports: COMPUTE_UNIT_PRICE,
+            microLamports: fee.cuPrice,
           }),
           getSetComputeUnitLimitInstruction({ units: COMPUTE_UNIT_LIMIT }),
           signedIx,
           getTransferSolInstruction({
             source: signer,
             destination: tipAccount,
-            amount: lamports(JITO_TIP_LAMPORTS),
+            amount: lamports(fee.tipLamports),
           }),
         ],
         tx,
@@ -234,14 +254,22 @@ async function getSigner(walletAddress: string): Promise<TransactionPartialSigne
   return getPrivyKitSigner(walletAddress);
 }
 
-async function dispatchInstruction(ix: AnyInstruction, walletAddress: string): Promise<string> {
+async function dispatchInstruction(
+  ix: AnyInstruction,
+  walletAddress: string,
+  fee: FeeConfig = DEFAULT_FEE,
+): Promise<string> {
   const signer = await getSigner(walletAddress);
-  return sendInstruction(ix, signer);
+  return sendInstruction(ix, signer, fee);
 }
 
-async function dispatchInstructions(ixs: AnyInstruction[], walletAddress: string): Promise<string> {
+async function dispatchInstructions(
+  ixs: AnyInstruction[],
+  walletAddress: string,
+  fee: FeeConfig = DEFAULT_FEE,
+): Promise<string> {
   if (ixs.length === 0) throw new Error("No instructions to dispatch");
-  if (ixs.length === 1) return dispatchInstruction(ixs[0], walletAddress);
+  if (ixs.length === 1) return dispatchInstruction(ixs[0], walletAddress, fee);
 
   const signer = await getSigner(walletAddress);
   const latestBlockhash = await getBlockhash();
@@ -258,13 +286,13 @@ async function dispatchInstructions(ixs: AnyInstruction[], walletAddress: string
     (tx) =>
       appendTransactionMessageInstructions(
         [
-          getSetComputeUnitPriceInstruction({ microLamports: COMPUTE_UNIT_PRICE }),
+          getSetComputeUnitPriceInstruction({ microLamports: fee.cuPrice }),
           getSetComputeUnitLimitInstruction({ units: COMPUTE_UNIT_LIMIT }),
           ...signedIxs,
           getTransferSolInstruction({
             source: signer,
             destination: tipAccount,
-            amount: lamports(JITO_TIP_LAMPORTS),
+            amount: lamports(fee.tipLamports),
           }),
         ],
         tx,
@@ -301,7 +329,10 @@ function priceToTicks(
 // Public API
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function placeMarketOrder(params: MarketOrderParams): Promise<string> {
+export async function placeMarketOrder(
+  params: MarketOrderParams,
+  fee?: FeeConfig,
+): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
 
@@ -318,10 +349,10 @@ export async function placeMarketOrder(params: MarketOrderParams): Promise<strin
     orderPacket,
   });
 
-  return dispatchInstruction(ix, params.walletAddress);
+  return dispatchInstruction(ix, params.walletAddress, fee);
 }
 
-export async function placeLimitOrder(params: LimitOrderParams): Promise<string> {
+export async function placeLimitOrder(params: LimitOrderParams, fee?: FeeConfig): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
 
@@ -340,10 +371,10 @@ export async function placeLimitOrder(params: LimitOrderParams): Promise<string>
     traderPdaIndex: 0,
   });
 
-  return dispatchInstruction(ix, params.walletAddress);
+  return dispatchInstruction(ix, params.walletAddress, fee);
 }
 
-export async function setTpSl(params: TpSlParams): Promise<void> {
+export async function setTpSl(params: TpSlParams, fee?: FeeConfig): Promise<void> {
   const client = getTradingClient();
   await client.exchange.ready();
 
@@ -404,7 +435,7 @@ export async function setTpSl(params: TpSlParams): Promise<void> {
   }
 
   for (const ix of ixs) {
-    await dispatchInstruction(ix, params.walletAddress);
+    await dispatchInstruction(ix, params.walletAddress, fee);
   }
 }
 
@@ -412,6 +443,7 @@ export async function closePosition(
   symbol: string,
   walletAddress: string,
   fraction = 1,
+  fee?: FeeConfig,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -459,13 +491,14 @@ export async function closePosition(
     orderPacket,
   });
 
-  return dispatchInstruction(ix, walletAddress);
+  return dispatchInstruction(ix, walletAddress, fee);
 }
 
 export async function cancelStopLoss(
   symbol: string,
   walletAddress: string,
   direction: "long_sl" | "long_tp" | "short_sl" | "short_tp",
+  fee?: FeeConfig,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -482,21 +515,23 @@ export async function cancelStopLoss(
     executionDirection,
   });
 
-  return dispatchInstruction(ix, walletAddress);
+  return dispatchInstruction(ix, walletAddress, fee);
 }
 
 export async function addMargin(
   _symbol: string,
   walletAddress: string,
   amountUsdc: number,
+  fee?: FeeConfig,
 ): Promise<string> {
   const amountNative = BigInt(Math.round(amountUsdc * 1_000_000));
-  return depositCollateral(walletAddress, amountNative);
+  return depositCollateral(walletAddress, amountNative, fee);
 }
 
 export async function depositCollateral(
   walletAddress: string,
   amountUsdcNative: bigint,
+  fee?: FeeConfig,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -507,12 +542,13 @@ export async function depositCollateral(
     traderPdaIndex: 0,
   });
 
-  return dispatchInstructions(result.instructions, walletAddress);
+  return dispatchInstructions(result.instructions, walletAddress, fee);
 }
 
 export async function withdrawCollateral(
   walletAddress: string,
   amountUsdcNative: bigint,
+  fee?: FeeConfig,
 ): Promise<string> {
   const client = getTradingClient();
   await client.exchange.ready();
@@ -523,7 +559,7 @@ export async function withdrawCollateral(
     traderPdaIndex: 0,
   });
 
-  return dispatchInstructions(result.instructions, walletAddress);
+  return dispatchInstructions(result.instructions, walletAddress, fee);
 }
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" as Address;
@@ -533,6 +569,7 @@ export async function transferUsdc(
   fromAddress: string,
   toAddress: string,
   amountNative: bigint,
+  fee?: FeeConfig,
 ): Promise<string> {
   const signer = await getSigner(fromAddress);
   const from = fromAddress as Address;
@@ -566,7 +603,7 @@ export async function transferUsdc(
     decimals: USDC_DECIMALS,
   });
 
-  return dispatchInstructions([createAtaIx, transferIx], fromAddress);
+  return dispatchInstructions([createAtaIx, transferIx], fromAddress, fee);
 }
 
 export async function getUsdcAtaBalanceNative(walletAddress: string): Promise<bigint> {

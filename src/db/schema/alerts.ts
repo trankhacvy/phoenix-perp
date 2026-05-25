@@ -11,6 +11,9 @@ export const alertTypeEnum = pgEnum("alert_type", [
   "funding_flip",
   "large_funding",
 ]);
+// NOTE: fill, funding_flip, large_funding are deprecated but kept in the enum
+// for backward compatibility with existing DB rows. They are no longer shown
+// in the UI or checked by the WS worker.
 
 export const alertSubscriptions = pgTable("alert_subscriptions", {
   id: text("id").primaryKey(),

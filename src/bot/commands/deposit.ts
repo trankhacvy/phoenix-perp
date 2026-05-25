@@ -2,7 +2,8 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { type Bot, InlineKeyboard, InputFile } from "grammy";
 import QRCode from "qrcode";
 import { logger } from "../../lib/logger.js";
-import { depositCollateral } from "../../services/phoenix/trade.js";
+import { depositCollateral, getFeeConfig } from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { toBotError } from "../lib/errors.js";
@@ -89,7 +90,9 @@ export function registerDeposit(bot: Bot<BotContext>) {
     void (async () => {
       try {
         const amountNative = BigInt(Math.round(amount * 1_000_000));
-        const sig = await depositCollateral(user.walletAddress, amountNative);
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        const sig = await depositCollateral(user.walletAddress, amountNative, fee);
         const msg = fmt`✅ ${FormattedString.b("Collateral added")}\n\n${FormattedString.b(usd(amount))} is now in your trading account.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nYou're ready to trade — try /long or /short.`;
         await api.editMessageText(chatId, msgId, msg.text, {
           entities: msg.entities,
