@@ -16,10 +16,15 @@ type MonitorEvent =
   | { action: "subscribe"; wallet: string; telegramId: string }
   | { action: "unsubscribe"; wallet: string; telegramId: string };
 
+function esc(s: string | number): string {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 const connections = new Map<string, WebSocket>();
 const reconnecting = new Set<string>();
 const reconnectFailures = new Map<string, number>();
 const MAX_RECONNECT_FAILURES = 3;
+const MAX_WS_CONNECTIONS = 500;
 let shuttingDown = false;
 
 // wallet → Set of telegramIds that want alerts for this wallet (all watchers)
@@ -55,7 +60,7 @@ interface AlertPayload {
 
 function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
   if (!RISK_ALERT_TIERS.includes(event.riskTier)) return null;
-  const col = `$${Number(event.effectiveCollateral).toFixed(2)}`;
+  const col = esc(`$${Number(event.effectiveCollateral).toFixed(2)}`);
   const tier = event.riskTier;
 
   const messages: Record<string, string> = {
@@ -83,6 +88,14 @@ function addWatcher(walletAddress: string, telegramId: string) {
 
 async function ensureConnection(walletAddress: string) {
   if (connections.has(walletAddress)) return;
+
+  if (connections.size >= MAX_WS_CONNECTIONS) {
+    logger.warn(
+      { walletAddress, current: connections.size },
+      "WS connection cap reached — skipping subscription",
+    );
+    return;
+  }
 
   const ws = new WebSocket(config.PHOENIX_WS_URL);
   connections.set(walletAddress, ws);
@@ -113,6 +126,12 @@ async function ensureConnection(walletAddress: string) {
 
     if (shuttingDown || reconnecting.has(walletAddress)) return;
     reconnecting.add(walletAddress);
+
+    const failures = reconnectFailures.get(walletAddress) ?? 0;
+    const baseDelay = Math.min(5000 * 2 ** failures, 60_000);
+    const jitter = Math.random() * baseDelay * 0.5;
+    const delay = baseDelay + jitter;
+
     setTimeout(() => {
       reconnecting.delete(walletAddress);
       if (shuttingDown) return;
@@ -123,7 +142,7 @@ async function ensureConnection(walletAddress: string) {
           logger.error({ err, walletAddress }, "WS reconnect failed"),
         );
       }
-    }, 5000);
+    }, delay);
   });
 
   ws.on("error", (err) => {
@@ -181,9 +200,9 @@ async function handleOwnAccountEvent(
           type: "tpsl_flip",
           symbol: pos.symbol,
           message: [
-            `🔄 <b>Position Reversed: ${pos.symbol}</b>`,
+            `🔄 <b>Position Reversed: ${esc(pos.symbol)}</b>`,
             "",
-            `Your ${pos.symbol} position flipped sides — existing TP/SL orders were cleared.`,
+            `Your ${esc(pos.symbol)} position flipped sides — existing TP/SL orders were cleared.`,
             "Set new TP/SL to protect your position.",
           ].join("\n"),
           keyboard: [[{ text: "📊 Manage position", callback_data: "nav:positions" }]],
@@ -212,20 +231,22 @@ async function handleOwnAccountEvent(
       type: "fill",
       symbol: fill.symbol,
       message: [
-        `✅ <b>Order Filled: ${fill.symbol}</b>`,
+        `✅ <b>Order Filled: ${esc(fill.symbol)}</b>`,
         "",
-        `${fill.side.toUpperCase()} · ${fill.size} ${fill.symbol} @ $${fill.price}`,
-        `Notional: $${notional}  ·  Fee: $${fill.fee}`,
+        `${esc(fill.side.toUpperCase())} · ${esc(fill.size)} ${esc(fill.symbol)} @ $${esc(fill.price)}`,
+        `Notional: $${esc(notional)}  ·  Fee: $${esc(fill.fee)}`,
       ].join("\n"),
       keyboard: [[{ text: "📊 View position", callback_data: "nav:positions" }]],
     });
 
-    const userId = await getOwnerUserId(walletAddress);
-    if (userId) {
-      const notional = Number(fill.size) * Number(fill.price);
-      await accrueReferralFee(userId, notional).catch((err) =>
-        logger.error({ err }, "Referral fee accrual failed"),
-      );
+    if (config.REFERRAL_ENABLED) {
+      const userId = await getOwnerUserId(walletAddress);
+      if (userId) {
+        const notional = Number(fill.size) * Number(fill.price);
+        await accrueReferralFee(userId, notional).catch((err) =>
+          logger.error({ err }, "Referral fee accrual failed"),
+        );
+      }
     }
   }
 }
@@ -278,21 +299,23 @@ async function handleMonitoredWalletEvent(
   const alerts: { type: string; symbol: string; message: string; keyboard?: AlertButton[][] }[] =
     [];
 
+  const shortEsc = esc(short);
+
   for (const pos of positions) {
     const existed = prevPositions.find((p) => p.symbol === pos.symbol);
     if (!existed) {
-      const levPart = pos.leverage ? ` · ${pos.leverage}x` : "";
+      const levPart = pos.leverage ? ` · ${esc(pos.leverage)}x` : "";
       alerts.push({
         type: "monitor_open",
         symbol: pos.symbol,
-        message: `👁 <b>${short} opened ${pos.symbol}</b>\n${pos.side.toUpperCase()} · ${pos.size} ${pos.symbol} @ $${pos.entryPrice}${levPart}`,
+        message: `👁 <b>${shortEsc} opened ${esc(pos.symbol)}</b>\n${esc(pos.side.toUpperCase())} · ${esc(pos.size)} ${esc(pos.symbol)} @ $${esc(pos.entryPrice)}${levPart}`,
         keyboard: copyCounterKb(pos.symbol, pos.side, walletAddress),
       });
     } else if (existed.side !== pos.side) {
       alerts.push({
         type: "monitor_flip",
         symbol: pos.symbol,
-        message: `👁 <b>${short} flipped ${pos.symbol}</b>\n${existed.side.toUpperCase()} → ${pos.side.toUpperCase()}`,
+        message: `👁 <b>${shortEsc} flipped ${esc(pos.symbol)}</b>\n${esc(existed.side.toUpperCase())} → ${esc(pos.side.toUpperCase())}`,
         keyboard: copyCounterKb(pos.symbol, pos.side, walletAddress),
       });
     }
@@ -304,7 +327,7 @@ async function handleMonitoredWalletEvent(
       alerts.push({
         type: "monitor_close",
         symbol: prevPos.symbol,
-        message: `👁 <b>${short} closed ${prevPos.symbol}</b>\nWas ${prevPos.side.toUpperCase()} · ${prevPos.size} ${prevPos.symbol}`,
+        message: `👁 <b>${shortEsc} closed ${esc(prevPos.symbol)}</b>\nWas ${esc(prevPos.side.toUpperCase())} · ${esc(prevPos.size)} ${esc(prevPos.symbol)}`,
         keyboard: traderKb(walletAddress),
       });
     }
@@ -314,7 +337,7 @@ async function handleMonitoredWalletEvent(
     alerts.push({
       type: "monitor_fill",
       symbol: fill.symbol,
-      message: `👁 <b>${short} filled ${fill.symbol}</b>\n${fill.side.toUpperCase()} · ${fill.size} @ $${fill.price}`,
+      message: `👁 <b>${shortEsc} filled ${esc(fill.symbol)}</b>\n${esc(fill.side.toUpperCase())} · ${esc(fill.size)} @ $${esc(fill.price)}`,
       keyboard: traderKb(walletAddress),
     });
   }
@@ -372,18 +395,29 @@ export function unsubscribeUser(walletAddress: string) {
   }
 }
 
+const OWNER_CACHE_MAX = 5000;
+
 async function getOwnerUserId(walletAddress: string): Promise<string | null> {
   const cached = ownerUserIdCache.get(walletAddress);
   if (cached) return cached;
   const user = await db.query.users.findFirst({
     where: eq(users.walletAddress, walletAddress),
   });
-  if (user) ownerUserIdCache.set(walletAddress, user.id);
+  if (user) {
+    if (ownerUserIdCache.size >= OWNER_CACHE_MAX) {
+      const oldest = ownerUserIdCache.keys().next().value as string;
+      ownerUserIdCache.delete(oldest);
+    }
+    ownerUserIdCache.set(walletAddress, user.id);
+  }
   return user?.id ?? null;
 }
 
 let allMidsWs: WebSocket | null = null;
 let allMidsReconnecting = false;
+let priceAlertCheckRunning = false;
+let lastPriceAlertCheckMs = 0;
+const PRICE_ALERT_THROTTLE_MS = 1000;
 
 function subscribeAllMids() {
   if (allMidsWs) return;
@@ -395,11 +429,17 @@ function subscribeAllMids() {
   });
 
   allMidsWs.on("message", async (raw) => {
+    const now = Date.now();
+    if (priceAlertCheckRunning || now - lastPriceAlertCheckMs < PRICE_ALERT_THROTTLE_MS) return;
+    priceAlertCheckRunning = true;
+    lastPriceAlertCheckMs = now;
     try {
       const data = JSON.parse(raw.toString()) as Record<string, number>;
       await checkPriceAlerts(data);
     } catch (err) {
       logger.error({ err }, "allMids parse error");
+    } finally {
+      priceAlertCheckRunning = false;
     }
   });
 
@@ -468,7 +508,7 @@ async function checkPriceAlerts(mids: Record<string, number>) {
         telegramId: sub.telegramId,
         type: "price",
         symbol: sub.symbol,
-        message: `🔔 <b>Price Alert: ${sub.symbol}</b>\n\nPrice reached <code>$${current}</code>\n(Your target: <code>$${Math.abs(trigger)}</code>)`,
+        message: `🔔 <b>Price Alert: ${esc(sub.symbol)}</b>\n\nPrice reached <code>$${esc(current)}</code>\n(Your target: <code>$${esc(Math.abs(trigger))}</code>)`,
         keyboard: [
           [{ text: `📊 ${sub.symbol} Market`, callback_data: `market:detail:${sub.symbol}:0` }],
         ],
@@ -515,6 +555,7 @@ export function stopWsManager() {
 export function getWsStats() {
   return {
     connections: connections.size,
+    maxConnections: MAX_WS_CONNECTIONS,
     owners: ownerMap.size,
     watchers: watcherIndex.size,
   };

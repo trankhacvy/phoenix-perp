@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { config } from "../../config/index.js";
 import type { BotContext } from "../../types/index.js";
 
 const HEADER = fmt`🔥 ${FormattedString.b("SuperNova")}
@@ -12,7 +13,7 @@ ${FormattedString.i("⚠️ Beta — trade at your own risk.")}
 
 What can I help with?`;
 
-const CATEGORIES: { key: string; label: string; content: FormattedString }[] = [
+const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[] = [
   {
     key: "account",
     label: "💰 Account",
@@ -56,25 +57,28 @@ const CATEGORIES: { key: string; label: string; content: FormattedString }[] = [
 /monitor — Follow traders & get live alerts
 /funding — Top funding rates across markets`,
   },
-  {
-    key: "referral",
-    label: "👥 Referral",
-    content: fmt`👥 ${FormattedString.b("Referral")}
+];
+
+const REFERRAL_CATEGORY = {
+  key: "referral",
+  label: "👥 Referral",
+  content: fmt`👥 ${FormattedString.b("Referral")}
 
 /referral — Your referral link & stats
 /claim — Withdraw referral rebate`,
-  },
-];
+};
+
+function getCategories() {
+  return config.REFERRAL_ENABLED ? [...BASE_CATEGORIES, REFERRAL_CATEGORY] : BASE_CATEGORIES;
+}
 
 function mainKeyboard(): InlineKeyboard {
+  const cats = getCategories();
   const kb = new InlineKeyboard();
-  kb.text(CATEGORIES[0].label, `help:${CATEGORIES[0].key}`)
-    .text(CATEGORIES[1].label, `help:${CATEGORIES[1].key}`)
-    .row()
-    .text(CATEGORIES[2].label, `help:${CATEGORIES[2].key}`)
-    .text(CATEGORIES[3].label, `help:${CATEGORIES[3].key}`)
-    .row()
-    .text(CATEGORIES[4].label, `help:${CATEGORIES[4].key}`);
+  for (let i = 0; i < cats.length; i++) {
+    kb.text(cats[i].label, `help:${cats[i].key}`);
+    if (i % 2 === 1 && i < cats.length - 1) kb.row();
+  }
   return kb;
 }
 
@@ -90,7 +94,7 @@ export function registerHelp(bot: Bot<BotContext>) {
   bot.callbackQuery(/^help:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const key = ctx.match[1];
-    const cat = CATEGORIES.find((c) => c.key === key);
+    const cat = getCategories().find((c) => c.key === key);
     if (!cat) return;
 
     const kb = new InlineKeyboard().text("← Back", "help:back");

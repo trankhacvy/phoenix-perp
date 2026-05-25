@@ -9,6 +9,7 @@ import { toBotError } from "../lib/errors.js";
 import { parseAmount, solscanUrl, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
+import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const MIN_DEPOSIT_USD = 1;
 
@@ -67,6 +68,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
       return;
     }
     await ctx.answerCallbackQuery("Submitting…");
+    if (!(await checkOrderRateLimit(ctx))) return;
 
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 

@@ -8,6 +8,7 @@ import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
 import { INVITE_SEARCH_URL } from "../../lib/constants.js";
 import { logger } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
 import { createEmbeddedWallet } from "../../services/wallet.js";
@@ -18,6 +19,9 @@ import { sendHistoryDetail } from "./history.js";
 import { sendSizeStep } from "./long.js";
 import { sendMarketDetail } from "./markets.js";
 import { sendPositionDetail } from "./positions.js";
+
+const WALLET_CREATE_LIMIT = 10;
+const WALLET_CREATE_WINDOW = 60;
 
 export function registerStart(bot: Bot<BotContext>) {
   bot.command("start", async (ctx) => {
@@ -139,6 +143,14 @@ export function registerStart(bot: Bot<BotContext>) {
     const isDeepLink = DEEP_LINK_PREFIXES.some((p) => rawPayload.startsWith(p));
     const referredBy = rawPayload && !isDeepLink ? rawPayload : undefined;
 
+    const globalKey = "ratelimit:wallet_create:global";
+    const count = await redis.incr(globalKey);
+    if (count === 1) await redis.expire(globalKey, WALLET_CREATE_WINDOW);
+    if (count > WALLET_CREATE_LIMIT) {
+      await ctx.reply("Too many new signups right now. Please try again in a minute.");
+      return;
+    }
+
     const setupMsg = await ctx.reply("Creating your wallet... ⏳");
     const msgId = setupMsg.message_id;
     const chatId = ctx.chat?.id;
@@ -172,7 +184,7 @@ export function registerStart(bot: Bot<BotContext>) {
         referredBy,
       });
 
-      if (referredBy) await linkReferral(telegramId, referredBy);
+      if (referredBy && config.REFERRAL_ENABLED) await linkReferral(telegramId, referredBy);
 
       const kb = new InlineKeyboard()
         .text("💰 Deposit", "nav:deposit")

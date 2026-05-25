@@ -71,8 +71,12 @@ describe("fractionToCloseLots", () => {
     expect(() => fractionToCloseLots(1000, -0.1)).toThrow(BotError);
   });
 
-  it("throws SIZE_TOO_SMALL when rounded lots <= 0", () => {
-    expect(() => fractionToCloseLots(1, 0.01)).toThrow(BotError);
+  it("ceil rounds up small fractions so 1 lot * 0.01 = 1 lot", () => {
+    expect(fractionToCloseLots(1, 0.01)).toBe(1n);
+  });
+
+  it("throws SIZE_TOO_SMALL when position is 0 lots", () => {
+    expect(() => fractionToCloseLots(0, 1)).toThrow(BotError);
   });
 });
 

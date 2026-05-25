@@ -9,8 +9,7 @@ import type { BotContext } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
 
 export function registerExport(bot: Bot<BotContext>) {
-  // Only available in development — do not register in production.
-  if (config.NODE_ENV !== "development") return;
+  if (config.NODE_ENV !== "development" || !config.TEST_KEYPAIR) return;
 
   bot.command("exportkey", async (ctx) => {
     if (!ctx.user) {

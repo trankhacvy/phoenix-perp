@@ -16,12 +16,26 @@ vi.mock("../../../src/db/index.js", () => ({
     },
   },
 }));
-vi.mock("../../../src/lib/redis.js", () => ({
-  redis: {
-    incr: vi.fn(),
-    expire: vi.fn(),
-  },
-}));
+vi.mock("../../../src/lib/redis.js", () => {
+  let mockCount = 1;
+  const multiObj = {
+    incr: vi.fn().mockReturnThis(),
+    expire: vi.fn().mockReturnThis(),
+    exec: vi.fn(async () => [[null, mockCount], [null, 1]]),
+  };
+  return {
+    redis: {
+      incr: vi.fn(),
+      expire: vi.fn(),
+      multi: vi.fn(() => multiObj),
+      _multiObj: multiObj,
+      _setMockCount: (n: number) => {
+        mockCount = n;
+        multiObj.exec.mockImplementation(async () => [[null, n], [null, 1]]);
+      },
+    },
+  };
+});
 vi.mock("../../../src/bot/lib/pending.js", () => ({
   setPending: vi.fn(),
   getPending: vi.fn(),
@@ -38,7 +52,13 @@ import type { User } from "../../../src/db/schema/users.js";
 
 const snapMock = getMarketSnapshot as unknown as ReturnType<typeof vi.fn>;
 const stateMock = getTraderState as unknown as ReturnType<typeof vi.fn>;
-const redisMock = redis as unknown as { incr: ReturnType<typeof vi.fn>; expire: ReturnType<typeof vi.fn> };
+const redisMock = redis as unknown as {
+  incr: ReturnType<typeof vi.fn>;
+  expire: ReturnType<typeof vi.fn>;
+  multi: ReturnType<typeof vi.fn>;
+  _multiObj: { incr: ReturnType<typeof vi.fn>; expire: ReturnType<typeof vi.fn>; exec: ReturnType<typeof vi.fn> };
+  _setMockCount: (n: number) => void;
+};
 
 const baseSnap = {
   symbol: "BTC",
@@ -85,8 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   snapMock.mockResolvedValue(baseSnap);
   stateMock.mockResolvedValue({ effectiveCollateral: "500" });
-  redisMock.incr.mockResolvedValue(1);
-  redisMock.expire.mockResolvedValue(1);
+  redisMock._setMockCount(1);
 });
 
 describe("parseLeverage", () => {
@@ -113,14 +132,14 @@ describe("parseLeverage", () => {
 
 describe("checkOrderRateLimit", () => {
   it("returns true when under limit", async () => {
-    redisMock.incr.mockResolvedValue(3);
+    redisMock._setMockCount(3);
     const ctx = makeCtx();
     const result = await checkOrderRateLimit(ctx);
     expect(result).toBe(true);
   });
 
   it("returns false and answers callback on 6th call", async () => {
-    redisMock.incr.mockResolvedValue(6);
+    redisMock._setMockCount(6);
     const ctx = makeCtx({
       callbackQuery: {} as NonNullable<BotContext["callbackQuery"]>,
     });
@@ -130,24 +149,24 @@ describe("checkOrderRateLimit", () => {
   });
 
   it("returns false and sends reply when not a callback", async () => {
-    redisMock.incr.mockResolvedValue(6);
+    redisMock._setMockCount(6);
     const ctx = makeCtx({ callbackQuery: null });
     const result = await checkOrderRateLimit(ctx);
     expect(result).toBe(false);
     expect(ctx.reply).toHaveBeenCalledWith("Too many orders. Wait a minute.");
   });
 
-  it("sets expire on first call", async () => {
-    redisMock.incr.mockResolvedValue(1);
+  it("uses redis.multi for atomic incr+expire with NX flag", async () => {
+    redisMock._setMockCount(1);
     const ctx = makeCtx();
     await checkOrderRateLimit(ctx);
-    expect(redisMock.expire).toHaveBeenCalled();
-  });
-
-  it("does not set expire on subsequent calls", async () => {
-    redisMock.incr.mockResolvedValue(2);
-    const ctx = makeCtx();
-    await checkOrderRateLimit(ctx);
-    expect(redisMock.expire).not.toHaveBeenCalled();
+    expect(redisMock.multi).toHaveBeenCalled();
+    expect(redisMock._multiObj.incr).toHaveBeenCalled();
+    expect(redisMock._multiObj.expire).toHaveBeenCalledWith(
+      expect.any(String),
+      60,
+      "NX",
+    );
+    expect(redisMock._multiObj.exec).toHaveBeenCalled();
   });
 });

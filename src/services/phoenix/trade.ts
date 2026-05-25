@@ -116,7 +116,7 @@ let _cachedBlockhash: {
   value: LatestBlockhashValue;
   fetchedAt: number;
 } | null = null;
-const BLOCKHASH_TTL_MS = 20_000;
+const BLOCKHASH_TTL_MS = 10_000;
 
 async function getBlockhash(): Promise<LatestBlockhashValue> {
   const now = Date.now();
@@ -162,10 +162,13 @@ async function sendViaHeliusSender(base64Tx: string): Promise<string> {
   return json.result;
 }
 
-async function pollConfirmation(signature: string): Promise<void> {
+async function pollConfirmation(
+  signature: string,
+  blockhash?: LatestBlockhashValue,
+): Promise<void> {
   const rpc = getRpc();
-  const latestBlockhash = await getBlockhash();
-  const deadline = Number(latestBlockhash.lastValidBlockHeight);
+  const bh = blockhash ?? (await getBlockhash());
+  const deadline = Number(bh.lastValidBlockHeight);
   const sig = signature as Parameters<typeof rpc.getSignatureStatuses>[0][number];
 
   for (let attempts = 0; attempts < 60; attempts++) {
@@ -181,7 +184,7 @@ async function pollConfirmation(signature: string): Promise<void> {
       throw new Error(`Transaction expired before confirmation (signature: ${signature})`);
     }
   }
-  throw new Error(`Timed out waiting for confirmation (signature: ${signature})`);
+  throw new Error(`Transaction status unknown — timed out polling. Check Solscan: ${signature}`);
 }
 
 async function sendInstruction(
@@ -221,7 +224,8 @@ async function sendInstruction(
   const signedTx = await signTransactionMessageWithSigners(message);
   const txBytes = getTransactionEncoder().encode(signedTx);
   const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
-  await pollConfirmation(sig);
+  _cachedBlockhash = null;
+  await pollConfirmation(sig, latestBlockhash);
   return sig;
 }
 
@@ -270,7 +274,8 @@ async function dispatchInstructions(ixs: AnyInstruction[], walletAddress: string
   const signedTx = await signTransactionMessageWithSigners(message);
   const txBytes = getTransactionEncoder().encode(signedTx);
   const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
-  await pollConfirmation(sig);
+  _cachedBlockhash = null;
+  await pollConfirmation(sig, latestBlockhash);
   return sig;
 }
 

@@ -43,9 +43,9 @@ function getSessionKey(ctx: BotContext): string | undefined {
 
 bot.use(sequentialize(getSessionKey));
 
+bot.use(rateLimitMiddleware);
 bot.use(authMiddleware);
 bot.use(actionLogMiddleware);
-bot.use(rateLimitMiddleware);
 
 bot.command("long", orderRateLimitMiddleware);
 bot.command("short", orderRateLimitMiddleware);

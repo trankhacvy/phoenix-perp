@@ -59,12 +59,14 @@ export function fractionToCloseLots(rawLots: number, fraction: number): bigint {
       userMessage: "Invalid close fraction.",
     });
   }
-  const closeLots = Math.round(Math.abs(rawLots) * fraction);
+  const absLots = Math.abs(rawLots);
+  const closeLots = fraction >= 1 ? absLots : Math.ceil(absLots * fraction);
   if (closeLots <= 0) {
     throw new BotError({
       category: "validation",
       code: "SIZE_TOO_SMALL",
-      userMessage: "Position too small to close that fraction.",
+      userMessage: "Position too small to close that fraction. Try closing 100% instead.",
+      hint: "Use the full close button.",
     });
   }
   return BigInt(closeLots);

@@ -10,6 +10,7 @@ import { toBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, pct, signedUsd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
+import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 function priceForCallback(p: number): string {
   return p.toFixed(8).replace(/\.?0+$/, "");
@@ -136,6 +137,7 @@ export function registerSetTp(bot: Bot<BotContext>) {
   bot.callbackQuery(/^tp:exec:([A-Z0-9]+):([\d.]+):(market|limit):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Setting…");
     if (!ctx.user) return;
+    if (!(await checkOrderRateLimit(ctx))) return;
 
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 

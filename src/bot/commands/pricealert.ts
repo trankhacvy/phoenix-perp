@@ -1,12 +1,15 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import { and, eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { db } from "../../db/index.js";
 import { alertSubscriptions } from "../../db/schema/index.js";
-import { getMarketSnapshot } from "../../services/phoenix/market.js";
+import { getMarket, getMarketSnapshot } from "../../services/phoenix/market.js";
 import type { BotContext } from "../../types/index.js";
 import { price as fmtPrice, parseAmount } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
+
+const MAX_PRICE_ALERTS_PER_USER = 20;
 
 export async function sendPriceAlertPrompt(ctx: BotContext, symbol: string): Promise<void> {
   let markPrice: number | null = null;
@@ -94,6 +97,27 @@ export function registerPriceAlert(bot: Bot<BotContext>) {
     const [symbol, priceStr, direction] = ctx.match.slice(1) as [string, string, "above" | "below"];
     const triggerPrice = Number(priceStr);
     const storedPrice = direction === "below" ? -triggerPrice : triggerPrice;
+
+    try {
+      await getMarket(symbol);
+    } catch {
+      await ctx.editMessageText(`Market "${symbol}" not found. Use /markets to browse.`);
+      return;
+    }
+
+    const existing = await db.query.alertSubscriptions.findMany({
+      where: and(
+        eq(alertSubscriptions.userId, ctx.user.id),
+        eq(alertSubscriptions.type, "price"),
+        eq(alertSubscriptions.enabled, true),
+      ),
+    });
+    if (existing.length >= MAX_PRICE_ALERTS_PER_USER) {
+      await ctx.editMessageText(
+        `You already have ${MAX_PRICE_ALERTS_PER_USER} active price alerts. Remove some first.`,
+      );
+      return;
+    }
 
     await db.insert(alertSubscriptions).values({
       id: crypto.randomUUID(),
