@@ -15,7 +15,7 @@ import {
 import type { BotContext } from "../../types/index.js";
 import {
   price as fmtPrice,
-  fundingApr,
+  funding1h,
   fundingDailyUsd,
   fundingDir,
   fundingDot,
@@ -28,14 +28,21 @@ const PAGE_SIZE = 10;
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
-function buildListRow(item: MarketListItem): FormattedString {
-  const iso = item.isIsolatedOnly ? "  [ISO]" : "";
+function buildListRow(
+  item: MarketListItem,
+  index: number,
+  botUsername: string,
+  page: number,
+): FormattedString {
+  const iso = item.isIsolatedOnly ? " [ISO]" : "";
   const priceStr = item.markPrice > 0 ? fmtPrice(item.markPrice) : "—";
   const dot = fundingDot(item.fundingRate);
-  const apr = fundingApr(item.fundingRate);
+  const rate = funding1h(item.fundingRate);
+  const deepLink = `https://t.me/${botUsername}?start=mkt_${item.symbol}_${page}`;
+  const label = `${index}. ${item.symbol}${iso}`;
 
-  return fmt`${FormattedString.b(`${item.symbol}/USD`)}${iso}  ${FormattedString.b(priceStr)}
-  ⚡ ${item.maxLeverage}× max  ·  Funding ${apr} ${dot}`;
+  return fmt`${FormattedString.link(label, deepLink)}  ${FormattedString.b(priceStr)}
+  Leverage: ${FormattedString.b(String(item.maxLeverage))}  ·  Funding: ${rate} ${dot}`;
 }
 
 export async function sendMarketsScreen(ctx: BotContext | CallbackQueryContext<BotContext>) {
@@ -51,23 +58,22 @@ async function sendMarketsPage(
   const { items: slice, page: safePage, totalPages } = paginate(allMarkets, page, PAGE_SIZE);
 
   const listItems = await getMarketListItems(slice);
+  const botUsername = ctx.me.username ?? "bot";
 
   const pageLabel =
     totalPages > 1 ? fmt`  ·  ${FormattedString.i(`${safePage + 1}/${totalPages}`)}` : fmt``;
   const header = fmt`📊 ${FormattedString.b("Markets")}${pageLabel}\n`;
 
-  const rows = listItems.map((item) => buildListRow(item));
+  const rows = listItems.map((item, i) => {
+    const globalIdx = safePage * PAGE_SIZE + i + 1;
+    return buildListRow(item, globalIdx, botUsername, safePage);
+  });
 
-  const footer = fmt`\n${FormattedString.i("Tap a market below for details & trading.")}`;
+  const footer = fmt`\n${FormattedString.i("Tap a market name for details & trading.")}`;
 
   const msg = FormattedString.join([header, ...rows, footer], "\n");
 
   const kb = new InlineKeyboard();
-
-  for (const item of listItems) {
-    kb.text(`${item.symbol}`, `market:detail:${item.symbol}:${safePage}`).row();
-  }
-
   addPaginationRow(kb, "markets:page", safePage, totalPages);
 
   const opts = {
@@ -125,7 +131,7 @@ export async function sendMarketDetail(
   const actualOI = stats?.stats?.[0]?.open_interest;
   const oiStr = actualOI != null ? usd(actualOI) : "—";
 
-  const apr = fundingApr(snapshot.fundingRate);
+  const rate1h = funding1h(snapshot.fundingRate);
   const dir = fundingDir(snapshot.fundingRate);
   const trend = fundingHistory?.rates
     ? fundingTrend(fundingHistory.rates.map((r) => Number(r.fundingRatePercentage) / 100))
@@ -134,9 +140,9 @@ export async function sendMarketDetail(
   const dot = fundingDot(snapshot.fundingRate);
   const dailyCost = fundingDailyUsd(snapshot.fundingRate, 10_000);
 
-  const absApr = Math.abs(snapshot.fundingRate * 1095 * 100);
+  const abs1h = Math.abs(snapshot.fundingRate * 100);
   const fundingWarning =
-    absApr > 100
+    abs1h > 0.01
       ? fmt`\n   ⚠️ ${FormattedString.i("Extreme — holding overnight is costly")}`
       : fmt``;
 
@@ -168,7 +174,7 @@ export async function sendMarketDetail(
         })()
       : fmt``;
 
-  const msg = fmt`📊 ${FormattedString.b(`${symbol}/USD`)}\n\n💰 Price          ${FormattedString.b(fmtPrice(snapshot.markPrice))}\n📏 Max leverage   ${FormattedString.b(`${snapshot.maxLeverage}×`)}\n📊 Open interest  ${FormattedString.b(oiStr)}\n\n💸 ${FormattedString.b("Funding")}\n   Rate     ${FormattedString.b(apr)}${trendStr} ${dot}\n   Pays     ${FormattedString.i(dir)}\n   Daily    ${FormattedString.i(`~${dailyCost} per $10K`)}${fundingWarning}\n\n💰 Fee  ${FormattedString.b(`${(snapshot.takerFee * 100).toFixed(2)}%`)} taker${isolatedNote}${commodityNote}${taSection}`;
+  const msg = fmt`📊 ${FormattedString.b(symbol)}\n\n💰 Price          ${FormattedString.b(fmtPrice(snapshot.markPrice))}\n📏 Leverage       ${FormattedString.b(String(snapshot.maxLeverage))} max\n📊 Open interest  ${FormattedString.b(oiStr)}\n\n💸 ${FormattedString.b("1h Funding")}\n   Rate     ${FormattedString.b(rate1h)}${trendStr} ${dot}\n   Pays     ${FormattedString.i(dir)}\n   Daily    ${FormattedString.i(`~${dailyCost} per $10K`)}${fundingWarning}\n\n💰 Fee  ${FormattedString.b(`${(snapshot.takerFee * 100).toFixed(2)}%`)} taker${isolatedNote}${commodityNote}${taSection}`;
 
   const kb = new InlineKeyboard();
   if (!isolated) {

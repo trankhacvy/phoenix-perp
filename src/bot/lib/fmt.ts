@@ -34,9 +34,9 @@ export function pct(n: number | string, decimals = 2): string {
   return `${sign}${num(v, decimals, decimals)}%`;
 }
 
-export function fundingApr(rateDecimal: number): string {
-  const apr = rateDecimal * 1095 * 100;
-  return `${apr >= 0 ? "+" : ""}${num(apr, 2, 2)}% / yr`;
+export function funding1h(rateDecimal: number): string {
+  const pct = rateDecimal * 100;
+  return `${pct >= 0 ? "+" : ""}${num(pct, 4, 4)}%`;
 }
 
 export function pnlEmoji(n: number): string {
@@ -94,7 +94,7 @@ export function compactUsd(n: number): string {
 }
 
 export function fundingDailyUsd(rateDecimal: number, notionalUsdc: number): string {
-  const dailyUsd = Math.abs(rateDecimal) * notionalUsdc * 3;
+  const dailyUsd = Math.abs(rateDecimal) * notionalUsdc * 24;
   return `$${num(dailyUsd, 2, 2)}/day`;
 }
 
@@ -112,8 +112,8 @@ export function liqDistanceLabel(
 }
 
 export function fundingDot(rateDecimal: number): string {
-  const apr = Math.abs(rateDecimal * 1095 * 100);
-  if (apr < 1) return "⚪";
+  const pct1h = Math.abs(rateDecimal * 100);
+  if (pct1h < 0.0005) return "⚪";
   return rateDecimal >= 0 ? "🟢" : "🔴";
 }
 

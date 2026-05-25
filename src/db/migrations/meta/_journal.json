@@ -50,6 +50,13 @@
       "when": 1779625967431,
       "tag": "0006_bent_the_hood",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779680453104,
+      "tag": "0007_careful_rogue",
+      "breakpoints": true
     }
   ]
 }

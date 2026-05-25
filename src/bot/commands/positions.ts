@@ -5,6 +5,7 @@ import { logger } from "../../lib/logger.js";
 import { generatePnlCard } from "../../services/image.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition } from "../../services/phoenix/trade.js";
+import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { requireActivation } from "../lib/activation.js";
@@ -331,6 +332,25 @@ export function registerPositions(bot: Bot<BotContext>) {
           logger.warn({ err: editErr }, "failed to edit error message after close failure");
         }
         return;
+      }
+
+      if (pos) {
+        const markPrice = Number(pos.markPrice);
+        const totalSize = Number(pos.size);
+        const closingSize = totalSize * fraction;
+        const notional = closingSize * markPrice;
+        recordTrade({
+          userId: user.id,
+          walletAddress: user.walletAddress,
+          symbol,
+          side,
+          action: "close",
+          notionalUsdc: notional,
+          baseUnits: closingSize.toString(),
+          markPrice,
+          closeFraction: fraction,
+          txSignature: sig,
+        });
       }
 
       const closedPct = fraction * 100;
