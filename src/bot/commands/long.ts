@@ -12,6 +12,7 @@ import { getMarketSnapshot, getMarkets, isIsolatedOnly } from "../../services/ph
 import { getTraderState } from "../../services/phoenix/position.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
+import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
@@ -207,6 +208,22 @@ export function registerLong(bot: Bot<BotContext>) {
               walletAddress: wallet,
             }),
         );
+
+        recordTrade({
+          userId: user.id,
+          walletAddress: wallet,
+          symbol,
+          side: "long",
+          action: "open",
+          marginUsdc: sizeUsdc,
+          leverage: pf.effectiveLeverage,
+          notionalUsdc: pf.notional,
+          baseUnits,
+          markPrice: pf.snapshot.markPrice,
+          feeUsdc: pf.feeUsdc,
+          txSignature: sig,
+        });
+
         await subscribeUser(wallet, telegramId);
 
         const tokenSize = pf.notional / pf.snapshot.markPrice;
@@ -391,7 +408,7 @@ export async function sendLevStep(
   let fundingNote = fmt``;
   const isLongPaying = snapshot.fundingRate > 0;
   const youPay = side === "long" ? isLongPaying : !isLongPaying;
-  const dailyAtDefault = Math.abs(snapshot.fundingRate) * sizeUsdc * settings.defaultLeverage * 3;
+  const dailyAtDefault = Math.abs(snapshot.fundingRate) * sizeUsdc * settings.defaultLeverage * 24;
   if (dailyAtDefault > 0.05) {
     const verb = youPay ? "costs you" : "earns you";
     const dailyStr = fundingDailyUsd(snapshot.fundingRate, sizeUsdc * settings.defaultLeverage);
@@ -443,7 +460,7 @@ export async function sendTradeConfirm(
 
   const isLongPaying = snapshot.fundingRate > 0;
   const youPay = side === "long" ? isLongPaying : !isLongPaying;
-  const dailyCost = Math.abs(snapshot.fundingRate) * notional * 3;
+  const dailyCost = Math.abs(snapshot.fundingRate) * notional * 24;
   let fundingLine = fmt``;
   if (dailyCost > 0.01) {
     if (youPay) {

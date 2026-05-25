@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { fundingDailyUsd, liqDistanceLabel } from "../../../src/bot/lib/fmt.js";
 
 describe("fundingDailyUsd", () => {
-  it("computes positive rate correctly (3 events/day)", () => {
-    expect(fundingDailyUsd(0.0001, 10000)).toBe("$3.00/day");
+  it("computes positive rate correctly (24 hourly periods/day)", () => {
+    expect(fundingDailyUsd(0.0001, 10000)).toBe("$24.00/day");
   });
 
   it("uses absolute value for negative rates", () => {
-    expect(fundingDailyUsd(-0.0002, 5000)).toBe("$3.00/day");
+    expect(fundingDailyUsd(-0.0002, 5000)).toBe("$24.00/day");
   });
 
   it("returns $0.00/day for zero rate", () => {
@@ -15,7 +15,7 @@ describe("fundingDailyUsd", () => {
   });
 
   it("formats small values with two decimals", () => {
-    expect(fundingDailyUsd(0.00001, 1000)).toBe("$0.03/day");
+    expect(fundingDailyUsd(0.00001, 1000)).toBe("$0.24/day");
   });
 });
 

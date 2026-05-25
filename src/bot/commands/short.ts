@@ -6,6 +6,7 @@ import { trackAction } from "../../services/action-log.js";
 import { marginToTokens } from "../../services/phoenix/lots.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
+import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
@@ -201,6 +202,22 @@ export function registerShort(bot: Bot<BotContext>) {
               walletAddress: wallet,
             }),
         );
+
+        recordTrade({
+          userId: user.id,
+          walletAddress: wallet,
+          symbol,
+          side: "short",
+          action: "open",
+          marginUsdc: sizeUsdc,
+          leverage: pf.effectiveLeverage,
+          notionalUsdc: pf.notional,
+          baseUnits,
+          markPrice: pf.snapshot.markPrice,
+          feeUsdc: pf.feeUsdc,
+          txSignature: sig,
+        });
+
         await subscribeUser(wallet, telegramId);
 
         const tokenSize = pf.notional / pf.snapshot.markPrice;
