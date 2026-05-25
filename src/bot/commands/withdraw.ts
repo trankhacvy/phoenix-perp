@@ -16,6 +16,7 @@ import { requireActivation } from "../lib/activation.js";
 import { toBotError } from "../lib/errors.js";
 import { shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
+import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const MIN_WITHDRAW_USD = 1;
 const MIN_SOL_FOR_GAS = 0.001 * 1e9;
@@ -353,6 +354,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       await ctx.answerCallbackQuery();
       return;
     }
+    if (!(await checkOrderRateLimit(ctx))) return;
 
     const lockKey = `wd:lock:int:${ctx.user.id}`;
     const locked = await redis.set(lockKey, "1", "EX", EXEC_LOCK_TTL, "NX");
@@ -379,12 +381,16 @@ export function registerWithdraw(bot: Bot<BotContext>) {
     const user = ctx.user;
     const chatId = ctx.chat?.id;
     const msgId = ctx.callbackQuery.message?.message_id;
-    if (!chatId || !msgId) return;
+    if (!chatId || !msgId) {
+      await redis.del(lockKey);
+      return;
+    }
     const api = ctx.api;
 
     void (async () => {
       try {
         const sig = await withdrawCollateral(user.walletAddress, amountNative);
+        await redis.del(lockKey);
 
         const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
 
@@ -421,6 +427,7 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
       await ctx.answerCallbackQuery();
       return;
     }
+    if (!(await checkOrderRateLimit(ctx))) return;
 
     const confirm = await consumeExtConfirm(String(ctx.from.id));
     if (!confirm) {
@@ -444,7 +451,10 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
     const fromId = String(ctx.from.id);
     const chatId = ctx.chat?.id;
     const msgId = ctx.callbackQuery.message?.message_id;
-    if (!chatId || !msgId) return;
+    if (!chatId || !msgId) {
+      await redis.del(lockKey);
+      return;
+    }
     const api = ctx.api;
 
     const { amount, toAddress } = confirm;
@@ -482,6 +492,8 @@ Use /deposit to re-add it for trading, or send it to an external wallet from you
         sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount);
       } catch (err) {
         logger.error({ err, amount, toAddress }, "External withdraw step 2 failed");
+        await redis.del(lockKey);
+        await storeExtConfirm(fromId, amount, toAddress);
         const recoveryMsg = fmt`⚠️ ${FormattedString.b("Partial failure")}
 
 ${FormattedString.b(usd(amount))} USDC reached your bot wallet (step 1 ✅) but the transfer to your address failed.
@@ -504,6 +516,7 @@ ${FormattedString.link("Step 1 tx →", solscanUrl(sig1))}`;
         return;
       }
 
+      await redis.del(lockKey);
       const displayAmount = Number(transferAmount) / 1_000_000;
       const msg = fmt`✅ ${FormattedString.b("External withdrawal complete")}
 

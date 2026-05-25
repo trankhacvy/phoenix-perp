@@ -6,6 +6,7 @@ import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { userSettings } from "../../db/schema/index.js";
 import { logger } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import { trackAction } from "../../services/action-log.js";
 import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot, getMarkets, isIsolatedOnly } from "../../services/phoenix/market.js";
@@ -30,6 +31,8 @@ import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
+
+const TRADE_LOCK_TTL = 150;
 
 export function registerLong(bot: Bot<BotContext>) {
   bot.command("long", async (ctx) => {
@@ -60,6 +63,14 @@ export function registerLong(bot: Bot<BotContext>) {
       if (Number.isNaN(lev) || lev < 1 || !Number.isFinite(lev)) {
         await ctx.reply(
           "Invalid leverage — use a number like 10 or 2.5x (minimum 1).\nExample: /long BTC 10x 500",
+        );
+        return;
+      }
+      const snap = await getMarketSnapshot(symbol).catch(() => null);
+      const maxLev = snap?.maxLeverage ?? 100;
+      if (lev > maxLev) {
+        await ctx.reply(
+          `Max leverage for ${symbol} is ${maxLev}×. Try: /long ${symbol} ${maxLev}x ${parts[2]}`,
         );
         return;
       }
@@ -172,6 +183,13 @@ export function registerLong(bot: Bot<BotContext>) {
       return;
     }
 
+    const tradeLockKey = `trade:lock:${ctx.user.id}`;
+    const tradeLocked = await redis.set(tradeLockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
+    if (!tradeLocked) {
+      await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
+      return;
+    }
+
     ctx.actionLog = { skip: true };
     await ctx.editMessageText("⏳ Submitting order to Solana…");
 
@@ -182,12 +200,7 @@ export function registerLong(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        const baseUnits = marginToTokens(
-          pf.snapshot,
-          sizeUsdc,
-          pf.effectiveLeverage,
-          anchorPrice > 0 ? anchorPrice : undefined,
-        );
+        const baseUnits = marginToTokens(pf.snapshot, sizeUsdc, pf.effectiveLeverage);
         const { walletAddress: wallet, telegramId } = user;
         const sig = await trackAction(
           {
@@ -261,7 +274,9 @@ export function registerLong(bot: Bot<BotContext>) {
           logger.error({ err: editErr, symbol, side: "long" }, "failed to edit error message");
         }
       }
-    })().catch((err) => logger.error({ err, symbol, side: "long" }, "unhandled trade IIFE error"));
+    })()
+      .finally(() => redis.del(tradeLockKey))
+      .catch((err) => logger.error({ err, symbol, side: "long" }, "unhandled trade IIFE error"));
   });
 }
 

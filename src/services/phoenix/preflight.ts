@@ -159,11 +159,13 @@ export async function preflightOpen(input: PreflightInput): Promise<PreflightRes
     }
   }
 
+  // Approximate — ignores existing cross-margin positions
   const mmFrac = 0.5 / snapshot.maxLeverage;
-  const liqPrice =
+  const rawLiqPrice =
     side === "long"
       ? snapshot.markPrice * (1 - 1 / effectiveLeverage + mmFrac)
       : snapshot.markPrice * (1 + 1 / effectiveLeverage - mmFrac);
+  const liqPrice = Math.max(0, rawLiqPrice);
 
   return {
     snapshot,

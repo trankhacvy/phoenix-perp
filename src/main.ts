@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import "dotenv/config";
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -20,7 +21,7 @@ function startActionLogRetention() {
   const run = async () => {
     try {
       await db.execute(
-        sql`DELETE FROM action_logs WHERE created_at < NOW() - INTERVAL '${sql.raw(String(ACTION_LOG_RETENTION_DAYS))} days'`,
+        sql`DELETE FROM action_logs WHERE created_at < NOW() - INTERVAL '1 day' * ${ACTION_LOG_RETENTION_DAYS}`,
       );
     } catch (err) {
       logger.warn({ err }, "action log retention sweep failed");
@@ -61,7 +62,6 @@ async function main() {
       { command: "history", description: "Trade history with P&L" },
       { command: "alerts", description: "Toggle alert types" },
       { command: "settings", description: "Slippage & leverage defaults" },
-      { command: "referral", description: "Your referral link & stats" },
       { command: "funding", description: "Top funding rates" },
       { command: "leaderboard", description: "Top traders" },
       { command: "help", description: "All commands & help" },
@@ -78,16 +78,16 @@ async function main() {
     server = await createServer();
     await server.listen({ port: config.PORT, host: config.HOST });
 
-    if (!config.WEBHOOK_SECRET) {
-      logger.warn("WEBHOOK_SECRET not set — webhook endpoint has no secret token validation");
-    }
-
-    const webhookUrl = `${config.WEBHOOK_URL}/webhook/${config.TELEGRAM_BOT_TOKEN}`;
+    const webhookSlug = createHash("sha256")
+      .update(config.TELEGRAM_BOT_TOKEN)
+      .digest("hex")
+      .slice(0, 32);
+    const webhookUrl = `${config.WEBHOOK_URL}/webhook/${webhookSlug}`;
     await bot.api.setWebhook(webhookUrl, {
       secret_token: config.WEBHOOK_SECRET,
     });
 
-    logger.info({ port: config.PORT, webhookUrl }, "Bot running in webhook mode");
+    logger.info({ port: config.PORT }, "Bot running in webhook mode");
   } else {
     bot.start({
       onStart: (info) => logger.info({ username: info.username }, "Bot running in polling mode"),
@@ -111,3 +111,12 @@ async function shutdown() {
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "Unhandled promise rejection");
+});
+
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "Uncaught exception — initiating shutdown");
+  shutdown();
+});

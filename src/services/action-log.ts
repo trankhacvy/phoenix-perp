@@ -3,17 +3,37 @@ import { db } from "../db/index.js";
 import { actionLogs } from "../db/schema/index.js";
 import { logger } from "../lib/logger.js";
 
-const REDACT_KEYS = new Set([
+const REDACT_PATTERNS = [
   "password",
-  "privateKey",
   "private_key",
-  "apiKey",
+  "privatekey",
   "api_key",
+  "apikey",
   "secret",
   "token",
   "mnemonic",
   "seed",
-]);
+  "authorization",
+  "access_token",
+  "accesstoken",
+  "refresh_token",
+  "refreshtoken",
+  "keypair",
+  "secretkey",
+  "secret_key",
+  "connectionstring",
+  "databaseurl",
+  "database_url",
+  "redisurl",
+  "redis_url",
+  "webhooksecret",
+  "webhook_secret",
+];
+
+function shouldRedact(key: string): boolean {
+  const lower = key.toLowerCase();
+  return REDACT_PATTERNS.some((p) => lower.includes(p));
+}
 
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
@@ -31,7 +51,7 @@ function redactValue(v: unknown): Json {
     if (proto === Object.prototype || proto === null) {
       const out: { [k: string]: Json } = {};
       for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-        out[k] = REDACT_KEYS.has(k) ? "[REDACTED]" : redactValue(val);
+        out[k] = shouldRedact(k) ? "[REDACTED]" : redactValue(val);
       }
       return out;
     }
@@ -43,7 +63,7 @@ function redactValue(v: unknown): Json {
 export function redactArgs(args: Record<string, unknown>): Record<string, Json> {
   const out: Record<string, Json> = {};
   for (const [k, v] of Object.entries(args)) {
-    out[k] = REDACT_KEYS.has(k) ? "[REDACTED]" : redactValue(v);
+    out[k] = shouldRedact(k) ? "[REDACTED]" : redactValue(v);
   }
   return out;
 }

@@ -2,8 +2,10 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { logger } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import { trackAction } from "../../services/action-log.js";
 import { marginToTokens } from "../../services/phoenix/lots.js";
+import { getMarketSnapshot } from "../../services/phoenix/market.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { placeMarketOrder } from "../../services/phoenix/trade.js";
 import { recordTrade } from "../../services/trade-log.js";
@@ -14,6 +16,8 @@ import { price as fmtPrice, num, parseAmount, parseLeverage, solscanUrl, usd } f
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
+
+const TRADE_LOCK_TTL = 150;
 import {
   sendLevStep,
   sendSizeStep,
@@ -51,6 +55,14 @@ export function registerShort(bot: Bot<BotContext>) {
       if (Number.isNaN(lev) || lev < 1 || !Number.isFinite(lev)) {
         await ctx.reply(
           "Invalid leverage — use a number like 10 or 2.5x (minimum 1).\nExample: /short BTC 10x 500",
+        );
+        return;
+      }
+      const snap = await getMarketSnapshot(symbol).catch(() => null);
+      const maxLev = snap?.maxLeverage ?? 100;
+      if (lev > maxLev) {
+        await ctx.reply(
+          `Max leverage for ${symbol} is ${maxLev}×. Try: /short ${symbol} ${maxLev}x ${parts[2]}`,
         );
         return;
       }
@@ -164,6 +176,13 @@ export function registerShort(bot: Bot<BotContext>) {
       return;
     }
 
+    const tradeLockKey = `trade:lock:${ctx.user.id}`;
+    const tradeLocked = await redis.set(tradeLockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
+    if (!tradeLocked) {
+      await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
+      return;
+    }
+
     ctx.actionLog = { skip: true };
     await ctx.editMessageText("⏳ Submitting order to Solana…");
 
@@ -172,16 +191,14 @@ export function registerShort(bot: Bot<BotContext>) {
     const msgId = ctx.callbackQuery.message?.message_id;
     const api = ctx.api;
 
-    if (!chatId || !msgId) return;
+    if (!chatId || !msgId) {
+      await redis.del(tradeLockKey);
+      return;
+    }
 
-    (async () => {
+    void (async () => {
       try {
-        const baseUnits = marginToTokens(
-          pf.snapshot,
-          sizeUsdc,
-          pf.effectiveLeverage,
-          anchorPrice > 0 ? anchorPrice : undefined,
-        );
+        const baseUnits = marginToTokens(pf.snapshot, sizeUsdc, pf.effectiveLeverage);
         const { walletAddress: wallet, telegramId } = user;
         const sig = await trackAction(
           {
@@ -251,6 +268,8 @@ export function registerShort(bot: Bot<BotContext>) {
           logger.error({ err: editErr }, "failed to edit error message for short trade");
         }
       }
-    })().catch((err) => logger.error({ err }, "short trade async error"));
+    })()
+      .finally(() => redis.del(tradeLockKey))
+      .catch((err) => logger.error({ err }, "short trade async error"));
   });
 }

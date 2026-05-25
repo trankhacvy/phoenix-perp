@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
+import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { referrals } from "../../db/schema/index.js";
 import { getClaimableReferrals } from "../../services/referral.js";
@@ -8,6 +9,7 @@ import type { BotContext } from "../../types/index.js";
 
 export function registerClaim(bot: Bot<BotContext>) {
   bot.command("claim", async (ctx) => {
+    if (!config.REFERRAL_ENABLED) return;
     if (!ctx.user) {
       await ctx.reply("Please run /start first to set up your account.");
       return;

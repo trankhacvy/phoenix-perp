@@ -22,6 +22,7 @@ import {
 } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
+import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 import { sendSlPrompt } from "./setsl.js";
 import { sendTpPrompt } from "./settp.js";
 
@@ -295,6 +296,7 @@ export function registerPositions(bot: Bot<BotContext>) {
   bot.callbackQuery(/^close:exec:([A-Z0-9]+):(\d+):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Closing…");
     if (!ctx.user) return;
+    if (!(await checkOrderRateLimit(ctx))) return;
     const [symbol, pctStr, side] = ctx.match.slice(1) as [string, string, "long" | "short"];
     const fraction = Number(pctStr) / 100;
 
@@ -428,6 +430,7 @@ export function registerPositions(bot: Bot<BotContext>) {
   bot.callbackQuery(/^addmargin:exec:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Adding…");
     if (!ctx.user) return;
+    if (!(await checkOrderRateLimit(ctx))) return;
     const [symbol, amtStr] = ctx.match.slice(1) as [string, string];
     const amount = Number(amtStr);
 

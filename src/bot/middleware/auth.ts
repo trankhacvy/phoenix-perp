@@ -15,8 +15,7 @@ export async function authMiddleware(ctx: BotContext, next: NextFunction) {
     where: eq(users.telegramId, telegramId),
   });
 
-  /* === DEV ONLY — remove this block before production === */
-  if (!user && config.TEST_KEYPAIR) {
+  if (!user && config.TEST_KEYPAIR && config.NODE_ENV === "development") {
     const walletAddress = await initTestSigner();
     const [inserted] = await db
       .insert(users)
@@ -37,8 +36,6 @@ export async function authMiddleware(ctx: BotContext, next: NextFunction) {
       .returning();
     user = inserted;
   }
-  /* === END DEV ONLY === */
-
   if (user) ctx.user = user;
 
   return next();

@@ -1,10 +1,12 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
+import { config } from "../../config/index.js";
 import { getReferralStats } from "../../services/referral.js";
 import type { BotContext } from "../../types/index.js";
 
 export function registerReferral(bot: Bot<BotContext>) {
   bot.command("referral", async (ctx) => {
+    if (!config.REFERRAL_ENABLED) return;
     if (!ctx.user) {
       await ctx.reply("Please run /start first to set up your account.");
       return;

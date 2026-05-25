@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const schema = z.object({
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z.enum(["development", "production", "test"]).default("production"),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(1),
@@ -18,6 +18,13 @@ const schema = z.object({
   // Phoenix / Flight
   BUILDER_AUTHORITY_PUBKEY: z.string().min(1),
   BUILDER_FEE_BPS: z.coerce.number().min(1).max(50).default(10),
+  BUILDER_ACCESS_CODE: z.string().default(""),
+
+  // Feature flags
+  REFERRAL_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
 
   // Dev / testing — must NOT be set in production
   TEST_KEYPAIR: z.string().optional(),
@@ -48,11 +55,20 @@ const parsed = schema
       "PRIVY_AUTHORIZATION_PRIVATE_KEY is required when TEST_KEYPAIR is not set. Generate one in Privy Dashboard → Wallets → Authorization Keys.",
     path: ["PRIVY_AUTHORIZATION_PRIVATE_KEY"],
   })
+  .refine((d) => !(d.NODE_ENV === "production" && d.WEBHOOK_URL && !d.WEBHOOK_SECRET), {
+    message: "WEBHOOK_SECRET is required in production when WEBHOOK_URL is set",
+    path: ["WEBHOOK_SECRET"],
+  })
   .safeParse(process.env);
 
 if (!parsed.success) {
-  console.error("❌ Invalid environment variables:");
-  console.error(JSON.stringify(parsed.error.flatten().fieldErrors, null, 2));
+  console.error("❌ Invalid environment variables");
+  if (process.env.NODE_ENV !== "production") {
+    console.error(JSON.stringify(parsed.error.flatten().fieldErrors, null, 2));
+  } else {
+    const fields = Object.keys(parsed.error.flatten().fieldErrors);
+    console.error(`Failed fields: ${fields.join(", ")}`);
+  }
   process.exit(1);
 }
 
