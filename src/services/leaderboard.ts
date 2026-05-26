@@ -120,8 +120,18 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<GpaSeedResult> 
   );
 
   // Classify into new vs changed vs unchanged
-  const toInsert: { walletAddress: string; collateralUsd: string; positionCount: number; slot: bigint }[] = [];
-  const toUpdate: { walletAddress: string; collateralUsd: string; positionCount: number; slot: bigint }[] = [];
+  const toInsert: {
+    walletAddress: string;
+    collateralUsd: string;
+    positionCount: number;
+    slot: bigint;
+  }[] = [];
+  const toUpdate: {
+    walletAddress: string;
+    collateralUsd: string;
+    positionCount: number;
+    slot: bigint;
+  }[] = [];
 
   for (const t of active) {
     const collateralUsd = (Number(t.quoteLotCollateral) / QUOTE_LOT_DECIMALS).toFixed(6);
@@ -129,14 +139,28 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<GpaSeedResult> 
     const dbSlot = existingSlots.get(t.walletAddress);
 
     if (dbSlot === undefined) {
-      toInsert.push({ walletAddress: t.walletAddress, collateralUsd, positionCount: t.numMarkets, slot });
+      toInsert.push({
+        walletAddress: t.walletAddress,
+        collateralUsd,
+        positionCount: t.numMarkets,
+        slot,
+      });
     } else if (dbSlot === null || slot > dbSlot) {
-      toUpdate.push({ walletAddress: t.walletAddress, collateralUsd, positionCount: t.numMarkets, slot });
+      toUpdate.push({
+        walletAddress: t.walletAddress,
+        collateralUsd,
+        positionCount: t.numMarkets,
+        slot,
+      });
     }
   }
 
   logger.info(
-    { toInsert: toInsert.length, toUpdate: toUpdate.length, unchanged: active.length - toInsert.length - toUpdate.length },
+    {
+      toInsert: toInsert.length,
+      toUpdate: toUpdate.length,
+      unchanged: active.length - toInsert.length - toUpdate.length,
+    },
     "GPA seed: classification done, starting DB writes",
   );
 
@@ -161,7 +185,11 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<GpaSeedResult> 
       .returning({ id: leaderboardSnapshots.id });
     inserted += result.length;
     logger.debug(
-      { batch: Math.floor(i / SEED_BATCH_SIZE) + 1, totalBatches: Math.ceil(toInsert.length / SEED_BATCH_SIZE), inserted },
+      {
+        batch: Math.floor(i / SEED_BATCH_SIZE) + 1,
+        totalBatches: Math.ceil(toInsert.length / SEED_BATCH_SIZE),
+        inserted,
+      },
       "GPA seed: insert batch done",
     );
   }
@@ -194,7 +222,10 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<GpaSeedResult> 
         },
       });
     logger.debug(
-      { batch: Math.floor(i / SEED_BATCH_SIZE) + 1, totalBatches: Math.ceil(toUpdate.length / SEED_BATCH_SIZE) },
+      {
+        batch: Math.floor(i / SEED_BATCH_SIZE) + 1,
+        totalBatches: Math.ceil(toUpdate.length / SEED_BATCH_SIZE),
+      },
       "GPA seed: update batch done",
     );
   }
@@ -382,10 +413,7 @@ export async function hydrateTradersBatch(
       if (/429|rate.?limit/i.test(msg)) {
         rateLimited++;
         const backoffSec = Math.max(retryAfter ?? 5, 5);
-        logger.warn(
-          { rateLimited, backoffSec, remaining: queue.length },
-          "Hit 429, backing off",
-        );
+        logger.warn({ rateLimited, backoffSec, remaining: queue.length }, "Hit 429, backing off");
         await new Promise((r) => setTimeout(r, backoffSec * 1000));
         // Re-queue wallet so it gets retried after backoff
         queue.unshift(wallet);
@@ -421,7 +449,10 @@ export async function hydrateTradersBatch(
     logger.warn({ rateLimited, upserted }, "Hydration finished with rate-limit hits");
   }
 
-  logger.info({ total: wallets.length, upserted, skipped: wallets.length - upserted }, "Batch hydration done");
+  logger.info(
+    { total: wallets.length, upserted, skipped: wallets.length - upserted },
+    "Batch hydration done",
+  );
   return upserted;
 }
 

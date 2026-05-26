@@ -141,7 +141,10 @@ export async function startLeaderboardScanner() {
         includeHistory: true,
         rateLimiter: workerRateLimiter,
       });
-      log.info({ changed: changedWallets.length, hydrated }, "[Phase 3/5] Changed traders hydrated");
+      log.info(
+        { changed: changedWallets.length, hydrated },
+        "[Phase 3/5] Changed traders hydrated",
+      );
     } else {
       log.info("[Phase 3/5] No changed traders, skipping hydration");
     }
