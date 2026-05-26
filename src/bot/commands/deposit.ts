@@ -132,14 +132,14 @@ export async function sendDepositScreen(ctx: BotContext): Promise<void> {
 
 Send ${FormattedString.b("USDC")} to your wallet:
 ${FormattedString.code(walletAddress)}
+${FormattedString.i("(tap to copy)")}
 
 ${FormattedString.b("How it works")}
 ${FormattedString.b("1.")} Send USDC here (this screen)
 ${FormattedString.b("2.")} Tap continue to add it as collateral
 ${FormattedString.b("3.")} Start trading
 
-Only send standard USDC (${FormattedString.code("EPjF…Dt1v")}).
-Keep ${FormattedString.b("≈0.01 SOL")} for gas.`;
+${FormattedString.i("Send USDC on Solana only. Also keep a small amount of SOL in your wallet — it's needed to pay transaction fees when trading.")}`;
 
   await ctx.replyWithPhoto(new InputFile(qr, "deposit-qr.png"), {
     caption: msg.caption,

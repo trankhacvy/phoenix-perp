@@ -12,7 +12,7 @@ import { users } from "../db/schema/index.js";
 import { privy } from "../lib/privy.js";
 
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-const _usdcConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
+const _rpcConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
 
 /**
  * Returns the wallet's idle standard USDC balance (in dollars, decimal).
@@ -21,7 +21,7 @@ const _usdcConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
  */
 export async function getWalletUsdcBalance(walletAddress: string): Promise<number> {
   const owner = new PublicKey(walletAddress);
-  const res = await _usdcConnection.getParsedTokenAccountsByOwner(owner, {
+  const res = await _rpcConnection.getParsedTokenAccountsByOwner(owner, {
     mint: USDC_MINT,
   });
   let total = 0;
@@ -30,6 +30,12 @@ export async function getWalletUsdcBalance(walletAddress: string): Promise<numbe
     if (typeof amount === "number") total += amount;
   }
   return total;
+}
+
+/** Returns SOL balance in SOL (not lamports). Returns 0 on RPC error. */
+export async function getSolBalance(walletAddress: string): Promise<number> {
+  const lamports = await _rpcConnection.getBalance(new PublicKey(walletAddress)).catch(() => 0);
+  return lamports / 1e9;
 }
 
 let _testSigner: KeyPairSigner | null = null;

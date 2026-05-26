@@ -1,5 +1,4 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import { Connection, PublicKey } from "@solana/web3.js";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
@@ -10,8 +9,13 @@ import { INVITE_SEARCH_URL } from "../../lib/constants.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
+import { getTraderState } from "../../services/phoenix/position.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
-import { createEmbeddedWallet } from "../../services/wallet.js";
+import {
+  createEmbeddedWallet,
+  getSolBalance,
+  getWalletUsdcBalance,
+} from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { usd } from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
@@ -113,15 +117,34 @@ export function registerStart(bot: Bot<BotContext>) {
         return;
       }
 
-      const [solLamports, solBook] = await Promise.all([
-        new Connection(config.HELIUS_RPC_URL, "confirmed")
-          .getBalance(new PublicKey(ctx.user.walletAddress))
-          .catch(() => 0),
-        getOrderbook("SOL").catch(() => null),
+      const [solResult, usdcWalletResult, traderResult, solBookResult] = await Promise.allSettled([
+        getSolBalance(ctx.user.walletAddress),
+        getWalletUsdcBalance(ctx.user.walletAddress),
+        getTraderState(ctx.user.walletAddress),
+        getOrderbook("SOL"),
       ]);
-      const sol = solLamports / 1e9;
-      const solPrice = solBook?.mid ?? 0;
-      const solUsd = sol * solPrice;
+
+      const sol = solResult.status === "fulfilled" ? solResult.value : null;
+      const walletUsdc = usdcWalletResult.status === "fulfilled" ? usdcWalletResult.value : null;
+      const collateral =
+        traderResult.status === "fulfilled" ? Number(traderResult.value.effectiveCollateral) : null;
+      const solPrice = solBookResult.status === "fulfilled" ? (solBookResult.value?.mid ?? 0) : 0;
+
+      const solLine =
+        sol !== null
+          ? fmt`⛽ ${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt` (${usd(sol * solPrice)})` : fmt``}`
+          : fmt`⛽ SOL balance unavailable`;
+
+      const usdcLine =
+        walletUsdc !== null
+          ? fmt`💳 Wallet USDC       ${FormattedString.b(usd(walletUsdc))}`
+          : fmt`💳 Wallet USDC       —`;
+
+      const collateralLine =
+        collateral !== null
+          ? fmt`📊 Trading account   ${FormattedString.b(usd(collateral))}`
+          : fmt`📊 Trading account   —`;
+
       const kb = new InlineKeyboard()
         .text("📊 Portfolio", "nav:balance")
         .text("📊 Positions", "nav:positions")
@@ -131,7 +154,8 @@ export function registerStart(bot: Bot<BotContext>) {
         .row()
         .text("📈 Markets", "nav:markets")
         .text("📋 History", "nav:history");
-      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n💰 ${FormattedString.b("Wallet Balance")}\n${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt`  (${FormattedString.b(usd(solUsd))})` : fmt``}\n\n${FormattedString.code(ctx.user.walletAddress)}\n\nDeposit USDC to fund your account and start trading.\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
+
+      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n${usdcLine}\n${collateralLine}\n${solLine}\n\n${FormattedString.code(ctx.user.walletAddress)}\n${FormattedString.i("(tap to copy)")}\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
       await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
       return;
     }

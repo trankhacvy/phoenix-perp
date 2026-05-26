@@ -80,8 +80,8 @@ function buildListText(
 
     const titleText = `${localIdx + 1}. ${t.symbol} · ${action}${otPart}`;
     const titleLine = deepLink
-      ? fmt`${FormattedString.link(titleText, deepLink)}\n${FormattedString.i(formatTs(t.timestamp))}`
-      : fmt`${FormattedString.b(titleText)}\n${FormattedString.i(formatTs(t.timestamp))}`;
+      ? fmt`${FormattedString.link(titleText, deepLink)}    ${FormattedString.i(formatTs(t.timestamp))}`
+      : fmt`${FormattedString.b(titleText)}    ${FormattedString.i(formatTs(t.timestamp))}`;
 
     const pnl = Number(t.realizedPnl);
     const metricPart = isClose(t)
@@ -115,7 +115,7 @@ function buildListKeyboard(
 
 // ─── Detail view ─────────────────────────────────────────────────────────────
 
-function buildDetailText(t: TradeHistoryEntry): FormattedString {
+function buildDetailText(t: TradeHistoryEntry, sig: string): FormattedString {
   const action = tradeAction(t);
   const ot = orderType(t);
   const size = cryptoSize(Number(t.size), t.symbol);
@@ -123,33 +123,35 @@ function buildDetailText(t: TradeHistoryEntry): FormattedString {
   const pnl = Number(t.realizedPnl);
 
   const lines: FormattedString[] = [
-    fmt`${FormattedString.b(`${t.symbol} · ${action}`)}  (${ot ?? "Market"})`,
-    fmt`━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    fmt`${FormattedString.b(`${t.symbol} · ${action}`)}  ${FormattedString.i(`(${ot ?? "Market"})`)}`,
+    fmt``,
   ];
 
   if (isClose(t)) {
-    lines.push(fmt`Realized PnL   ${FormattedString.b(signedUsd(pnl))} ${pnlEmoji(pnl)}`);
-    lines.push(fmt``);
+    lines.push(fmt`Realized PnL    ${FormattedString.b(signedUsd(pnl))} ${pnlEmoji(pnl)}`, fmt``);
   }
 
   lines.push(
-    fmt`Size    ${FormattedString.b(`${size}  (${usd(tradeValue)})`)}`,
-    fmt`Price   ${FormattedString.b(fmtPrice(Number(t.price)))}`,
+    fmt`Size         ${FormattedString.b(size)}  ${FormattedString.i(`(${usd(tradeValue)})`)}`,
+    fmt`Fill price   ${FormattedString.b(fmtPrice(Number(t.price)))}`,
   );
 
   if (t.fee && Number(t.fee) > 0) {
-    lines.push(fmt`Fee     ${FormattedString.b(usd(Number(t.fee)))}`);
+    lines.push(fmt`Fee          ${FormattedString.b(usd(Number(t.fee)))}`);
   }
 
-  lines.push(fmt``, fmt`${FormattedString.i(formatTs(t.timestamp))}`);
+  lines.push(fmt``);
+
+  const footer = sig
+    ? fmt`${FormattedString.i(formatTs(t.timestamp))}  ·  ${FormattedString.link("View on Solscan →", solscanUrl(sig))}`
+    : fmt`${FormattedString.i(formatTs(t.timestamp))}`;
+  lines.push(footer);
 
   return FormattedString.join(lines, "\n");
 }
 
-function buildDetailKeyboard(sig: string, fromPage: number): InlineKeyboard {
-  const kb = new InlineKeyboard().text("← History", `hist:list:${fromPage}`);
-  if (sig) kb.url("Solscan ↗", solscanUrl(sig));
-  return kb;
+function buildDetailKeyboard(fromPage: number): InlineKeyboard {
+  return new InlineKeyboard().text("← History", `hist:list:${fromPage}`);
 }
 
 // ─── Exported screen handlers ─────────────────────────────────────────────────
@@ -225,9 +227,13 @@ export async function sendHistoryDetail(
     return;
   }
 
-  const msg = buildDetailText(trade);
-  const kb = buildDetailKeyboard(trade.signature, fromPage);
-  const opts = { entities: msg.entities, reply_markup: kb };
+  const msg = buildDetailText(trade, trade.signature ?? "");
+  const kb = buildDetailKeyboard(fromPage);
+  const opts = {
+    entities: msg.entities,
+    reply_markup: kb,
+    link_preview_options: { is_disabled: true },
+  };
 
   if (edit && ctx.callbackQuery) {
     await ctx.editMessageText(msg.text, opts);

@@ -98,6 +98,7 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<number> {
   const active = traders.filter((t) => t.quoteLotCollateral > 0n || t.numMarkets > 0);
 
   let inserted = 0;
+  console.log(`Seeding ${active.length} active traders into the leaderboard...`);
   for (const t of active) {
     const collateralUsd = (Number(t.quoteLotCollateral) / QUOTE_LOT_DECIMALS).toFixed(6);
 
@@ -115,7 +116,7 @@ export async function seedFromGpa(traders: GpaTrader[]): Promise<number> {
 
     if (result.length > 0) inserted++;
   }
-
+  console.log(`Inserted ${inserted} traders from GPA seed`);
   logger.info({ active: active.length, inserted }, "GPA seed complete");
   return inserted;
 }
