@@ -9,7 +9,10 @@ import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { initTestSigner } from "./services/wallet.js";
-import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
+import {
+  startLeaderboardScanner,
+  stopLeaderboardScanner,
+} from "./workers/leaderboard.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
@@ -34,7 +37,10 @@ function startActionLogRetention() {
 async function main() {
   if (config.TEST_KEYPAIR) {
     const addr = await initTestSigner();
-    logger.info({ walletAddress: addr }, "Test signer loaded from TEST_KEYPAIR");
+    logger.info(
+      { walletAddress: addr },
+      "Test signer loaded from TEST_KEYPAIR",
+    );
   }
 
   startActionLogRetention();
@@ -69,7 +75,9 @@ async function main() {
     await bot.api.setMyDescription(
       "SuperNova — trade perpetual futures on Phoenix, directly from Telegram.",
     );
-    await bot.api.setMyShortDescription("SuperNova — Phoenix perps trading bot on Solana");
+    await bot.api.setMyShortDescription(
+      "SuperNova — Phoenix perps trading bot on Solana",
+    );
   } catch (err) {
     logger.warn({ err }, "Failed to set bot commands/description (non-fatal)");
   }
@@ -90,7 +98,8 @@ async function main() {
     logger.info({ port: config.PORT }, "Bot running in webhook mode");
   } else {
     bot.start({
-      onStart: (info) => logger.info({ username: info.username }, "Bot running in polling mode"),
+      onStart: (info) =>
+        logger.info({ username: info.username }, "Bot running in polling mode"),
     });
   }
 }

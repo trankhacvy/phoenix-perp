@@ -36,7 +36,12 @@ function subscribeTradesForMarket(symbol: string) {
 
   ws.on("open", () => {
     reconnectFailures.delete(symbol);
-    ws.send(JSON.stringify({ type: "subscribe", subscription: { channel: "trades", symbol } }));
+    ws.send(
+      JSON.stringify({
+        type: "subscribe",
+        subscription: { channel: "trades", symbol },
+      }),
+    );
     log.debug({ symbol }, "WS trades subscribed");
   });
 
@@ -74,11 +79,17 @@ function subscribeTradesForMarket(symbol: string) {
     reconnectFailures.set(symbol, failures);
 
     if (failures > MAX_RECONNECT_FAILURES) {
-      log.error({ symbol, failures }, "WS trades max reconnect failures reached, giving up");
+      log.error(
+        { symbol, failures },
+        "WS trades max reconnect failures reached, giving up",
+      );
       return;
     }
 
-    log.warn({ symbol, failures }, "WS trades connection closed, reconnecting in 5s");
+    log.warn(
+      { symbol, failures },
+      "WS trades connection closed, reconnecting in 5s",
+    );
     setTimeout(() => subscribeTradesForMarket(symbol), 5000);
   });
 
@@ -106,24 +117,35 @@ async function subscribeAllMarketTrades() {
 export async function startLeaderboardScanner() {
   log.info("Leaderboard scanner starting");
 
-  await syncWalletTags().catch((err) => log.warn({ err }, "Wallet tags sync failed"));
+  await syncWalletTags().catch((err) =>
+    log.warn({ err }, "Wallet tags sync failed"),
+  );
 
   const traders = await discoverTraderWallets().catch((err) => {
     log.warn({ err }, "GPA discovery failed");
     return [];
   });
 
+  console.log("traders", traders.length, traders?.[0]);
+
   if (traders.length > 0) {
     await seedFromGpa(traders);
   }
 
   const botWallets = await discoverBotUserWallets();
+  console.log("botWallets", botWallets.size, Array.from(botWallets)[0]);
   if (botWallets.size > 0) {
-    const hydrated = await hydrateTradersBatch(Array.from(botWallets), HYDRATION_CONCURRENCY, true);
+    const hydrated = await hydrateTradersBatch(
+      Array.from(botWallets),
+      HYDRATION_CONCURRENCY,
+      true,
+    );
     log.info({ botUsers: botWallets.size, hydrated }, "Bot users hydrated");
   }
 
   await subscribeAllMarketTrades();
+
+  console.log("Starting backfill cycle");
 
   scanIntervalId = setInterval(() => {
     if (scanInFlight) return;
@@ -134,7 +156,11 @@ export async function startLeaderboardScanner() {
         scanInFlight = null;
       });
   }, SCAN_INTERVAL_MS);
-
+  console.log(
+    "Backfill cycle started with interval",
+    SCAN_INTERVAL_MS / 60000,
+    "minutes",
+  );
   historyIntervalId = setInterval(() => {
     if (scanInFlight) return;
     scanInFlight = (async () => {
