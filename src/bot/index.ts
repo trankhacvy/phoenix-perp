@@ -137,41 +137,89 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (pending === "settings_custom_fee") {
-    await clearPending(ctx.from.id);
     const val = parseAmount(text);
-    if (Number.isNaN(val) || val <= 0 || val > 1) {
-      await ctx.reply("Invalid amount. Enter between 0.0001 and 1 SOL.");
+    if (Number.isNaN(val) || val <= 0 || val > 0.01) {
+      await clearPending(ctx.from.id);
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+      await ctx.reply("Invalid fee. Enter between 0.0001 and 0.01 SOL.", {
+        reply_markup: cancelKb,
+      });
       return;
     }
+    await clearPending(ctx.from.id);
     const { saveSettings } = await import("../services/settings.js");
     await saveSettings(ctx.user.id, { feeMode: "custom", customFeeSol: val });
-    await ctx.reply(`✅ Priority fee set to ${val} SOL`);
+    const backKb = new InlineKeyboard().text("⚙️ Back to Settings", "settings:open");
+    await ctx.reply(`✅ Custom fee set to ${val} SOL`, { reply_markup: backKb });
     return;
   }
 
   if (pending === "settings_auto_tp") {
-    await clearPending(ctx.from.id);
     const val = parseAmount(text);
     if (Number.isNaN(val) || val <= 0 || val > 500) {
-      await ctx.reply("Invalid percentage. Enter between 1 and 500.");
+      await clearPending(ctx.from.id);
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+      await ctx.reply("Invalid percentage. Enter between 1 and 500.", { reply_markup: cancelKb });
       return;
     }
+    await clearPending(ctx.from.id);
     const { saveSettings } = await import("../services/settings.js");
     await saveSettings(ctx.user.id, { autoTpPct: val });
-    await ctx.reply(`✅ Auto TP set to +${val}%`);
+    const backKb = new InlineKeyboard().text("⚙️ Back to Settings", "settings:open");
+    await ctx.reply(`✅ Auto TP set to +${val}%`, { reply_markup: backKb });
     return;
   }
 
   if (pending === "settings_auto_sl") {
-    await clearPending(ctx.from.id);
     const val = parseAmount(text);
     if (Number.isNaN(val) || val <= 0 || val > 100) {
-      await ctx.reply("Invalid percentage. Enter between 1 and 100.");
+      await clearPending(ctx.from.id);
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+      await ctx.reply("Invalid percentage. Enter between 1 and 100.", { reply_markup: cancelKb });
       return;
     }
+    await clearPending(ctx.from.id);
     const { saveSettings } = await import("../services/settings.js");
     await saveSettings(ctx.user.id, { autoSlPct: val });
-    await ctx.reply(`✅ Auto SL set to -${val}%`);
+    const backKb = new InlineKeyboard().text("⚙️ Back to Settings", "settings:open");
+    await ctx.reply(`✅ Auto SL set to -${val}%`, { reply_markup: backKb });
+    return;
+  }
+
+  if (pending === "settings_custom_slip") {
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val < 0.01 || val > 5) {
+      await clearPending(ctx.from.id);
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+      await ctx.reply("Invalid slippage. Enter between 0.01 and 5.00 (%).", {
+        reply_markup: cancelKb,
+      });
+      return;
+    }
+    await clearPending(ctx.from.id);
+    const { saveSettings } = await import("../services/settings.js");
+    await saveSettings(ctx.user.id, { slippageBps: Math.round(val * 100) });
+    const backKb = new InlineKeyboard().text("⚙️ Back to Settings", "settings:open");
+    await ctx.reply(`✅ Slippage set to ${val}%`, { reply_markup: backKb });
+    return;
+  }
+
+  if (pending === "settings_custom_lev") {
+    const raw = parseAmount(text);
+    const val = Math.round(raw);
+    if (Number.isNaN(raw) || val < 1 || val > 100) {
+      await clearPending(ctx.from.id);
+      const cancelKb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+      await ctx.reply("Invalid leverage. Enter a whole number between 1 and 100.", {
+        reply_markup: cancelKb,
+      });
+      return;
+    }
+    await clearPending(ctx.from.id);
+    const { saveSettings } = await import("../services/settings.js");
+    await saveSettings(ctx.user.id, { defaultLeverage: val });
+    const backKb = new InlineKeyboard().text("⚙️ Back to Settings", "settings:open");
+    await ctx.reply(`✅ Default leverage set to ${val}×`, { reply_markup: backKb });
     return;
   }
 

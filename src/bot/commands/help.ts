@@ -58,7 +58,7 @@ const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[
   },
 ];
 
-const REFERRAL_CATEGORY = {
+const _REFERRAL_CATEGORY = {
   key: "referral",
   label: "👥 Referral",
   content: fmt`👥 ${FormattedString.b("Referral")}
