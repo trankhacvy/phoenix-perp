@@ -1,16 +1,14 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import { Connection, PublicKey } from "@solana/web3.js";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { config } from "../../config/index.js";
+import { getOrderbook } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
-import { getWalletUsdcBalance } from "../../services/wallet.js";
+import { getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { pnlEmoji, shortAddr, signedUsd, usd } from "../lib/fmt.js";
+import { pnlEmoji, signedUsd, usd } from "../lib/fmt.js";
 import { buildPositionRows } from "./positions.js";
 
-const solConnection = new Connection(config.HELIUS_RPC_URL, "confirmed");
 const IDLE_USDC_THRESHOLD = 1;
 
 const riskEmoji: Record<string, string> = {
@@ -51,13 +49,13 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   if (!targetWallet) return;
   const isOwn = !walletAddress || walletAddress === ctx.user?.walletAddress;
 
-  const [state, solLamports, walletUsdc] = await Promise.all([
+  const [state, sol, walletUsdc, solBook] = await Promise.all([
     getTraderState(targetWallet),
-    solConnection.getBalance(new PublicKey(targetWallet)).catch(() => 0),
+    getSolBalance(targetWallet),
     isOwn ? getWalletUsdcBalance(targetWallet).catch(() => 0) : Promise.resolve(0),
+    getOrderbook("SOL").catch(() => null),
   ]);
-
-  const sol = solLamports / 1e9;
+  const solPrice = solBook?.mid ?? 0;
   const deposited = Number(state.depositedCollateral);
   const effective = Number(state.effectiveCollateral);
   const upnl = Number(state.unrealizedPnl);
@@ -90,6 +88,10 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   }
 
   // ── Trading account ──────────────────────────────────────────────────────────
+  const solGasLine =
+    solPrice > 0
+      ? fmt`⛽ Gas         ${FormattedString.b(`${sol.toFixed(4)} SOL`)}  ${FormattedString.i(`(${usd(sol * solPrice)})`)} `
+      : fmt`⛽ Gas         ${FormattedString.b(`${sol.toFixed(4)} SOL`)}`;
   sections.push(
     FormattedString.join(
       [
@@ -97,6 +99,7 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
         fmt`Collateral   ${FormattedString.b(usd(deposited))}`,
         fmt`Available    ${FormattedString.b(usd(effective))}`,
         fmt`Total value  ${FormattedString.b(usd(totalValue))}`,
+        solGasLine,
       ],
       "\n",
     ),
@@ -136,8 +139,8 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   sections.push(
     FormattedString.join(
       [
-        fmt`⛽ ${FormattedString.b(`${sol.toFixed(4)} SOL`)}`,
-        fmt`${FormattedString.code(shortAddr(targetWallet))}`,
+        fmt`${FormattedString.code(targetWallet)}`,
+        fmt`${FormattedString.i("(tap to copy)")}`,
         fmt`${tierStr}`,
       ],
       "\n",

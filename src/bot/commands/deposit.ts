@@ -104,7 +104,10 @@ export function registerDeposit(bot: Bot<BotContext>) {
             entities: errMsg.entities,
           });
         } catch (editErr) {
-          logger.warn({ err: editErr }, "failed to edit error message after deposit failure");
+          logger.warn(
+            { err: editErr },
+            "failed to edit error message after deposit failure",
+          );
         }
       }
     })().catch((err) => logger.error({ err }, "deposit async error"));
@@ -129,14 +132,14 @@ export async function sendDepositScreen(ctx: BotContext): Promise<void> {
 
 Send ${FormattedString.b("USDC")} to your wallet:
 ${FormattedString.code(walletAddress)}
+${FormattedString.i("(tap to copy)")}
 
 ${FormattedString.b("How it works")}
 ${FormattedString.b("1.")} Send USDC here (this screen)
 ${FormattedString.b("2.")} Tap continue to add it as collateral
 ${FormattedString.b("3.")} Start trading
 
-Only send standard USDC (${FormattedString.code("EPjF…Dt1v")}).
-Keep ${FormattedString.b("≈0.01 SOL")} for gas.`;
+${FormattedString.i("Send USDC on Solana only. Also keep a small amount of SOL in your wallet — it's needed to pay transaction fees when trading.")}`;
 
   await ctx.replyWithPhoto(new InputFile(qr, "deposit-qr.png"), {
     caption: msg.caption,
@@ -155,7 +158,8 @@ export async function sendFundCollateralScreen(
 ): Promise<void> {
   if (!ctx.user) return;
 
-  const balance = cachedBalance ?? (await getWalletUsdcBalance(ctx.user.walletAddress));
+  const balance =
+    cachedBalance ?? (await getWalletUsdcBalance(ctx.user.walletAddress));
 
   if (balance < MIN_DEPOSIT_USD) {
     const kb = new InlineKeyboard()
@@ -189,7 +193,10 @@ Move your USDC into your trading account to start trading. Collateral can be wit
 /**
  * Final confirm screen before executing the on-chain deposit.
  */
-export async function sendDepositConfirm(ctx: BotContext, amount: number): Promise<void> {
+export async function sendDepositConfirm(
+  ctx: BotContext,
+  amount: number,
+): Promise<void> {
   if (!ctx.user) return;
 
   // Clamp to 2 decimals (USD precision). Avoids scientific-notation in
@@ -203,7 +210,9 @@ export async function sendDepositConfirm(ctx: BotContext, amount: number): Promi
 
   const balance = await getWalletUsdcBalance(ctx.user.walletAddress);
   if (clamped > balance + 0.01) {
-    await ctx.reply(`You only have ${usd(balance)} USDC in your wallet. Enter a smaller amount.`);
+    await ctx.reply(
+      `You only have ${usd(balance)} USDC in your wallet. Enter a smaller amount.`,
+    );
     return;
   }
 

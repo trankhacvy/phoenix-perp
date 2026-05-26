@@ -7,6 +7,7 @@ import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { getMarketSnapshot } from "../services/phoenix/market.js";
 import { getTraderState } from "../services/phoenix/position.js";
+import { getWalletUsdcBalance } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
 import { registerCommands } from "./commands/index.js";
@@ -16,6 +17,7 @@ import { sendRemoveSlConfirm, sendSlFinalConfirm, validateSlPrice } from "./comm
 import { sendRemoveTpConfirm, sendTpFinalConfirm, validateTpPrice } from "./commands/settp.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import {
+  getWithdrawBalances,
   sendWithdrawAddrStep,
   sendWithdrawConfirmExternal,
   sendWithdrawConfirmInternal,
@@ -65,47 +67,73 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
   const parts = pending.split(":");
 
-  if (pending === "withdraw_custom:internal") {
-    await clearPending(ctx.from.id);
+  if (pending === "withdraw_custom:internal" || pending === "withdraw_custom:external") {
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.reply("Invalid amount. Enter a number like 50.");
+      await ctx.reply("Invalid amount. Enter a positive number like 50.");
       return;
     }
-    await sendWithdrawConfirmInternal(ctx, amount);
+    const { deposited } = await getWithdrawBalances(ctx.user.walletAddress);
+    if (amount > deposited + 0.01) {
+      await ctx.reply(
+        `You only have ${usd(deposited)} in your trading account. Enter a smaller amount.`,
+      );
+      return;
+    }
+    await clearPending(ctx.from.id);
+    if (pending === "withdraw_custom:internal") {
+      await sendWithdrawConfirmInternal(ctx, amount);
+    } else {
+      await sendWithdrawAddrStep(ctx, amount, "trading");
+    }
     return;
   }
 
-  if (pending === "withdraw_custom:external") {
-    await clearPending(ctx.from.id);
+  if (pending === "withdraw_custom:wallet") {
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.reply("Invalid amount. Enter a number like 50.");
+      await ctx.reply("Invalid amount. Enter a positive number like 50.");
       return;
     }
-    await sendWithdrawAddrStep(ctx, amount);
+    const { walletUsdc } = await getWithdrawBalances(ctx.user.walletAddress);
+    if (amount > walletUsdc + 0.01) {
+      await ctx.reply(
+        `You only have ${usd(walletUsdc)} USDC in your bot wallet. Enter a smaller amount.`,
+      );
+      return;
+    }
+    await clearPending(ctx.from.id);
+    await sendWithdrawAddrStep(ctx, amount, "wallet");
     return;
   }
 
   if (parts[0] === "withdraw_ext_addr") {
     const amount = Number(parts[1]);
+    const source = (parts[2] === "wallet" ? "wallet" : "trading") as "wallet" | "trading";
     const address = text.trim();
     if (!BASE58_RE.test(address)) {
       await ctx.reply("Invalid Solana address. Send a valid base58 address.");
       return;
     }
     await clearPending(ctx.from.id);
-    await sendWithdrawConfirmExternal(ctx, amount, address);
+    await sendWithdrawConfirmExternal(ctx, amount, address, source);
     return;
   }
 
   if (pending === "deposit_amount") {
-    await clearPending(ctx.from.id);
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
-      await ctx.reply("Invalid amount. Try /deposit again.");
+      await ctx.reply("Invalid amount. Enter a positive number like 50.");
       return;
     }
+    const walletUsdc = await getWalletUsdcBalance(ctx.user.walletAddress).catch(() => 0);
+    if (amount > walletUsdc + 0.01) {
+      await ctx.reply(
+        `You only have ${usd(walletUsdc)} USDC in your wallet. Enter a smaller amount.`,
+      );
+      return;
+    }
+    await clearPending(ctx.from.id);
     await sendDepositConfirm(ctx, amount);
     return;
   }
@@ -144,13 +172,13 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (parts[0] === "pricealert") {
-    await clearPending(ctx.from.id);
     const symbol = parts[1];
     const triggerPrice = parseAmount(text);
     if (Number.isNaN(triggerPrice) || triggerPrice <= 0) {
       await ctx.reply("Invalid price. Enter a positive number.");
       return;
     }
+    await clearPending(ctx.from.id);
     await sendPriceAlertConfirm(ctx, symbol, triggerPrice);
     return;
   }
