@@ -1,7 +1,6 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { config } from "../../config/index.js";
 import type { BotContext } from "../../types/index.js";
 
 const HEADER = fmt`🔥 ${FormattedString.b("SuperNova")}
@@ -68,8 +67,32 @@ const REFERRAL_CATEGORY = {
 /claim — Withdraw referral rebate`,
 };
 
+const FAQ_CATEGORY = {
+  key: "faq",
+  label: "❓ FAQ",
+  content: fmt`❓ ${FormattedString.b("FAQ")}
+
+${FormattedString.b("What is SuperNova?")}
+SuperNova is a Telegram bot for trading perpetual futures on ${FormattedString.link("Phoenix", "https://www.phoenix.trade")} — a Solana-based DEX. Long, short, set TP/SL, track P&L, follow top traders. All self-custodial, no sign-up, no KYC.
+
+${FormattedString.b("Is my wallet secure?")}
+Yes. Wallets are powered by ${FormattedString.link("Privy", "https://www.privy.io")} — a trusted self-custodial wallet infrastructure. Only you control your funds. SuperNova will ${FormattedString.b("never")} ask for your seed phrase or private key. Admins never DM first or request funds. Only use the official bot — never search for bots in Telegram.
+
+${FormattedString.b("What are the fees?")}
+SuperNova charges a ${FormattedString.b("0.05% builder fee")} on each trade (taker only). Phoenix protocol adds ~0.06% taker fee. No subscription, no hidden charges.
+
+${FormattedString.b("Common trade failures")}
+  · ${FormattedString.i("Slippage exceeded")} — price moved too fast, tap Retry
+  · ${FormattedString.i("Not enough SOL for fees")} — send ≥ 0.01 SOL to your bot wallet
+  · ${FormattedString.i("Transaction expired")} — safe to retry, blockhash stale
+  · ${FormattedString.i("Insufficient margin")} — deposit more USDC via /deposit
+
+${FormattedString.b("My P&L looks wrong?")}
+Unrealized P&L is based on the current mark price and excludes fees. Realized P&L in /history includes all trading fees.`,
+};
+
 function getCategories() {
-  return config.REFERRAL_ENABLED ? [...BASE_CATEGORIES, REFERRAL_CATEGORY] : BASE_CATEGORIES;
+  return [...BASE_CATEGORIES, FAQ_CATEGORY];
 }
 
 function mainKeyboard(): InlineKeyboard {
@@ -91,6 +114,15 @@ export function registerHelp(bot: Bot<BotContext>) {
     });
   });
 
+  bot.callbackQuery("help:back", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(HEADER.text, {
+      entities: HEADER.entities,
+      reply_markup: mainKeyboard(),
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
   bot.callbackQuery(/^help:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const key = ctx.match[1];
@@ -101,14 +133,6 @@ export function registerHelp(bot: Bot<BotContext>) {
     await ctx.editMessageText(cat.content.text, {
       entities: cat.content.entities,
       reply_markup: kb,
-    });
-  });
-
-  bot.callbackQuery("help:back", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(HEADER.text, {
-      entities: HEADER.entities,
-      reply_markup: mainKeyboard(),
       link_preview_options: { is_disabled: true },
     });
   });
