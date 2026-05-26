@@ -60,11 +60,7 @@ export function registerStart(bot: Bot<BotContext>) {
         const symbol = parts[0]?.toUpperCase();
         const fromPage = Number(parts[1] ?? "0");
         if (symbol) {
-          await sendMarketDetail(
-            ctx,
-            symbol,
-            Number.isNaN(fromPage) ? 0 : fromPage,
-          );
+          await sendMarketDetail(ctx, symbol, Number.isNaN(fromPage) ? 0 : fromPage);
           return;
         }
       }
@@ -75,17 +71,9 @@ export function registerStart(bot: Bot<BotContext>) {
           const loading = await ctx.reply("Fetching wallet analytics…");
           try {
             const { sendWalletScreen } = await import("./wallet.js");
-            await sendWalletScreen(
-              ctx,
-              address,
-              loading.chat.id,
-              loading.message_id,
-            );
+            await sendWalletScreen(ctx, address, loading.chat.id, loading.message_id);
           } catch (err) {
-            logger.error(
-              { err, walletAddress: address },
-              "wallet deep link failed",
-            );
+            logger.error({ err, walletAddress: address }, "wallet deep link failed");
             await ctx.api.editMessageText(
               loading.chat.id,
               loading.message_id,
@@ -102,10 +90,7 @@ export function registerStart(bot: Bot<BotContext>) {
         const symbol = rest.replace(/_\d+$/, "").toUpperCase();
         if (symbol) {
           if (!ctx.user.phoenixActivated) {
-            const kb = new InlineKeyboard().text(
-              "Activate account",
-              "nav:activate",
-            );
+            const kb = new InlineKeyboard().text("Activate account", "nav:activate");
             await ctx.reply(
               "Your trading account isn't activated yet.\nUse /activate <code> to unlock trading.",
               { reply_markup: kb },
@@ -132,25 +117,18 @@ export function registerStart(bot: Bot<BotContext>) {
         return;
       }
 
-      const [solResult, usdcWalletResult, traderResult, solBookResult] =
-        await Promise.allSettled([
-          getSolBalance(ctx.user.walletAddress),
-          getWalletUsdcBalance(ctx.user.walletAddress),
-          getTraderState(ctx.user.walletAddress),
-          getOrderbook("SOL"),
-        ]);
+      const [solResult, usdcWalletResult, traderResult, solBookResult] = await Promise.allSettled([
+        getSolBalance(ctx.user.walletAddress),
+        getWalletUsdcBalance(ctx.user.walletAddress),
+        getTraderState(ctx.user.walletAddress),
+        getOrderbook("SOL"),
+      ]);
 
       const sol = solResult.status === "fulfilled" ? solResult.value : null;
-      const walletUsdc =
-        usdcWalletResult.status === "fulfilled" ? usdcWalletResult.value : null;
+      const walletUsdc = usdcWalletResult.status === "fulfilled" ? usdcWalletResult.value : null;
       const collateral =
-        traderResult.status === "fulfilled"
-          ? Number(traderResult.value.effectiveCollateral)
-          : null;
-      const solPrice =
-        solBookResult.status === "fulfilled"
-          ? (solBookResult.value?.mid ?? 0)
-          : 0;
+        traderResult.status === "fulfilled" ? Number(traderResult.value.effectiveCollateral) : null;
+      const solPrice = solBookResult.status === "fulfilled" ? (solBookResult.value?.mid ?? 0) : 0;
 
       const solLine =
         sol !== null
@@ -185,14 +163,7 @@ export function registerStart(bot: Bot<BotContext>) {
     // ── New user: create wallet ───────────────────────────────────────────────
     const telegramId = String(ctx.from.id);
     const rawPayload = ctx.match ? String(ctx.match).trim() : "";
-    const DEEP_LINK_PREFIXES = [
-      "pos_",
-      "hist_",
-      "mkt_",
-      "wallet_",
-      "long_",
-      "short_",
-    ];
+    const DEEP_LINK_PREFIXES = ["pos_", "hist_", "mkt_", "wallet_", "long_", "short_"];
     const isDeepLink = DEEP_LINK_PREFIXES.some((p) => rawPayload.startsWith(p));
     const referredBy = rawPayload && !isDeepLink ? rawPayload : undefined;
 
@@ -200,9 +171,7 @@ export function registerStart(bot: Bot<BotContext>) {
     const count = await redis.incr(globalKey);
     if (count === 1) await redis.expire(globalKey, WALLET_CREATE_WINDOW);
     if (count > WALLET_CREATE_LIMIT) {
-      await ctx.reply(
-        "Too many new signups right now. Please try again in a minute.",
-      );
+      await ctx.reply("Too many new signups right now. Please try again in a minute.");
       return;
     }
 
@@ -223,8 +192,7 @@ export function registerStart(bot: Bot<BotContext>) {
         return;
       }
 
-      const { privyUserId, privyWalletId, walletAddress } =
-        await createEmbeddedWallet(telegramId);
+      const { privyUserId, privyWalletId, walletAddress } = await createEmbeddedWallet(telegramId);
       const referralCode = generateReferralCode();
 
       await db.insert(users).values({
@@ -240,8 +208,7 @@ export function registerStart(bot: Bot<BotContext>) {
         referredBy,
       });
 
-      if (referredBy && config.REFERRAL_ENABLED)
-        await linkReferral(telegramId, referredBy);
+      if (referredBy && config.REFERRAL_ENABLED) await linkReferral(telegramId, referredBy);
 
       const kb = new InlineKeyboard()
         .text("💰 Deposit", "nav:deposit")
@@ -254,11 +221,7 @@ export function registerStart(bot: Bot<BotContext>) {
         reply_markup: kb,
       });
     } catch (err) {
-      await ctx.api.editMessageText(
-        chatId,
-        msgId,
-        "❌ Setup failed. Please try again.",
-      );
+      await ctx.api.editMessageText(chatId, msgId, "❌ Setup failed. Please try again.");
       throw err;
     }
   });

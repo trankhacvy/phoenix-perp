@@ -22,9 +22,9 @@ import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
 import {
+  price as fmtPrice,
   funding1h,
   fundingDot,
-  price as fmtPrice,
   num,
   parseAmount,
   parseLeverage,

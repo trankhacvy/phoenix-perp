@@ -199,7 +199,10 @@ async function pollConfirmation(
     const { value } = await rpc.getSignatureStatuses([sig]).send();
     const status = value[0];
     if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
-      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`);
+      if (status.err)
+        throw new Error(
+          `Transaction failed on-chain: ${JSON.stringify(status.err, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`,
+        );
       return;
     }
     const slotRes = await rpc.getSlot({ commitment: "confirmed" }).send();

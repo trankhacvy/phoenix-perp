@@ -8,9 +8,9 @@ import { db } from "./db/index.js";
 import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
+import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
 import { initTestSigner } from "./services/wallet.js";
 import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
-import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
