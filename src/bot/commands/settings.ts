@@ -64,7 +64,8 @@ function settingsKeyboard(s: Settings): InlineKeyboard {
     .text(`Confirm Trades: ${toggleIcon(s.confirmTrades)}`, "settings:toggle_confirm_trades")
     .text(`Confirm Close: ${toggleIcon(s.confirmClose)}`, "settings:toggle_confirm_close")
     .row()
-    .text("🔔 Alerts", "nav:alerts")
+    .text("🔔 Alerts", "al:main")
+    .text("🛡 Guardian", "grd:list")
     .text("✕ Close", "settings:close");
 }
 

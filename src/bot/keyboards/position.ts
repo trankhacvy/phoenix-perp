@@ -25,6 +25,7 @@ export function positionKeyboard(
     .text(tpLabel, `tpsl:open:tp:${symbol}:${side}`)
     .text(slLabel, `tpsl:open:sl:${symbol}:${side}`)
     .row()
+    .text("🛡 Guard", "grd:type:liq_distance")
     .text("🔄 Refresh", `pos:refresh:${symbol}:${side}`)
     .text("◀ Back", "pos:list");
 }

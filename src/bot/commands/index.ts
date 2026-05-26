@@ -8,6 +8,7 @@ import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
 import { registerExport } from "./export.js";
 import { registerFunding } from "./funding.js";
+import { registerGuardian } from "./guardian.js";
 import { registerHelp } from "./help.js";
 import { registerHistory, sendHistoryScreen } from "./history.js";
 import { registerLeaderboard } from "./leaderboard.js";
@@ -54,6 +55,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerLeaderboard(bot);
   registerLog(bot);
   registerStatus(bot);
+  registerGuardian(bot);
 
   bot.callbackQuery("nav:balance", async (ctx) => {
     await ctx.answerCallbackQuery();
