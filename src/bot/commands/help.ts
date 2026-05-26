@@ -48,12 +48,12 @@ const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[
 /leaderboard — Top traders by volume/PnL/win rate`,
   },
   {
-    key: "alerts",
-    label: "🔔 Alerts",
-    content: fmt`🔔 ${FormattedString.b("Alerts & Monitoring")}
+    key: "protection",
+    label: "🛡 Protection",
+    content: fmt`🛡 ${FormattedString.b("Protection & Alerts")}
 
-/alerts — Toggle alert types on/off
-/alert <symbol> — Set price alert
+/guardian — Risk rules & auto-protection
+/alerts — Price & account alerts
 /monitor — Follow traders & get live alerts
 /funding — Top funding rates across markets`,
   },

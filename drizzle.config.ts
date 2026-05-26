@@ -10,6 +10,7 @@ export default defineConfig({
     "./src/db/schema/action_logs.ts",
     "./src/db/schema/leaderboard.ts",
     "./src/db/schema/trades.ts",
+    "./src/db/schema/guardian.ts",
   ],
   out: "./src/db/migrations",
   dialect: "postgresql",

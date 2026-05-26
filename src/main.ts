@@ -60,6 +60,7 @@ async function main() {
       { command: "deposit", description: "Add USDC to your account" },
       { command: "withdraw", description: "Move funds out" },
       { command: "history", description: "Trade history with P&L" },
+      { command: "guardian", description: "Risk rules & auto-protection" },
       { command: "alerts", description: "Toggle alert types" },
       { command: "settings", description: "Slippage & leverage defaults" },
       { command: "funding", description: "Top funding rates" },

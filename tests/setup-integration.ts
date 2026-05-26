@@ -1,0 +1,20 @@
+import "dotenv/config";
+
+process.env.NODE_ENV = "test";
+
+if (!process.env.DATABASE_URL || process.env.DATABASE_URL === "postgres://localhost:5432/test") {
+  throw new Error("Integration tests require a real DATABASE_URL in .env");
+}
+
+if (!process.env.REDIS_URL) {
+  process.env.REDIS_URL = "redis://localhost:6379";
+}
+
+process.env.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "test:token";
+process.env.PRIVY_APP_ID = process.env.PRIVY_APP_ID || "test-privy-app";
+process.env.PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET || "test-privy-secret";
+process.env.BUILDER_AUTHORITY_PUBKEY =
+  process.env.BUILDER_AUTHORITY_PUBKEY || "11111111111111111111111111111111";
+process.env.BUILDER_ACCESS_CODE = process.env.BUILDER_ACCESS_CODE || "test-code";
+process.env.HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || "https://rpc.example.com";
+process.env.TEST_KEYPAIR = process.env.TEST_KEYPAIR || "test-keypair-placeholder";

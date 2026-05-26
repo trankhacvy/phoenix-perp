@@ -208,7 +208,7 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  if (parts[0] === "pricealert") {
+  if (parts[0] === "pricealert" || parts[0] === "al_pricealert") {
     const symbol = parts[1];
     const triggerPrice = parseAmount(text);
     if (Number.isNaN(triggerPrice) || triggerPrice <= 0) {
@@ -274,6 +274,62 @@ bot.on("message:text", async (ctx) => {
     // Existing rung's price is needed; treat priceStr as "0" sentinel — the
     // handler looks the rung up by editIdx and uses its current triggerPrice.
     await handleTpSlSizeInput(ctx, leg, symbol, positionSide, "0", text, idx);
+    return;
+  }
+
+  if (parts[0] === "grd_threshold") {
+    const ruleType = parts[1];
+    const symbol = parts[2];
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val <= 0) {
+      await ctx.reply("Invalid value. Enter a positive number.");
+      return;
+    }
+    await clearPending(ctx.from.id);
+    const kb = new InlineKeyboard()
+      .text("🔔 Notify only", `grd:act:${ruleType}:${symbol}:${val}:notify`)
+      .row()
+      .text("🔔 Suggest actions", `grd:act:${ruleType}:${symbol}:${val}:suggest`)
+      .row()
+      .text("⚡ Auto-close", `grd:act:${ruleType}:${symbol}:${val}:auto_close`)
+      .row()
+      .text("← Cancel", "grd:list");
+    await ctx.reply(`Value set to ${val}. Choose an action:`, { reply_markup: kb });
+    return;
+  }
+
+  if (parts[0] === "grd_margin_amt") {
+    const [, ruleType, symbol, threshold] = parts;
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val < 1) {
+      await ctx.reply("Invalid amount. Enter $1 or more.");
+      return;
+    }
+    await clearPending(ctx.from.id);
+    const encoded = `${ruleType}:${symbol}:${threshold}:auto_margin:${val}`;
+    const kb = new InlineKeyboard()
+      .text("✅ Save rule", `grd:save:${encoded}`)
+      .text("✕ Cancel", "grd:list");
+    await ctx.reply(`Auto-add $${val} margin. Save this rule?`, { reply_markup: kb });
+    return;
+  }
+
+  if (parts[0] === "mon_label") {
+    const monitorId = parts[1];
+    const label = text.slice(0, 32).trim();
+    if (!label) {
+      await ctx.reply("Label can't be empty.");
+      return;
+    }
+    await clearPending(ctx.from.id);
+    const { walletMonitors } = await import("../db/schema/index.js");
+    const { eq, and } = await import("drizzle-orm");
+    const { db } = await import("../db/index.js");
+    await db
+      .update(walletMonitors)
+      .set({ label })
+      .where(and(eq(walletMonitors.id, monitorId), eq(walletMonitors.userId, ctx.user.id)));
+    await ctx.reply(`✅ Label updated to "${label}"`);
     return;
   }
 

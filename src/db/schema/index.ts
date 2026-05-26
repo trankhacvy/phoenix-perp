@@ -6,3 +6,4 @@ export * from "./wallet_monitors.js";
 export * from "./action_logs.js";
 export * from "./leaderboard.js";
 export * from "./trades.js";
+export * from "./guardian.js";
