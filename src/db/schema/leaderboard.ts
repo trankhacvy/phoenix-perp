@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   integer,
   jsonb,
@@ -43,12 +44,14 @@ export const leaderboardSnapshots = pgTable(
     firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     lastHydratedAt: timestamp("last_hydrated_at"),
+    lastUpdateSlot: bigint("last_update_slot", { mode: "bigint" }),
     metadata: jsonb("metadata").$type<WalletMetadata>(),
   },
   (t) => [
     index("lb_portfolio_value_idx").on(t.portfolioValue),
     index("lb_realized_pnl_idx").on(t.realizedPnl),
     index("lb_updated_at_idx").on(t.updatedAt),
+    index("lb_last_update_slot_idx").on(t.lastUpdateSlot),
   ],
 );
 

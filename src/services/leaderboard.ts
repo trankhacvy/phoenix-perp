@@ -7,6 +7,7 @@ import { db } from "../db/index.js";
 import { type WalletMetadata, leaderboardSnapshots } from "../db/schema/leaderboard.js";
 import { users } from "../db/schema/users.js";
 import { logger } from "../lib/logger.js";
+import type { TokenBucket } from "../lib/rate-limiter.js";
 import { withRetry } from "../lib/retry.js";
 import { getPhoenixClient } from "./phoenix/client.js";
 import {
@@ -94,31 +95,126 @@ export async function discoverTraderWallets(): Promise<GpaTrader[]> {
   return traders;
 }
 
-export async function seedFromGpa(traders: GpaTrader[]): Promise<number> {
+export interface GpaSeedResult {
+  inserted: number;
+  updated: number;
+  changedWallets: string[];
+}
+
+const SEED_BATCH_SIZE = 500;
+
+export async function seedFromGpa(traders: GpaTrader[]): Promise<GpaSeedResult> {
   const active = traders.filter((t) => t.quoteLotCollateral > 0n || t.numMarkets > 0);
 
-  let inserted = 0;
-  console.log(`Seeding ${active.length} active traders into the leaderboard...`);
+  const existing = await db
+    .select({
+      walletAddress: leaderboardSnapshots.walletAddress,
+      lastUpdateSlot: leaderboardSnapshots.lastUpdateSlot,
+    })
+    .from(leaderboardSnapshots);
+
+  const existingSlots = new Map(existing.map((r) => [r.walletAddress, r.lastUpdateSlot]));
+  logger.info(
+    { active: active.length, existingInDb: existing.length },
+    "GPA seed: classifying traders",
+  );
+
+  // Classify into new vs changed vs unchanged
+  const toInsert: { walletAddress: string; collateralUsd: string; positionCount: number; slot: bigint }[] = [];
+  const toUpdate: { walletAddress: string; collateralUsd: string; positionCount: number; slot: bigint }[] = [];
+
   for (const t of active) {
     const collateralUsd = (Number(t.quoteLotCollateral) / QUOTE_LOT_DECIMALS).toFixed(6);
+    const slot = t.lastUpdateSlot;
+    const dbSlot = existingSlots.get(t.walletAddress);
 
+    if (dbSlot === undefined) {
+      toInsert.push({ walletAddress: t.walletAddress, collateralUsd, positionCount: t.numMarkets, slot });
+    } else if (dbSlot === null || slot > dbSlot) {
+      toUpdate.push({ walletAddress: t.walletAddress, collateralUsd, positionCount: t.numMarkets, slot });
+    }
+  }
+
+  logger.info(
+    { toInsert: toInsert.length, toUpdate: toUpdate.length, unchanged: active.length - toInsert.length - toUpdate.length },
+    "GPA seed: classification done, starting DB writes",
+  );
+
+  let inserted = 0;
+
+  // Batch inserts
+  for (let i = 0; i < toInsert.length; i += SEED_BATCH_SIZE) {
+    const batch = toInsert.slice(i, i + SEED_BATCH_SIZE);
     const result = await db
       .insert(leaderboardSnapshots)
-      .values({
-        walletAddress: t.walletAddress,
-        collateralBalance: collateralUsd,
-        portfolioValue: collateralUsd,
-        positionCount: t.numMarkets,
-        discoveredVia: "gpa",
-      })
+      .values(
+        batch.map((r) => ({
+          walletAddress: r.walletAddress,
+          collateralBalance: r.collateralUsd,
+          portfolioValue: r.collateralUsd,
+          positionCount: r.positionCount,
+          lastUpdateSlot: r.slot,
+          discoveredVia: "gpa" as const,
+        })),
+      )
       .onConflictDoNothing({ target: leaderboardSnapshots.walletAddress })
       .returning({ id: leaderboardSnapshots.id });
-
-    if (result.length > 0) inserted++;
+    inserted += result.length;
+    logger.debug(
+      { batch: Math.floor(i / SEED_BATCH_SIZE) + 1, totalBatches: Math.ceil(toInsert.length / SEED_BATCH_SIZE), inserted },
+      "GPA seed: insert batch done",
+    );
   }
-  console.log(`Inserted ${inserted} traders from GPA seed`);
-  logger.info({ active: active.length, inserted }, "GPA seed complete");
-  return inserted;
+
+  // Batch updates via single SQL for each chunk
+  const now = new Date();
+  for (let i = 0; i < toUpdate.length; i += SEED_BATCH_SIZE) {
+    const batch = toUpdate.slice(i, i + SEED_BATCH_SIZE);
+    // Use a single upsert to batch-update changed rows
+    await db
+      .insert(leaderboardSnapshots)
+      .values(
+        batch.map((r) => ({
+          walletAddress: r.walletAddress,
+          collateralBalance: r.collateralUsd,
+          portfolioValue: r.collateralUsd,
+          positionCount: r.positionCount,
+          lastUpdateSlot: r.slot,
+          discoveredVia: "gpa" as const,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: leaderboardSnapshots.walletAddress,
+        set: {
+          collateralBalance: sql`excluded.collateral_balance`,
+          portfolioValue: sql`excluded.portfolio_value`,
+          positionCount: sql`excluded.position_count`,
+          lastUpdateSlot: sql`excluded.last_update_slot`,
+          updatedAt: now,
+        },
+      });
+    logger.debug(
+      { batch: Math.floor(i / SEED_BATCH_SIZE) + 1, totalBatches: Math.ceil(toUpdate.length / SEED_BATCH_SIZE) },
+      "GPA seed: update batch done",
+    );
+  }
+
+  const changedWallets = [
+    ...toInsert.map((r) => r.walletAddress),
+    ...toUpdate.map((r) => r.walletAddress),
+  ];
+
+  logger.info(
+    {
+      active: active.length,
+      inserted,
+      updated: toUpdate.length,
+      changed: changedWallets.length,
+      skipped: active.length - toInsert.length - toUpdate.length,
+    },
+    "GPA seed complete",
+  );
+  return { inserted, updated: toUpdate.length, changedWallets };
 }
 
 export async function discoverBotUserWallets(): Promise<Set<string>> {
@@ -198,25 +294,40 @@ async function hydrateTradeHistory(walletAddress: string): Promise<WalletAnalyti
   }
 }
 
-const HYDRATE_DELAY_MS = 500;
+export interface HydrateBatchOptions {
+  concurrency?: number;
+  includeHistory?: boolean;
+  rateLimiter?: TokenBucket;
+}
 
 export async function hydrateTradersBatch(
   wallets: string[],
-  concurrency = 2,
-  includeHistory = false,
+  opts: HydrateBatchOptions = {},
 ): Promise<number> {
+  const { concurrency = 2, includeHistory = false, rateLimiter } = opts;
+
+  logger.info(
+    { total: wallets.length, concurrency, includeHistory, rateLimited: !!rateLimiter },
+    "Hydration batch starting",
+  );
+
   let upserted = 0;
+  let failed = 0;
   let rateLimited = 0;
+  let processed = 0;
   const queue = [...wallets];
   const inFlight = new Set<Promise<void>>();
 
   async function processOne(wallet: string) {
     try {
+      if (rateLimiter) await rateLimiter.acquire();
+
       const trader = await hydrateTrader(wallet);
       if (!trader) return;
 
       let historyFields: Record<string, string | number | null> = {};
       if (includeHistory) {
+        if (rateLimiter) await rateLimiter.acquire();
         const analytics = await hydrateTradeHistory(wallet);
         if (analytics) {
           historyFields = {
@@ -264,15 +375,35 @@ export async function hydrateTradersBatch(
 
       upserted++;
     } catch (err) {
+      failed++;
       const msg = err instanceof Error ? err.message : String(err);
+      // biome-ignore lint/suspicious/noExplicitAny: Phoenix SDK error shape not typed
+      const retryAfter = (err as any)?.retryAfterSeconds;
       if (/429|rate.?limit/i.test(msg)) {
         rateLimited++;
+        const backoffSec = Math.max(retryAfter ?? 5, 5);
+        logger.warn(
+          { rateLimited, backoffSec, remaining: queue.length },
+          "Hit 429, backing off",
+        );
+        await new Promise((r) => setTimeout(r, backoffSec * 1000));
+        // Re-queue wallet so it gets retried after backoff
+        queue.unshift(wallet);
+        failed--;
         if (rateLimited >= 10) {
           queue.length = 0;
           logger.warn("Too many 429s, aborting remaining hydration");
         }
       } else {
         logger.warn({ wallet, err }, "Failed to process trader for leaderboard");
+      }
+    } finally {
+      processed++;
+      if (processed % 10 === 0 || processed === wallets.length) {
+        logger.info(
+          { processed, total: wallets.length, upserted, failed, remaining: queue.length },
+          "Hydration progress",
+        );
       }
     }
   }
@@ -284,22 +415,26 @@ export async function hydrateTradersBatch(
       inFlight.add(p);
     }
     if (inFlight.size > 0) await Promise.race(inFlight);
-    if (queue.length > 0) await new Promise((r) => setTimeout(r, HYDRATE_DELAY_MS));
   }
 
   if (rateLimited > 0) {
     logger.warn({ rateLimited, upserted }, "Hydration finished with rate-limit hits");
   }
 
+  logger.info({ total: wallets.length, upserted, skipped: wallets.length - upserted }, "Batch hydration done");
   return upserted;
 }
 
 const BACKFILL_STALE_MINUTES = 30;
 const BACKFILL_BATCH_SIZE = 50;
 
-export async function backfillStaleTraders(includeHistory: boolean): Promise<number> {
+export async function backfillStaleTraders(
+  includeHistory: boolean,
+  rateLimiter?: TokenBucket,
+): Promise<number> {
   const staleThreshold = new Date(Date.now() - BACKFILL_STALE_MINUTES * 60_000);
 
+  // Prioritize traders with open positions — their data matters most
   const stale = await db
     .select({ walletAddress: leaderboardSnapshots.walletAddress })
     .from(leaderboardSnapshots)
@@ -309,20 +444,25 @@ export async function backfillStaleTraders(includeHistory: boolean): Promise<num
         sql`(${leaderboardSnapshots.lastHydratedAt} IS NULL OR ${leaderboardSnapshots.lastHydratedAt} < ${staleThreshold})`,
       ),
     )
-    .orderBy(asc(leaderboardSnapshots.lastHydratedAt))
+    .orderBy(desc(leaderboardSnapshots.positionCount), asc(leaderboardSnapshots.lastHydratedAt))
     .limit(BACKFILL_BATCH_SIZE);
 
   if (stale.length === 0) return 0;
 
   const wallets = stale.map((r) => r.walletAddress);
-  return hydrateTradersBatch(wallets, 2, includeHistory);
+  return hydrateTradersBatch(wallets, { concurrency: 2, includeHistory, rateLimiter });
 }
 
-export async function upsertAndHydrateWallet(walletAddress: string): Promise<void> {
+export async function upsertAndHydrateWallet(
+  walletAddress: string,
+  rateLimiter?: TokenBucket,
+): Promise<void> {
   await db
     .insert(leaderboardSnapshots)
     .values({ walletAddress, discoveredVia: "ws_trades" })
     .onConflictDoNothing({ target: leaderboardSnapshots.walletAddress });
+
+  if (rateLimiter) await rateLimiter.acquire();
 
   const trader = await hydrateTrader(walletAddress);
   if (!trader) return;
