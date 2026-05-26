@@ -257,8 +257,14 @@ async function handleOwnAccountEvent(
               ].join("\n"),
               keyboard: [
                 [
-                  { text: "🛑 Set SL", callback_data: `editsl:${pos.symbol}:${pos.side}` },
-                  { text: "🎯 Set TP", callback_data: `edittp:${pos.symbol}:${pos.side}` },
+                  {
+                    text: "🛑 Set SL",
+                    callback_data: `tpsl:open:sl:${pos.symbol}:${pos.side}`,
+                  },
+                  {
+                    text: "🎯 Set TP",
+                    callback_data: `tpsl:open:tp:${pos.symbol}:${pos.side}`,
+                  },
                 ],
                 [{ text: "📊 Positions", callback_data: "nav:positions" }],
               ],

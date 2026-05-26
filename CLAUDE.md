@@ -158,3 +158,17 @@ Size-first flow: size step → leverage step → confirm. All bugs from original
 - `dispatchInstructions` batches multiple TP/SL instructions into one tx
 
 Pending state keys: `trade_size_input:side:SYMBOL` (custom size) and `trade_lev_input:side:SYMBOL:AMT` (custom leverage).
+
+### TP/SL (rewritten — see plan.md)
+
+Position-bracket conditional orders via `buildPlacePositionConditionalOrder`. Ladder-capable, atomic single-tx writes.
+
+- Entry: `/positions` → tap position → `🎯 Set TP` / `🛑 Set SL` button. No `/settp` / `/settl` commands.
+- Service module: `src/services/phoenix/conditional.ts` owns place/cancel/list. Re-exports in `src/services/phoenix/trade.ts`.
+- PDA init (`buildCreateConditionalOrdersAccount`) is lazy, bundled into the same tx the first time per wallet.
+- Direction map per `docs/take-profit-stop-loss.md`: long TP → `greaterTriggerOrder`, long SL → `lessTriggerOrder`, short flipped.
+- Market mode = IOC with ±10% slippage buffer on `executionPrice`. Limit mode = limit at trigger price.
+- Cancel by `conditionalOrderIndex` parsed from the trader-state API trigger id format `ctp-{assetId}-{idx}-{gt|lt}` / `csl-...`.
+- Capacity: 8 active rungs per market per trader account.
+
+Pending state keys: `tpsl_px:LEG:SYM:SIDE`, `tpsl_sz:LEG:SYM:SIDE:PX`, `tpsl_editpx:LEG:SYM:SIDE:IDX`, `tpsl_editsz:LEG:SYM:SIDE:IDX`. Callback namespace: `tpsl:*` (see `src/bot/commands/tpsl.ts`).

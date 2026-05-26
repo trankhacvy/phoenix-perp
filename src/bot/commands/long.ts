@@ -9,7 +9,7 @@ import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot, getMarkets, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
-import { getFeeConfig, placeMarketOrder, setTpSl } from "../../services/phoenix/trade.js";
+import { getFeeConfig, placeMarketOrder, setPositionTpSl } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
 import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext } from "../../types/index.js";
@@ -507,18 +507,27 @@ export async function executeTrade(
             : entryPrice * (1 + settings.autoSlPct / 100)
           : undefined;
         try {
-          await setTpSl(
-            {
-              symbol,
-              walletAddress: wallet,
-              positionSide: side,
-              tpPrice,
-              slPrice,
-              tpMode: "limit",
-              slMode: "market",
-            },
-            fee,
-          );
+          const tp = tpPrice
+            ? [
+                {
+                  leg: "tp" as const,
+                  triggerPrice: tpPrice,
+                  mode: "limit" as const,
+                  size: { kind: "full" as const },
+                },
+              ]
+            : [];
+          const sl = slPrice
+            ? [
+                {
+                  leg: "sl" as const,
+                  triggerPrice: slPrice,
+                  mode: "market" as const,
+                  size: { kind: "full" as const },
+                },
+              ]
+            : [];
+          await setPositionTpSl({ symbol, walletAddress: wallet, positionSide: side, tp, sl }, fee);
           const parts: string[] = [];
           if (tpPrice) parts.push(`TP ${fmtPrice(tpPrice)}`);
           if (slPrice) parts.push(`SL ${fmtPrice(slPrice)}`);
@@ -532,8 +541,8 @@ export async function executeTrade(
       const tokenSize = pf.notional / pf.snapshot.markPrice;
       const sideLabel = side === "long" ? "Long" : "Short";
       const kb = new InlineKeyboard()
-        .text("🛑 Set SL", `editsl:${symbol}:${side}`)
-        .text("🎯 Set TP", `edittp:${symbol}:${side}`)
+        .text("🛑 Set SL", `tpsl:open:sl:${symbol}:${side}`)
+        .text("🎯 Set TP", `tpsl:open:tp:${symbol}:${side}`)
         .row()
         .text("📊 View position", "nav:positions");
 

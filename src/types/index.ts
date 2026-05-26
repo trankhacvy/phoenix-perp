@@ -37,6 +37,16 @@ export interface TraderStateEvent {
   fills?: PhoenixFill[];
 }
 
+export interface PhoenixPositionRung {
+  leg: "tp" | "sl";
+  triggerPrice: number;
+  executionPrice: number;
+  conditionalOrderIndex: number;
+  maxSizeLots: string;
+  filledSizeLots: string;
+  mode: "limit" | "market";
+}
+
 export interface PhoenixPosition {
   symbol: string;
   side: "long" | "short";
@@ -48,8 +58,10 @@ export interface PhoenixPosition {
   marginMode: "cross" | "isolated";
   subaccountIndex: number;
   leverage?: number;
-  takeProfit?: string;
-  stopLoss?: string;
+  tpRungs?: PhoenixPositionRung[];
+  slRungs?: PhoenixPositionRung[];
+  positionLots?: string;
+  baseLotsDecimals?: number;
 }
 
 export interface PhoenixFill {

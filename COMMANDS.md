@@ -20,7 +20,7 @@
 | `/positions` | List all open positions with unrealized PnL, leverage, liquidation price. Tap a position for detail view — close (25/50/100%), add margin, set SL/TP, refresh. Generates PnL card on close. |
 | `/markets` | Browse all markets paginated (10 per page) with price, funding rate APR + trend, and max leverage. Tap a market for full detail. |
 | `/market <symbol>` | Market detail: mark price, open interest, funding rate (APR, direction, daily cost per $10K, trend arrows), taker fee, leverage tiers. 1H technical indicators: RSI(14), MACD, Bollinger Bands, ATR(14). Commodity market hours noted when applicable. Buttons to go long/short or set a price alert. |
-| (SL/TP via position detail) | Set stop-loss or take-profit from `/positions` → tap position → "Set SL" / "Set TP" buttons. Preset % buttons with estimated P&L, custom price entry, or remove existing. Standalone `/setsl` and `/settp` commands removed. |
+| (TP/SL via position detail) | Set or manage take-profit / stop-loss from `/positions` → tap position → "🎯 Set TP" / "🛑 Set SL" buttons. Each opens a per-leg manager supporting ladder (multiple levels), per-rung edit (price/size/mode), atomic single-tx submits. Standalone `/setsl` and `/settp` commands removed. |
 
 ## History & Analytics
 

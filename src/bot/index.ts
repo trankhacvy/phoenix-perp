@@ -6,15 +6,13 @@ import { InlineKeyboard } from "grammy";
 import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { getMarketSnapshot } from "../services/phoenix/market.js";
-import { getTraderState } from "../services/phoenix/position.js";
 import { getWalletUsdcBalance } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
 import { registerCommands } from "./commands/index.js";
 import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
-import { sendRemoveSlConfirm, sendSlFinalConfirm, validateSlPrice } from "./commands/setsl.js";
-import { sendRemoveTpConfirm, sendTpFinalConfirm, validateTpPrice } from "./commands/settp.js";
+import { handleTpSlPriceInput, handleTpSlSizeInput } from "./commands/tpsl.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import {
   getWithdrawBalances,
@@ -240,75 +238,42 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  if (parts[0] === "editsl") {
-    const symbol = parts[1];
-    const positionSide = parts[2] as "long" | "short";
-    const triggerPrice = parseAmount(text);
-
-    if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
-      await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
-      return;
-    }
-
-    if (triggerPrice === 0) {
-      await clearPending(ctx.from.id);
-      await sendRemoveSlConfirm(ctx, symbol, positionSide);
-      return;
-    }
-
-    const slState = await getTraderState(ctx.user.walletAddress);
-    const slPos = slState.positions.find((p) => p.symbol === symbol && p.side === positionSide);
-
-    if (!slPos) {
-      await clearPending(ctx.from.id);
-      await ctx.reply(`No open ${symbol} ${positionSide} position. It may have been closed.`);
-      return;
-    }
-
-    const slError = validateSlPrice(slPos, triggerPrice);
-    if (slError) {
-      await ctx.reply(slError);
-      return;
-    }
-
-    await clearPending(ctx.from.id);
-    await sendSlFinalConfirm(ctx, symbol, triggerPrice, "market", positionSide);
+  if (parts[0] === "tpsl_px") {
+    const leg = parts[1] as "tp" | "sl";
+    const symbol = parts[2];
+    const positionSide = parts[3] as "long" | "short";
+    const editIdx = parts[4] === "E" ? Number(parts[5]) : undefined;
+    await handleTpSlPriceInput(ctx, leg, symbol, positionSide, text, editIdx);
     return;
   }
 
-  if (parts[0] === "edittp") {
-    const symbol = parts[1];
-    const positionSide = parts[2] as "long" | "short";
-    const triggerPrice = parseAmount(text);
+  if (parts[0] === "tpsl_sz") {
+    const leg = parts[1] as "tp" | "sl";
+    const symbol = parts[2];
+    const positionSide = parts[3] as "long" | "short";
+    const priceStr = parts[4];
+    const editIdx = parts[5] === "E" ? Number(parts[6]) : undefined;
+    await handleTpSlSizeInput(ctx, leg, symbol, positionSide, priceStr, text, editIdx);
+    return;
+  }
 
-    if (Number.isNaN(triggerPrice) || triggerPrice < 0) {
-      await ctx.reply("Invalid price. Enter a positive number, or 0 to remove.");
-      return;
-    }
+  if (parts[0] === "tpsl_editpx") {
+    const leg = parts[1] as "tp" | "sl";
+    const symbol = parts[2];
+    const positionSide = parts[3] as "long" | "short";
+    const idx = Number(parts[4]);
+    await handleTpSlPriceInput(ctx, leg, symbol, positionSide, text, idx);
+    return;
+  }
 
-    if (triggerPrice === 0) {
-      await clearPending(ctx.from.id);
-      await sendRemoveTpConfirm(ctx, symbol, positionSide);
-      return;
-    }
-
-    const tpState = await getTraderState(ctx.user.walletAddress);
-    const tpPos = tpState.positions.find((p) => p.symbol === symbol && p.side === positionSide);
-
-    if (!tpPos) {
-      await clearPending(ctx.from.id);
-      await ctx.reply(`No open ${symbol} ${positionSide} position. It may have been closed.`);
-      return;
-    }
-
-    const tpError = validateTpPrice(tpPos, triggerPrice);
-    if (tpError) {
-      await ctx.reply(tpError);
-      return;
-    }
-
-    await clearPending(ctx.from.id);
-    await sendTpFinalConfirm(ctx, symbol, triggerPrice, "limit", positionSide);
+  if (parts[0] === "tpsl_editsz") {
+    const leg = parts[1] as "tp" | "sl";
+    const symbol = parts[2];
+    const positionSide = parts[3] as "long" | "short";
+    const idx = Number(parts[4]);
+    // Existing rung's price is needed; treat priceStr as "0" sentinel — the
+    // handler looks the rung up by editIdx and uses its current triggerPrice.
+    await handleTpSlSizeInput(ctx, leg, symbol, positionSide, "0", text, idx);
     return;
   }
 
