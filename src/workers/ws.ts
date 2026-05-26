@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Redis } from "ioredis";
 import WebSocket from "ws";
 import { config } from "../config/index.js";
@@ -37,6 +37,39 @@ const ownerMap = new Map<string, string>();
 // wallet → userId (DB id, for referral accrual)
 const ownerUserIdCache = new Map<string, string>();
 
+const ALERT_ENABLED_DEFAULTS: Record<string, boolean> = {
+  at_risk: true,
+  cancellable: true,
+  liquidatable: true,
+  tpsl_flip: true,
+};
+
+const ALERT_ENABLED_CACHE_TTL_MS = 30_000;
+const _alertEnabledCache = new Map<string, { enabled: boolean; ts: number }>();
+
+type AlertTypeValue = (typeof alertSubscriptions.type.enumValues)[number];
+
+async function isAlertEnabled(userId: string, alertType: string): Promise<boolean> {
+  const cacheKey = `${userId}:${alertType}`;
+  const cached = _alertEnabledCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < ALERT_ENABLED_CACHE_TTL_MS) return cached.enabled;
+
+  const row = await db.query.alertSubscriptions.findFirst({
+    where: and(
+      eq(alertSubscriptions.userId, userId),
+      eq(alertSubscriptions.type, alertType as AlertTypeValue),
+      isNull(alertSubscriptions.symbol),
+    ),
+  });
+
+  const enabled = row ? row.enabled : (ALERT_ENABLED_DEFAULTS[alertType] ?? true);
+  _alertEnabledCache.set(cacheKey, { enabled, ts: Date.now() });
+  return enabled;
+}
+
+const RISK_DEDUP_TTL = 300;
+const TPSL_DEDUP_TTL = 60;
+
 const RISK_ALERT_TIERS: RiskTier[] = [
   "atRisk",
   "at_risk",
@@ -58,23 +91,29 @@ interface AlertPayload {
   keyboard?: AlertButton[][];
 }
 
-function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
+function riskAlertType(tier: RiskTier): string {
+  if (tier === "atRisk" || tier === "at_risk") return "at_risk";
+  if (tier === "cancellable") return "cancellable";
+  return "liquidatable";
+}
+
+function buildRiskAlert(event: TraderStateEvent): (AlertPayload & { alertType: string }) | null {
   if (!RISK_ALERT_TIERS.includes(event.riskTier)) return null;
   const col = esc(`$${Number(event.effectiveCollateral).toFixed(2)}`);
   const tier = event.riskTier;
 
   const messages: Record<string, string> = {
-    atRisk: `⚠️ <b>Account At Risk</b>\n\nYour margin is below initial requirement.\nCollateral: <code>${col}</code>\n\nDeposit more or reduce positions.`,
-    at_risk: `⚠️ <b>Account At Risk</b>\n\nYour margin is below initial requirement.\nCollateral: <code>${col}</code>\n\nDeposit more or reduce positions.`,
-    cancellable: `🟠 <b>Orders May Be Cancelled</b>\n\nRisk-increasing orders can be force-cancelled.\nCollateral: <code>${col}</code>\n\nClose positions or add margin.`,
-    liquidatable: `🚨 <b>LIQUIDATION WARNING</b>\n\nYour account can be liquidated NOW.\nCollateral: <code>${col}</code>\n\nAct immediately — deposit or close positions.`,
-    backstopLiquidatable: `🆘 <b>CRITICAL — Backstop Liquidation</b>\n\nAccount beyond normal liquidation threshold.\nCollateral: <code>${col}</code>\n\nDeposit immediately.`,
-    highRisk: `🆘 <b>CRITICAL — High Risk</b>\n\nAccount is deeply stressed and ADL-eligible.\nCollateral: <code>${col}</code>\n\nDeposit immediately.`,
+    atRisk: `⚠️ <b>Margin Low</b>\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
+    at_risk: `⚠️ <b>Margin Low</b>\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
+    cancellable: `🟠 <b>Margin Warning</b>\n\nYour collateral (${col}) is critically low.\nOpen orders may be force-cancelled to protect your account.`,
+    liquidatable: `🚨 <b>Liquidation Risk</b>\n\nYour account (${col}) can be liquidated.\nDeposit funds or close positions immediately.`,
+    backstopLiquidatable: `🆘 <b>Liquidation Imminent</b>\n\nYour account (${col}) is past the normal liquidation threshold.\nAct now — deposit or close everything.`,
+    highRisk: `🆘 <b>Liquidation Imminent</b>\n\nYour account (${col}) is deeply underwater.\nAct now — deposit or close everything.`,
   };
 
   const msg = messages[tier];
   if (!msg) return null;
-  return { message: msg, keyboard: NAV_RISK_KB };
+  return { message: msg, keyboard: NAV_RISK_KB, alertType: riskAlertType(tier) };
 }
 
 function addWatcher(walletAddress: string, telegramId: string) {
@@ -188,6 +227,10 @@ async function handleOwnAccountEvent(
   telegramId: string,
   event: TraderStateEvent,
 ) {
+  // userId = DB primary key (users.id). Today it equals telegramId, but
+  // getOwnerUserId is the canonical lookup so this survives a PK change.
+  const userId = (await getOwnerUserId(walletAddress)) ?? telegramId;
+
   const prevKey = `ws:positions:${walletAddress}`;
   const prev = await redis.get(prevKey);
   if (prev) {
@@ -195,18 +238,33 @@ async function handleOwnAccountEvent(
     for (const pos of event.positions ?? []) {
       const prevPos = prevPositions.find((p) => p.symbol === pos.symbol);
       if (prevPos && prevPos.side !== pos.side) {
-        await alertQueue.add("tpsl-flip", {
-          telegramId,
-          type: "tpsl_flip",
-          symbol: pos.symbol,
-          message: [
-            `🔄 <b>Position Reversed: ${esc(pos.symbol)}</b>`,
-            "",
-            `Your ${esc(pos.symbol)} position flipped sides — existing TP/SL orders were cleared.`,
-            "Set new TP/SL to protect your position.",
-          ].join("\n"),
-          keyboard: [[{ text: "📊 Manage position", callback_data: "nav:positions" }]],
-        });
+        if (await isAlertEnabled(userId, "tpsl_flip")) {
+          const dedupKey = `ws:dedup:${telegramId}:tpsl_flip:${pos.symbol}`;
+          const isNew = await redis.set(dedupKey, "1", "EX", TPSL_DEDUP_TTL, "NX");
+          if (isNew) {
+            const newSide = pos.side === "long" ? "LONG" : "SHORT";
+            await alertQueue.add("tpsl-flip", {
+              telegramId,
+              type: "tpsl_flip",
+              symbol: pos.symbol,
+              message: [
+                `🔄 <b>${esc(pos.symbol)} flipped to ${newSide}</b>`,
+                "",
+                `Your ${esc(pos.symbol)} position changed direction.`,
+                "Previous TP/SL orders were cancelled.",
+                "",
+                `Set new TP/SL to protect your ${newSide.toLowerCase()} position.`,
+              ].join("\n"),
+              keyboard: [
+                [
+                  { text: "🛑 Set SL", callback_data: `editsl:${pos.symbol}:${pos.side}` },
+                  { text: "🎯 Set TP", callback_data: `edittp:${pos.symbol}:${pos.side}` },
+                ],
+                [{ text: "📊 Positions", callback_data: "nav:positions" }],
+              ],
+            });
+          }
+        }
       }
     }
   }
@@ -214,36 +272,28 @@ async function handleOwnAccountEvent(
 
   const riskAlert = buildRiskAlert(event);
   if (riskAlert) {
-    const symbols = (event.positions ?? []).map((p) => p.symbol).join(",");
-    await alertQueue.add("risk-tier", {
-      telegramId,
-      type: event.riskTier.toLowerCase(),
-      symbol: symbols || undefined,
-      message: riskAlert.message,
-      keyboard: riskAlert.keyboard,
-    });
+    if (await isAlertEnabled(userId, riskAlert.alertType)) {
+      const symbols = (event.positions ?? []).map((p) => p.symbol).join(",");
+      const dedupKey = `ws:dedup:${telegramId}:risk:${riskAlert.alertType}`;
+      const isNew = await redis.set(dedupKey, "1", "EX", RISK_DEDUP_TTL, "NX");
+      if (isNew) {
+        await alertQueue.add("risk-tier", {
+          telegramId,
+          type: riskAlert.alertType,
+          symbol: symbols || undefined,
+          message: riskAlert.message,
+          keyboard: riskAlert.keyboard,
+        });
+      }
+    }
   }
 
-  for (const fill of event.fills ?? []) {
-    const notional = (Number(fill.size) * Number(fill.price)).toFixed(2);
-    await alertQueue.add("fill", {
-      telegramId,
-      type: "fill",
-      symbol: fill.symbol,
-      message: [
-        `✅ <b>Order Filled: ${esc(fill.symbol)}</b>`,
-        "",
-        `${esc(fill.side.toUpperCase())} · ${esc(fill.size)} ${esc(fill.symbol)} @ $${esc(fill.price)}`,
-        `Notional: $${esc(notional)}  ·  Fee: $${esc(fill.fee)}`,
-      ].join("\n"),
-      keyboard: [[{ text: "📊 View position", callback_data: "nav:positions" }]],
-    });
-
-    if (config.REFERRAL_ENABLED) {
-      const userId = await getOwnerUserId(walletAddress);
-      if (userId) {
+  if (config.REFERRAL_ENABLED) {
+    for (const fill of event.fills ?? []) {
+      const ownerId = await getOwnerUserId(walletAddress);
+      if (ownerId) {
         const notional = Number(fill.size) * Number(fill.price);
-        await accrueReferralFee(userId, notional).catch((err) =>
+        await accrueReferralFee(ownerId, notional).catch((err) =>
           logger.error({ err }, "Referral fee accrual failed"),
         );
       }

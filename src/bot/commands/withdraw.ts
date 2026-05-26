@@ -5,14 +5,13 @@ import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import {
+  getFeeConfig,
   getUsdcAtaBalanceNative,
   transferUsdc,
   withdrawCollateral,
 } from "../../services/phoenix/trade.js";
-import {
-  getSolBalance,
-  getWalletUsdcBalance,
-} from "../../services/wallet.js";
+import { getSettings } from "../../services/settings.js";
+import { getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
 import { toBotError } from "../lib/errors.js";
@@ -36,12 +35,7 @@ async function storeExtConfirm(
   toAddress: string,
   source: ExtSource,
 ): Promise<void> {
-  await redis.set(
-    `wd:ext:${telegramId}`,
-    JSON.stringify({ amount, toAddress, source }),
-    "EX",
-    600,
-  );
+  await redis.set(`wd:ext:${telegramId}`, JSON.stringify({ amount, toAddress, source }), "EX", 600);
 }
 
 // Atomically consumes the ext confirm key — only the first concurrent caller
@@ -139,10 +133,7 @@ Where would you like to withdraw from?`;
 
 // ─── Trading-source destination picker ────────────────────────────────────────
 
-export async function sendWithdrawTradingDestScreen(
-  ctx: BotContext,
-  edit = false,
-): Promise<void> {
+export async function sendWithdrawTradingDestScreen(ctx: BotContext, edit = false): Promise<void> {
   if (!ctx.user) return;
 
   const { safe, deposited, walletUsdc } = await getWithdrawBalances(ctx.user.walletAddress);
@@ -254,10 +245,7 @@ How much?`;
 
 // ─── Amount picker — wallet source (always external) ─────────────────────────
 
-export async function sendWithdrawWalletAmountScreen(
-  ctx: BotContext,
-  edit = false,
-): Promise<void> {
+export async function sendWithdrawWalletAmountScreen(ctx: BotContext, edit = false): Promise<void> {
   if (!ctx.user) return;
 
   const { walletUsdc, deposited } = await getWithdrawBalances(ctx.user.walletAddress);
@@ -609,7 +597,9 @@ export function registerWithdraw(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        const sig = await withdrawCollateral(user.walletAddress, amountNative);
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        const sig = await withdrawCollateral(user.walletAddress, amountNative, fee);
         await redis.del(lockKey);
 
         const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
@@ -686,11 +676,13 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
     const amountNative = BigInt(Math.round(amount * 1_000_000));
 
     void (async () => {
-      // Step 1: trading source only — pull funds from Phoenix into bot wallet
+      const s = await getSettings(user.id);
+      const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+
       let sig1: string | null = null;
       if (source === "trading") {
         try {
-          sig1 = await withdrawCollateral(user.walletAddress, amountNative);
+          sig1 = await withdrawCollateral(user.walletAddress, amountNative, fee);
         } catch (err) {
           logger.error({ err, amount, toAddress }, "External withdraw step 1 failed");
           await redis.del(lockKey);
@@ -716,7 +708,6 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
         }
       }
 
-      // Step 2: bot wallet → external address
       const actualBalance = await getUsdcAtaBalanceNative(user.walletAddress);
       const transferAmount = actualBalance < amountNative ? actualBalance : amountNative;
 
@@ -733,7 +724,7 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
 
       let sig2: string;
       try {
-        sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount);
+        sig2 = await transferUsdc(user.walletAddress, toAddress, transferAmount, fee);
       } catch (err) {
         logger.error({ err, amount, toAddress, source }, "External withdraw step 2 failed");
         await redis.del(lockKey);

@@ -106,7 +106,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   bot.callbackQuery("nav:alerts", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
-    await sendAlertsScreen(ctx);
+    await sendAlertsScreen(ctx, true);
   });
 
   bot.callbackQuery("nav:markets", async (ctx) => {

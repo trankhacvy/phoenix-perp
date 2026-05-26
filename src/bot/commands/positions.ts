@@ -4,7 +4,13 @@ import type { Bot } from "grammy";
 import { logger } from "../../lib/logger.js";
 import { generatePnlCard } from "../../services/image.js";
 import { getTraderState } from "../../services/phoenix/position.js";
-import { addMargin, closePosition } from "../../services/phoenix/trade.js";
+import {
+  type FeeConfig,
+  addMargin,
+  closePosition,
+  getFeeConfig,
+} from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
@@ -256,12 +262,21 @@ export function registerPositions(bot: Bot<BotContext>) {
     }
   });
 
-  // Close position — confirm prompt
+  // Close position — confirm prompt (or skip if confirmClose=false)
   bot.callbackQuery(/^close:([A-Z0-9]+):(\d+):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, pctStr, side] = ctx.match.slice(1) as [string, string, "long" | "short"];
     const closePct = Number(pctStr);
+
+    const settings = await getSettings(ctx.user.id);
+    if (!settings.confirmClose) {
+      if (!(await checkOrderRateLimit(ctx))) return;
+      if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
+      const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
+      await executeClose(ctx, symbol, closePct, side, fee);
+      return;
+    }
     const state = await getTraderState(ctx.user.walletAddress);
     const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
 
@@ -298,110 +313,12 @@ export function registerPositions(bot: Bot<BotContext>) {
     if (!ctx.user) return;
     if (!(await checkOrderRateLimit(ctx))) return;
     const [symbol, pctStr, side] = ctx.match.slice(1) as [string, string, "long" | "short"];
-    const fraction = Number(pctStr) / 100;
 
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 
-    await ctx.editMessageText("⏳ Closing position…");
-
-    const user = ctx.user;
-    const chatId = ctx.chat?.id;
-    const msgId = ctx.callbackQuery.message?.message_id;
-    const api = ctx.api;
-
-    if (!chatId || !msgId) return;
-
-    (async () => {
-      const state = await getTraderState(user.walletAddress);
-      const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
-
-      let sig: string;
-      try {
-        sig = await closePosition(symbol, user.walletAddress, fraction);
-      } catch (e) {
-        logger.error({ err: e, symbol, fraction }, "closePosition failed");
-        const kb = new InlineKeyboard().text("← Back", "nav:positions");
-        const be = toBotError(e);
-        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-        const errorText = fmt`${FormattedString.b("❌ Close position failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
-        try {
-          await api.editMessageText(chatId, msgId, errorText.text, {
-            entities: errorText.entities,
-            reply_markup: kb,
-          });
-        } catch (editErr) {
-          logger.warn({ err: editErr }, "failed to edit error message after close failure");
-        }
-        return;
-      }
-
-      if (pos) {
-        const markPrice = Number(pos.markPrice);
-        const totalSize = Number(pos.size);
-        const closingSize = totalSize * fraction;
-        const notional = closingSize * markPrice;
-        recordTrade({
-          userId: user.id,
-          walletAddress: user.walletAddress,
-          symbol,
-          side,
-          action: "close",
-          notionalUsdc: notional,
-          baseUnits: closingSize.toString(),
-          markPrice,
-          closeFraction: fraction,
-          txSignature: sig,
-        });
-      }
-
-      const closedPct = fraction * 100;
-      const afterKb =
-        fraction === 1
-          ? new InlineKeyboard()
-              .text("🟢 Long", "nav:long")
-              .text("🔴 Short", "nav:short")
-              .row()
-              .text("📋 Positions", "nav:positions")
-          : new InlineKeyboard()
-              .text("📊 View position", `pos:detail:${symbol}:${side}`)
-              .row()
-              .text("📋 Positions", "nav:positions");
-      const closedLabel = closedPct === 100 ? "closed" : `${closedPct}% closed`;
-      const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(closedLabel)}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
-      try {
-        await api.editMessageText(chatId, msgId, successMsg.text, {
-          entities: successMsg.entities,
-          reply_markup: afterKb,
-          link_preview_options: { is_disabled: true },
-        });
-      } catch (editErr) {
-        logger.warn(
-          { err: editErr, symbol, sig },
-          "editMessageText failed after closePosition succeeded",
-        );
-      }
-
-      if (pos) {
-        try {
-          const pnl = Number(pos.unrealizedPnl) * fraction;
-          const leverage = pos.leverage ?? 1;
-          const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
-          const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
-          const card = await generatePnlCard({
-            symbol,
-            side: pos.side,
-            entryPrice: pos.entryPrice,
-            exitPrice: pos.markPrice,
-            roiPercent: Number(roiPct),
-            pnlUsdc: pnl,
-          });
-          await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));
-        } catch (cardErr) {
-          logger.error({ err: cardErr, symbol }, "PnL card generation failed");
-        }
-      }
-    })().catch((err) => logger.error({ err }, "close position async error"));
+    const settings = await getSettings(ctx.user.id);
+    const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
+    await executeClose(ctx, symbol, Number(pctStr), side, fee);
   });
 
   // Add margin — prompt
@@ -447,7 +364,9 @@ export function registerPositions(bot: Bot<BotContext>) {
 
     (async () => {
       try {
-        await addMargin(symbol, user.walletAddress, amount);
+        const s = await getSettings(user.id);
+        const marginFee = getFeeConfig(s.feeMode, s.customFeeSol);
+        await addMargin(symbol, user.walletAddress, amount, marginFee);
         const doneMsg = fmt`✅ Added ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}.`;
         await api.editMessageText(chatId, msgId, doneMsg.text, {
           entities: doneMsg.entities,
@@ -483,4 +402,119 @@ export function registerPositions(bot: Bot<BotContext>) {
     const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
     await sendTpPrompt(ctx, symbol, side);
   });
+}
+
+async function executeClose(
+  ctx: BotContext,
+  symbol: string,
+  closePct: number,
+  side: "long" | "short",
+  fee?: FeeConfig,
+): Promise<void> {
+  if (!ctx.user) return;
+  const fraction = closePct / 100;
+
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText("⏳ Closing position…");
+  } else {
+    await ctx.reply("⏳ Closing position…");
+  }
+
+  const user = ctx.user;
+  const chatId = ctx.chat?.id;
+  const msgId = ctx.callbackQuery?.message?.message_id;
+  const api = ctx.api;
+
+  if (!chatId || !msgId) return;
+
+  (async () => {
+    let sig: string;
+    try {
+      sig = await closePosition(symbol, user.walletAddress, fraction, fee);
+    } catch (e) {
+      logger.error({ err: e, symbol, fraction }, "closePosition failed");
+      const kb = new InlineKeyboard().text("← Back", "nav:positions");
+      const be = toBotError(e);
+      const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
+      const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
+      const errorText = fmt`${FormattedString.b("❌ Close position failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+      try {
+        await api.editMessageText(chatId, msgId, errorText.text, {
+          entities: errorText.entities,
+          reply_markup: kb,
+        });
+      } catch (editErr) {
+        logger.warn({ err: editErr }, "failed to edit error message after close failure");
+      }
+      return;
+    }
+
+    const state = await getTraderState(user.walletAddress).catch(() => null);
+    const pos = state?.positions.find((p) => p.symbol === symbol && p.side === side);
+
+    if (pos) {
+      const markPrice = Number(pos.markPrice);
+      const totalSize = Number(pos.size);
+      const closingSize = totalSize * fraction;
+      const notional = closingSize * markPrice;
+      recordTrade({
+        userId: user.id,
+        walletAddress: user.walletAddress,
+        symbol,
+        side,
+        action: "close",
+        notionalUsdc: notional,
+        baseUnits: closingSize.toString(),
+        markPrice,
+        closeFraction: fraction,
+        txSignature: sig,
+      });
+    }
+
+    const afterKb =
+      fraction === 1
+        ? new InlineKeyboard()
+            .text("🟢 Long", "nav:long")
+            .text("🔴 Short", "nav:short")
+            .row()
+            .text("📋 Positions", "nav:positions")
+        : new InlineKeyboard()
+            .text("📊 View position", `pos:detail:${symbol}:${side}`)
+            .row()
+            .text("📋 Positions", "nav:positions");
+    const closedLabel = closePct === 100 ? "closed" : `${closePct}% closed`;
+    const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(closedLabel)}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+    try {
+      await api.editMessageText(chatId, msgId, successMsg.text, {
+        entities: successMsg.entities,
+        reply_markup: afterKb,
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (editErr) {
+      logger.warn(
+        { err: editErr, symbol, sig },
+        "editMessageText failed after closePosition succeeded",
+      );
+    }
+
+    if (pos) {
+      try {
+        const pnl = Number(pos.unrealizedPnl) * fraction;
+        const leverage = pos.leverage ?? 1;
+        const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
+        const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
+        const card = await generatePnlCard({
+          symbol,
+          side: pos.side,
+          entryPrice: pos.entryPrice,
+          exitPrice: pos.markPrice,
+          roiPercent: Number(roiPct),
+          pnlUsdc: pnl,
+        });
+        await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));
+      } catch (cardErr) {
+        logger.error({ err: cardErr, symbol }, "PnL card generation failed");
+      }
+    }
+  })().catch((err) => logger.error({ err }, "close position async error"));
 }

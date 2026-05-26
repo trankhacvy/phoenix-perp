@@ -1,24 +1,15 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { logger } from "../../lib/logger.js";
-import { redis } from "../../lib/redis.js";
-import { trackAction } from "../../services/action-log.js";
-import { marginToTokens } from "../../services/phoenix/lots.js";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
-import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
-import { placeMarketOrder } from "../../services/phoenix/trade.js";
-import { recordTrade } from "../../services/trade-log.js";
+import { getSettings } from "../../services/settings.js";
 import type { BotContext } from "../../types/index.js";
-import { subscribeUser } from "../../workers/ws.js";
-import { renderBotError, toBotError } from "../lib/errors.js";
-import { price as fmtPrice, num, parseAmount, parseLeverage, solscanUrl, usd } from "../lib/fmt.js";
+import { parseAmount, parseLeverage, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
-
-const TRADE_LOCK_TTL = 150;
 import {
+  executeTrade,
   sendLevStep,
   sendSizeStep,
   sendSymbolPicker,
@@ -115,6 +106,11 @@ export function registerShort(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [symbol, amtStr, levStr] = ctx.match.slice(1);
+    const settings = await getSettings(ctx.user.id);
+    if (!settings.confirmTrades) {
+      await executeTrade(ctx, "short", symbol, Number(levStr), Number(amtStr));
+      return;
+    }
     await sendTradeConfirm(ctx, "short", symbol, Number(levStr), Number(amtStr));
   });
 
@@ -144,132 +140,13 @@ export function registerShort(bot: Bot<BotContext>) {
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 
     const [symbol, leverageStr, sizeStr, anchorStr] = ctx.match.slice(1);
-    const lev = Number(leverageStr);
-    const sizeUsdc = Number(sizeStr);
-    const anchorPrice = Number(anchorStr);
-
-    let pf: PreflightResult;
-    try {
-      pf = await preflightOpen({
-        user: ctx.user,
-        symbol,
-        side: "short",
-        marginUsdc: sizeUsdc,
-        leverage: lev,
-        anchorPrice,
-      });
-    } catch (e) {
-      const be = toBotError(e);
-      ctx.actionLog = { outcome: "error", errorCode: be.code, errorCategory: be.category };
-      if (be.code === "PRICE_DRIFT") {
-        const kb = new InlineKeyboard()
-          .text("🔄 Refresh price", `trade_refresh:short:${symbol}:${lev}:${sizeUsdc}`)
-          .row()
-          .text("✕ Cancel", "cancel");
-        await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
-        return;
-      }
-      const kb = new InlineKeyboard()
-        .text("← Resize", `trade:short:${symbol}`)
-        .text("✕ Cancel", "cancel");
-      await renderBotError(ctx, be, { action: "Trade", edit: true, replyMarkup: kb });
-      return;
-    }
-
-    const tradeLockKey = `trade:lock:${ctx.user.id}`;
-    const tradeLocked = await redis.set(tradeLockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
-    if (!tradeLocked) {
-      await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
-      return;
-    }
-
-    ctx.actionLog = { skip: true };
-    await ctx.editMessageText("⏳ Submitting order to Solana…");
-
-    const user = ctx.user;
-    const chatId = ctx.chat?.id;
-    const msgId = ctx.callbackQuery.message?.message_id;
-    const api = ctx.api;
-
-    if (!chatId || !msgId) {
-      await redis.del(tradeLockKey);
-      return;
-    }
-
-    void (async () => {
-      try {
-        const baseUnits = marginToTokens(pf.snapshot, sizeUsdc, pf.effectiveLeverage);
-        const { walletAddress: wallet, telegramId } = user;
-        const sig = await trackAction(
-          {
-            userId: user.id,
-            command: "trade.short",
-            args: {
-              symbol,
-              leverage: pf.effectiveLeverage,
-              marginUsdc: sizeUsdc,
-              notional: pf.notional,
-            },
-          },
-          () =>
-            placeMarketOrder({
-              symbol,
-              side: "short",
-              baseUnits,
-              walletAddress: wallet,
-            }),
-        );
-
-        recordTrade({
-          userId: user.id,
-          walletAddress: wallet,
-          symbol,
-          side: "short",
-          action: "open",
-          marginUsdc: sizeUsdc,
-          leverage: pf.effectiveLeverage,
-          notionalUsdc: pf.notional,
-          baseUnits,
-          markPrice: pf.snapshot.markPrice,
-          feeUsdc: pf.feeUsdc,
-          txSignature: sig,
-        });
-
-        await subscribeUser(wallet, telegramId);
-
-        const tokenSize = pf.notional / pf.snapshot.markPrice;
-        const kb = new InlineKeyboard()
-          .text("🛑 Set SL", `editsl:${symbol}:short`)
-          .text("🎯 Set TP", `edittp:${symbol}:short`)
-          .row()
-          .text("📊 View position", "nav:positions");
-
-        const msg = fmt`✅ ${FormattedString.b(`Short ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
-        await api.editMessageText(chatId, msgId, msg.text, {
-          entities: msg.entities,
-          reply_markup: kb,
-          link_preview_options: { is_disabled: true },
-        });
-      } catch (e) {
-        logger.error({ err: e, symbol, side: "short" }, "placeMarketOrder failed");
-        const be = toBotError(e);
-        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-        const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
-        const kb = new InlineKeyboard()
-          .text("Try again", `trade:short:${symbol}`)
-          .text("← Back", "nav:positions");
-        try {
-          await api.editMessageText(chatId, msgId, errMsg.text, {
-            entities: errMsg.entities,
-            reply_markup: kb,
-          });
-        } catch (editErr) {
-          logger.error({ err: editErr }, "failed to edit error message for short trade");
-        }
-      }
-    })()
-      .finally(() => redis.del(tradeLockKey))
-      .catch((err) => logger.error({ err }, "short trade async error"));
+    await executeTrade(
+      ctx,
+      "short",
+      symbol,
+      Number(leverageStr),
+      Number(sizeStr),
+      Number(anchorStr),
+    );
   });
 }

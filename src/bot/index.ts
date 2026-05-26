@@ -138,6 +138,45 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  if (pending === "settings_custom_fee") {
+    await clearPending(ctx.from.id);
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val <= 0 || val > 1) {
+      await ctx.reply("Invalid amount. Enter between 0.0001 and 1 SOL.");
+      return;
+    }
+    const { saveSettings } = await import("../services/settings.js");
+    await saveSettings(ctx.user.id, { feeMode: "custom", customFeeSol: val });
+    await ctx.reply(`✅ Priority fee set to ${val} SOL`);
+    return;
+  }
+
+  if (pending === "settings_auto_tp") {
+    await clearPending(ctx.from.id);
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val <= 0 || val > 500) {
+      await ctx.reply("Invalid percentage. Enter between 1 and 500.");
+      return;
+    }
+    const { saveSettings } = await import("../services/settings.js");
+    await saveSettings(ctx.user.id, { autoTpPct: val });
+    await ctx.reply(`✅ Auto TP set to +${val}%`);
+    return;
+  }
+
+  if (pending === "settings_auto_sl") {
+    await clearPending(ctx.from.id);
+    const val = parseAmount(text);
+    if (Number.isNaN(val) || val <= 0 || val > 100) {
+      await ctx.reply("Invalid percentage. Enter between 1 and 100.");
+      return;
+    }
+    const { saveSettings } = await import("../services/settings.js");
+    await saveSettings(ctx.user.id, { autoSlPct: val });
+    await ctx.reply(`✅ Auto SL set to -${val}%`);
+    return;
+  }
+
   if (parts[0] === "trade_size_input") {
     const side = parts[1] as "long" | "short";
     const symbol = parts[2];

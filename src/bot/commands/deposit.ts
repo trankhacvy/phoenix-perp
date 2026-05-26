@@ -2,7 +2,8 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { type Bot, InlineKeyboard, InputFile } from "grammy";
 import QRCode from "qrcode";
 import { logger } from "../../lib/logger.js";
-import { depositCollateral } from "../../services/phoenix/trade.js";
+import { depositCollateral, getFeeConfig } from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { toBotError } from "../lib/errors.js";
@@ -89,7 +90,9 @@ export function registerDeposit(bot: Bot<BotContext>) {
     void (async () => {
       try {
         const amountNative = BigInt(Math.round(amount * 1_000_000));
-        const sig = await depositCollateral(user.walletAddress, amountNative);
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        const sig = await depositCollateral(user.walletAddress, amountNative, fee);
         const msg = fmt`✅ ${FormattedString.b("Collateral added")}\n\n${FormattedString.b(usd(amount))} is now in your trading account.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nYou're ready to trade — try /long or /short.`;
         await api.editMessageText(chatId, msgId, msg.text, {
           entities: msg.entities,
@@ -104,10 +107,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
             entities: errMsg.entities,
           });
         } catch (editErr) {
-          logger.warn(
-            { err: editErr },
-            "failed to edit error message after deposit failure",
-          );
+          logger.warn({ err: editErr }, "failed to edit error message after deposit failure");
         }
       }
     })().catch((err) => logger.error({ err }, "deposit async error"));
@@ -158,8 +158,7 @@ export async function sendFundCollateralScreen(
 ): Promise<void> {
   if (!ctx.user) return;
 
-  const balance =
-    cachedBalance ?? (await getWalletUsdcBalance(ctx.user.walletAddress));
+  const balance = cachedBalance ?? (await getWalletUsdcBalance(ctx.user.walletAddress));
 
   if (balance < MIN_DEPOSIT_USD) {
     const kb = new InlineKeyboard()
@@ -193,10 +192,7 @@ Move your USDC into your trading account to start trading. Collateral can be wit
 /**
  * Final confirm screen before executing the on-chain deposit.
  */
-export async function sendDepositConfirm(
-  ctx: BotContext,
-  amount: number,
-): Promise<void> {
+export async function sendDepositConfirm(ctx: BotContext, amount: number): Promise<void> {
   if (!ctx.user) return;
 
   // Clamp to 2 decimals (USD precision). Avoids scientific-notation in
@@ -210,9 +206,7 @@ export async function sendDepositConfirm(
 
   const balance = await getWalletUsdcBalance(ctx.user.walletAddress);
   if (clamped > balance + 0.01) {
-    await ctx.reply(
-      `You only have ${usd(balance)} USDC in your wallet. Enter a smaller amount.`,
-    );
+    await ctx.reply(`You only have ${usd(balance)} USDC in your wallet. Enter a smaller amount.`);
     return;
   }
 

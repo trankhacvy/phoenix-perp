@@ -57,6 +57,13 @@
       "when": 1779680453104,
       "tag": "0007_careful_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779729157097,
+      "tag": "0008_dapper_mathemanic",
+      "breakpoints": true
     }
   ]
 }

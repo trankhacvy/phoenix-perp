@@ -11,7 +11,11 @@ import { redis } from "../../lib/redis.js";
 import { getOrderbook } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { generateReferralCode, linkReferral } from "../../services/referral.js";
-import { createEmbeddedWallet, getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
+import {
+  createEmbeddedWallet,
+  getSolBalance,
+  getWalletUsdcBalance,
+} from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { usd } from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
@@ -113,23 +117,18 @@ export function registerStart(bot: Bot<BotContext>) {
         return;
       }
 
-      const [solResult, usdcWalletResult, traderResult, solBookResult] =
-        await Promise.allSettled([
-          getSolBalance(ctx.user.walletAddress),
-          getWalletUsdcBalance(ctx.user.walletAddress),
-          getTraderState(ctx.user.walletAddress),
-          getOrderbook("SOL"),
-        ]);
+      const [solResult, usdcWalletResult, traderResult, solBookResult] = await Promise.allSettled([
+        getSolBalance(ctx.user.walletAddress),
+        getWalletUsdcBalance(ctx.user.walletAddress),
+        getTraderState(ctx.user.walletAddress),
+        getOrderbook("SOL"),
+      ]);
 
       const sol = solResult.status === "fulfilled" ? solResult.value : null;
-      const walletUsdc =
-        usdcWalletResult.status === "fulfilled" ? usdcWalletResult.value : null;
+      const walletUsdc = usdcWalletResult.status === "fulfilled" ? usdcWalletResult.value : null;
       const collateral =
-        traderResult.status === "fulfilled"
-          ? Number(traderResult.value.effectiveCollateral)
-          : null;
-      const solPrice =
-        solBookResult.status === "fulfilled" ? (solBookResult.value?.mid ?? 0) : 0;
+        traderResult.status === "fulfilled" ? Number(traderResult.value.effectiveCollateral) : null;
+      const solPrice = solBookResult.status === "fulfilled" ? (solBookResult.value?.mid ?? 0) : 0;
 
       const solLine =
         sol !== null

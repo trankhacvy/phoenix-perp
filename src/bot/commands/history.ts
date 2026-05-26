@@ -128,10 +128,7 @@ function buildDetailText(t: TradeHistoryEntry, sig: string): FormattedString {
   ];
 
   if (isClose(t)) {
-    lines.push(
-      fmt`Realized PnL    ${FormattedString.b(signedUsd(pnl))} ${pnlEmoji(pnl)}`,
-      fmt``,
-    );
+    lines.push(fmt`Realized PnL    ${FormattedString.b(signedUsd(pnl))} ${pnlEmoji(pnl)}`, fmt``);
   }
 
   lines.push(

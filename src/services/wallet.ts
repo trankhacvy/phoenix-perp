@@ -34,9 +34,7 @@ export async function getWalletUsdcBalance(walletAddress: string): Promise<numbe
 
 /** Returns SOL balance in SOL (not lamports). Returns 0 on RPC error. */
 export async function getSolBalance(walletAddress: string): Promise<number> {
-  const lamports = await _rpcConnection
-    .getBalance(new PublicKey(walletAddress))
-    .catch(() => 0);
+  const lamports = await _rpcConnection.getBalance(new PublicKey(walletAddress)).catch(() => 0);
   return lamports / 1e9;
 }
 

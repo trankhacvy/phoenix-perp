@@ -7,13 +7,10 @@ import { alertSubscriptions } from "../../db/schema/index.js";
 import type { BotContext } from "../../types/index.js";
 
 const ALERT_DEFS = [
-  { type: "fill", label: "Order filled", default: true },
   { type: "at_risk", label: "Account at risk", default: true },
   { type: "cancellable", label: "Margin warning", default: true },
   { type: "liquidatable", label: "Near liquidation", default: true },
   { type: "tpsl_flip", label: "TP/SL triggered", default: true },
-  { type: "funding_flip", label: "Funding direction change", default: false },
-  { type: "large_funding", label: "High funding rate (>50% APR)", default: false },
 ] as const;
 
 type AlertType = (typeof ALERT_DEFS)[number]["type"];
@@ -29,15 +26,26 @@ async function buildAlertsKeyboard(userId: string): Promise<InlineKeyboard> {
     const enabled = sub ? sub.enabled : def.default;
     kb.text(`${enabled ? "✅" : "❌"} ${def.label}`, `alert:toggle:${def.type}`).row();
   }
+  kb.text("← Back to Settings", "settings:back");
   return kb;
 }
 
-const ALERTS_MSG = fmt`🔔 ${FormattedString.b("Alert Settings")}\n\nToggle which notifications you'd like to receive.`;
+const ALERTS_MSG = fmt`🔔 ${FormattedString.b("Notifications")}
 
-export async function sendAlertsScreen(ctx: BotContext): Promise<void> {
+Toggle which alerts you receive. These fire in real-time via WebSocket.
+
+${FormattedString.i("Price alerts are managed separately via /pricealert.")}
+${FormattedString.i("Wallet monitors via /monitor.")}`;
+
+export async function sendAlertsScreen(ctx: BotContext, edit = false): Promise<void> {
   if (!ctx.user) return;
   const kb = await buildAlertsKeyboard(ctx.user.id);
-  await ctx.reply(ALERTS_MSG.text, { entities: ALERTS_MSG.entities, reply_markup: kb });
+  const opts = { entities: ALERTS_MSG.entities, reply_markup: kb };
+  if (edit && ctx.callbackQuery) {
+    await ctx.editMessageText(ALERTS_MSG.text, opts);
+  } else {
+    await ctx.reply(ALERTS_MSG.text, opts);
+  }
 }
 
 export function registerAlerts(bot: Bot<BotContext>) {
@@ -79,7 +87,6 @@ export function registerAlerts(bot: Bot<BotContext>) {
       });
     }
 
-    const kb = await buildAlertsKeyboard(ctx.user.id);
-    await ctx.editMessageText(ALERTS_MSG.text, { entities: ALERTS_MSG.entities, reply_markup: kb });
+    await sendAlertsScreen(ctx, true);
   });
 }

@@ -4,10 +4,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
-import {
-  type WalletMetadata,
-  leaderboardSnapshots,
-} from "../db/schema/leaderboard.js";
+import { type WalletMetadata, leaderboardSnapshots } from "../db/schema/leaderboard.js";
 import { users } from "../db/schema/users.js";
 import { logger } from "../lib/logger.js";
 import { withRetry } from "../lib/retry.js";
@@ -18,9 +15,7 @@ import {
   fetchAllTradeHistory,
 } from "./phoenix/position.js";
 
-const PHOENIX_PROGRAM_ID = new PublicKey(
-  "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih",
-);
+const PHOENIX_PROGRAM_ID = new PublicKey("EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih");
 
 const TRADER_DISCRIMINANT = Buffer.from([41, 97, 73, 105, 110, 214, 112, 9]);
 
@@ -95,26 +90,17 @@ export async function discoverTraderWallets(): Promise<GpaTrader[]> {
     });
   }
 
-  logger.info(
-    { total: traders.length, raw: accounts.length },
-    "GPA discovered trader wallets",
-  );
+  logger.info({ total: traders.length, raw: accounts.length }, "GPA discovered trader wallets");
   return traders;
 }
 
 export async function seedFromGpa(traders: GpaTrader[]): Promise<number> {
-  const active = traders.filter(
-    (t) => t.quoteLotCollateral > 0n || t.numMarkets > 0,
-  );
+  const active = traders.filter((t) => t.quoteLotCollateral > 0n || t.numMarkets > 0);
 
   let inserted = 0;
-  console.log(
-    `Seeding ${active.length} active traders into the leaderboard...`,
-  );
+  console.log(`Seeding ${active.length} active traders into the leaderboard...`);
   for (const t of active) {
-    const collateralUsd = (
-      Number(t.quoteLotCollateral) / QUOTE_LOT_DECIMALS
-    ).toFixed(6);
+    const collateralUsd = (Number(t.quoteLotCollateral) / QUOTE_LOT_DECIMALS).toFixed(6);
 
     const result = await db
       .insert(leaderboardSnapshots)
@@ -155,9 +141,7 @@ interface HydratedTrader {
   positionCount: number;
 }
 
-async function hydrateTrader(
-  walletAddress: string,
-): Promise<HydratedTrader | null> {
+async function hydrateTrader(walletAddress: string): Promise<HydratedTrader | null> {
   try {
     const res = await withRetry(
       () => getPhoenixClient().api.traders().getTraderState(walletAddress),
@@ -175,8 +159,7 @@ async function hydrateTrader(
     const traders = res.traders ?? [];
     if (traders.length === 0) return null;
 
-    const crossAccount =
-      traders.find((t) => t.traderSubaccountIndex === 0) ?? traders[0];
+    const crossAccount = traders.find((t) => t.traderSubaccountIndex === 0) ?? traders[0];
 
     const totalUnrealizedPnl = traders
       .reduce((sum, t) => sum + Number(t.unrealizedPnl.ui), 0)
@@ -187,10 +170,7 @@ async function hydrateTrader(
     const totalPortfolioValue = traders
       .reduce((sum, t) => sum + Number(t.portfolioValue.ui), 0)
       .toFixed(6);
-    const totalPositions = traders.reduce(
-      (sum, t) => sum + (t.positions?.length ?? 0),
-      0,
-    );
+    const totalPositions = traders.reduce((sum, t) => sum + (t.positions?.length ?? 0), 0);
 
     return {
       walletAddress,
@@ -208,9 +188,7 @@ async function hydrateTrader(
   }
 }
 
-async function hydrateTradeHistory(
-  walletAddress: string,
-): Promise<WalletAnalytics | null> {
+async function hydrateTradeHistory(walletAddress: string): Promise<WalletAnalytics | null> {
   try {
     const trades = await fetchAllTradeHistory(walletAddress, 200);
     if (trades.length === 0) return null;
@@ -294,10 +272,7 @@ export async function hydrateTradersBatch(
           logger.warn("Too many 429s, aborting remaining hydration");
         }
       } else {
-        logger.warn(
-          { wallet, err },
-          "Failed to process trader for leaderboard",
-        );
+        logger.warn({ wallet, err }, "Failed to process trader for leaderboard");
       }
     }
   }
@@ -309,15 +284,11 @@ export async function hydrateTradersBatch(
       inFlight.add(p);
     }
     if (inFlight.size > 0) await Promise.race(inFlight);
-    if (queue.length > 0)
-      await new Promise((r) => setTimeout(r, HYDRATE_DELAY_MS));
+    if (queue.length > 0) await new Promise((r) => setTimeout(r, HYDRATE_DELAY_MS));
   }
 
   if (rateLimited > 0) {
-    logger.warn(
-      { rateLimited, upserted },
-      "Hydration finished with rate-limit hits",
-    );
+    logger.warn({ rateLimited, upserted }, "Hydration finished with rate-limit hits");
   }
 
   return upserted;
@@ -326,9 +297,7 @@ export async function hydrateTradersBatch(
 const BACKFILL_STALE_MINUTES = 30;
 const BACKFILL_BATCH_SIZE = 50;
 
-export async function backfillStaleTraders(
-  includeHistory: boolean,
-): Promise<number> {
+export async function backfillStaleTraders(includeHistory: boolean): Promise<number> {
   const staleThreshold = new Date(Date.now() - BACKFILL_STALE_MINUTES * 60_000);
 
   const stale = await db
@@ -349,9 +318,7 @@ export async function backfillStaleTraders(
   return hydrateTradersBatch(wallets, 2, includeHistory);
 }
 
-export async function upsertAndHydrateWallet(
-  walletAddress: string,
-): Promise<void> {
+export async function upsertAndHydrateWallet(walletAddress: string): Promise<void> {
   await db
     .insert(leaderboardSnapshots)
     .values({ walletAddress, discoveredVia: "ws_trades" })
@@ -437,10 +404,7 @@ export async function getLeaderboard(
       .orderBy(desc(orderExpr))
       .limit(pageSize)
       .offset(page * pageSize),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(leaderboardSnapshots)
-      .where(where),
+    db.select({ count: sql<number>`count(*)::int` }).from(leaderboardSnapshots).where(where),
   ]);
 
   return {
@@ -456,9 +420,7 @@ export async function getLeaderboardStats() {
   const result = await db
     .select({
       totalTraders: sql<number>`count(*)::int`,
-      lastUpdated: sql<
-        string | null
-      >`max(${leaderboardSnapshots.lastHydratedAt})::text`,
+      lastUpdated: sql<string | null>`max(${leaderboardSnapshots.lastHydratedAt})::text`,
     })
     .from(leaderboardSnapshots);
 

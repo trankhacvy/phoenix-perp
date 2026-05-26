@@ -3,7 +3,8 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { logger } from "../../lib/logger.js";
 import { getTraderState } from "../../services/phoenix/position.js";
-import { cancelStopLoss, setTpSl } from "../../services/phoenix/trade.js";
+import { cancelStopLoss, getFeeConfig, setTpSl } from "../../services/phoenix/trade.js";
+import { getSettings } from "../../services/settings.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
 import { toBotError } from "../lib/errors.js";
@@ -121,7 +122,14 @@ export function registerSetTp(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        await cancelStopLoss(symbol, user.walletAddress, side === "long" ? "long_tp" : "short_tp");
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        await cancelStopLoss(
+          symbol,
+          user.walletAddress,
+          side === "long" ? "long_tp" : "short_tp",
+          fee,
+        );
         await api.editMessageText(chatId, msgId, `✅ Take profit removed for ${symbol}.`);
       } catch (e) {
         logger.error({ err: e, symbol }, "cancelStopLoss (TP) failed");
@@ -158,13 +166,18 @@ export function registerSetTp(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        await setTpSl({
-          symbol,
-          walletAddress: user.walletAddress,
-          positionSide: side,
-          tpPrice: Number(priceStr),
-          tpMode: mode,
-        });
+        const s = await getSettings(user.id);
+        const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+        await setTpSl(
+          {
+            symbol,
+            walletAddress: user.walletAddress,
+            positionSide: side,
+            tpPrice: Number(priceStr),
+            tpMode: mode,
+          },
+          fee,
+        );
         const navKb = new InlineKeyboard()
           .text("🛑 Set SL", `editsl:${symbol}:${side}`)
           .row()
