@@ -3,6 +3,11 @@ import { InlineKeyboard, InputFile } from "grammy";
 import type { Bot } from "grammy";
 import { logger } from "../../lib/logger.js";
 import { generatePnlCard } from "../../services/image.js";
+import {
+  type ConditionalRung,
+  getPositionConditionals,
+} from "../../services/phoenix/conditional.js";
+import { getMarket } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import {
   type FeeConfig,
@@ -29,8 +34,6 @@ import {
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
-import { sendSlPrompt } from "./setsl.js";
-import { sendTpPrompt } from "./settp.js";
 
 const CIRCLE_NUMS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
 
@@ -143,39 +146,196 @@ export async function sendPositionsScreen(ctx: BotContext, edit = false): Promis
 
 // ─── Detail view ─────────────────────────────────────────────────────────────
 
-function buildDetailText(pos: PhoenixPosition, unsettledFunding: number): FormattedString {
-  const upnl = Number(pos.unrealizedPnl);
-  const upnlPct = calcPnlPct(pos);
+function rungPctOfPosition(lots: bigint, positionLots: bigint): number {
+  if (positionLots <= 0n) return 0;
+  return Number((lots * 10000n) / positionLots) / 100;
+}
+
+function estimateRungPnl(
+  triggerPrice: number,
+  entryPrice: number,
+  side: "long" | "short",
+  sizeLots: bigint,
+  baseLotsDecimals: number,
+): number {
+  const tokens = Number(sizeLots) * 10 ** -baseLotsDecimals;
+  return side === "long"
+    ? (triggerPrice - entryPrice) * tokens
+    : (entryPrice - triggerPrice) * tokens;
+}
+
+function liqDistanceDot(distancePct: number): string {
+  if (distancePct >= 15) return "🟢";
+  if (distancePct >= 5) return "🟡";
+  return "🔴";
+}
+
+function buildTpSection(
+  rungs: ConditionalRung[],
+  positionLots: bigint,
+  entry: number,
+  side: "long" | "short",
+  baseLotsDecimals: number,
+  margin: number,
+): FormattedString {
+  if (rungs.length === 0) {
+    return fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${FormattedString.i("not set")}`;
+  }
+  const totalLots = rungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
+  const totalPct = rungPctOfPosition(totalLots, positionLots);
+  const header = fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${totalPct.toFixed(0)}% planned`;
+
+  const lines: FormattedString[] = [header];
+  let totalPnl = 0;
+  for (let i = 0; i < rungs.length; i++) {
+    const r = rungs[i];
+    const sizePct = rungPctOfPosition(r.maxSizeLots, positionLots);
+    const estPnl = estimateRungPnl(r.triggerPrice, entry, side, r.maxSizeLots, baseLotsDecimals);
+    totalPnl += estPnl;
+    lines.push(
+      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${sizePct.toFixed(0)}%  →  est ${FormattedString.b(signedUsd(estPnl))}`,
+    );
+  }
+  if (rungs.length > 1) {
+    const mult = margin > 0 ? totalPnl / margin : null;
+    const multStr = mult !== null ? `  (${mult.toFixed(2)}× margin)` : "";
+    lines.push(fmt`  ${FormattedString.i(`If all fill: ${signedUsd(totalPnl)}${multStr}`)}`);
+  }
+  return FormattedString.join(lines, "\n");
+}
+
+function buildSlSection(
+  rungs: ConditionalRung[],
+  positionLots: bigint,
+  entry: number,
+  side: "long" | "short",
+  baseLotsDecimals: number,
+): { text: FormattedString; status: "none" | "partial" | "full" } {
+  if (rungs.length === 0) {
+    return {
+      text: fmt`🛑 ${FormattedString.b("Stop Loss")}  ·  ${FormattedString.i("⚠️ not set — unlimited downside")}`,
+      status: "none",
+    };
+  }
+  const totalLots = rungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
+  const totalPct = rungPctOfPosition(totalLots, positionLots);
+  const fully = totalPct >= 99.5;
+  const status: "none" | "partial" | "full" = fully ? "full" : "partial";
+
+  const headerLabel = fully
+    ? `${totalPct.toFixed(0)}% protected`
+    : `⚠️ only ${totalPct.toFixed(0)}% protected`;
+  const header = fmt`🛑 ${FormattedString.b("Stop Loss")}  ·  ${FormattedString.b(headerLabel)}`;
+
+  const lines: FormattedString[] = [header];
+  let totalLoss = 0;
+  for (let i = 0; i < rungs.length; i++) {
+    const r = rungs[i];
+    const sizePct = rungPctOfPosition(r.maxSizeLots, positionLots);
+    const estPnl = estimateRungPnl(r.triggerPrice, entry, side, r.maxSizeLots, baseLotsDecimals);
+    totalLoss += estPnl;
+    lines.push(
+      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${sizePct.toFixed(0)}%  →  est ${FormattedString.b(signedUsd(estPnl))}`,
+    );
+  }
+  if (!fully) {
+    const gapPct = 100 - totalPct;
+    lines.push(
+      fmt`  ${FormattedString.i(`‼️ ${gapPct.toFixed(0)}% of position has NO stop — keeps bleeding past the trigger`)}`,
+    );
+  } else if (rungs.length > 1) {
+    lines.push(fmt`  ${FormattedString.i(`If all fill: ${signedUsd(totalLoss)}`)}`);
+  }
+  return { text: FormattedString.join(lines, "\n"), status };
+}
+
+function buildDetailText(
+  pos: PhoenixPosition,
+  unsettledFunding: number,
+  tpRungs: ConditionalRung[],
+  slRungs: ConditionalRung[],
+  positionLots: bigint,
+  baseLotsDecimals: number,
+): {
+  text: FormattedString;
+  tpStatus: "none" | "partial" | "full";
+  slStatus: "none" | "partial" | "full";
+} {
+  const sideEmoji = pos.side === "long" ? "🟢" : "🔴";
   const sideLabel = pos.side === "long" ? "LONG" : "SHORT";
-  const levLabel = pos.leverage ? ` · ${pos.leverage}x` : "";
+  const levLabel = pos.leverage ? ` ${pos.leverage}×` : "";
   const marginLabel = pos.marginMode === "cross" ? "Cross" : "Isolated";
-  const posValue = Number(pos.markPrice) * Number(pos.size);
-  const pnlStr = upnlPct != null ? `${signedUsd(upnl)}  (${pct(upnlPct)})` : signedUsd(upnl);
-  const liq = formatLiqValue(pos);
-  const liqLine = fmt`${FormattedString.b(liq.text)}${liq.warn ? " ⚠️" : ""}`;
 
-  const tpStr = pos.takeProfit ? fmtPrice(Number(pos.takeProfit)) : "—";
-  const slStr = pos.stopLoss ? fmtPrice(Number(pos.stopLoss)) : "—";
+  const size = Number(pos.size);
+  const entry = Number(pos.entryPrice);
+  const mark = Number(pos.markPrice);
+  const upnl = Number(pos.unrealizedPnl);
+  const liq = pos.liquidationPrice === "N/A" ? 0 : Number(pos.liquidationPrice);
 
-  const lines: FormattedString[] = [
-    fmt`${FormattedString.b(`${pos.symbol} · ${sideLabel}${levLabel}`)}  (${marginLabel})`,
-    fmt`━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    fmt`Unrealized PnL   ${FormattedString.b(pnlStr)} ${pnlEmoji(upnl)}`,
-    fmt``,
-    fmt`Position size   ${FormattedString.b(`${cryptoSize(Number(pos.size), pos.symbol)}  (${usd(posValue)})`)}`,
-    fmt`Entry price   ${FormattedString.b(fmtPrice(Number(pos.entryPrice)))}`,
-    fmt`Mark price   ${FormattedString.b(fmtPrice(Number(pos.markPrice)))}`,
-    fmt`Liq. price   ${liqLine}`,
-    fmt``,
-    fmt`Take profit   ${FormattedString.b(tpStr)}`,
-    fmt`Stop loss     ${FormattedString.b(slStr)}`,
-  ];
+  const notional = mark * size;
+  const lev = pos.leverage && pos.leverage > 0 ? pos.leverage : 1;
+  const margin = notional / lev;
 
-  if (Math.abs(unsettledFunding) > 0.001) {
-    lines.push(fmt`Funding   ${FormattedString.b(signedUsd(unsettledFunding))}`);
+  const markPctFromEntry = entry > 0 ? ((mark - entry) / entry) * 100 : 0;
+  const upnlPct = calcPnlPct(pos);
+  const upnlPctStr = upnlPct !== null ? `  (${pct(upnlPct)} on margin)` : "";
+
+  // TP / SL sections
+  const tpSection = buildTpSection(
+    tpRungs,
+    positionLots,
+    entry,
+    pos.side,
+    baseLotsDecimals,
+    margin,
+  );
+  const slSection = buildSlSection(slRungs, positionLots, entry, pos.side, baseLotsDecimals);
+
+  // Liquidation block
+  let liqBlock: FormattedString;
+  let tpStatus: "none" | "partial" | "full" = "none";
+  if (tpRungs.length > 0) {
+    const totalLots = tpRungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
+    const totalPct = rungPctOfPosition(totalLots, positionLots);
+    tpStatus = totalPct >= 99.5 ? "full" : "partial";
   }
 
-  return FormattedString.join(lines, "\n");
+  if (liq > 0 && mark > 0) {
+    const distRaw = pos.side === "long" ? ((mark - liq) / mark) * 100 : ((liq - mark) / mark) * 100;
+    const dist = Math.max(0, distRaw);
+    const dot = liqDistanceDot(dist);
+    liqBlock = fmt`🚨 ${FormattedString.b("Liquidation")}
+Price        ${FormattedString.b(fmtPrice(liq))}
+Distance     ${FormattedString.b(`${dist.toFixed(1)}% away`)} ${dot}
+If hit       ${FormattedString.b(signedUsd(-margin))} margin ${FormattedString.i("(full wipe)")}`;
+  } else {
+    liqBlock = fmt`🚨 ${FormattedString.b("Liquidation")}    ${FormattedString.i("Safe ✅")}`;
+  }
+
+  // P&L block
+  const fundingLine =
+    Math.abs(unsettledFunding) > 0.001
+      ? fmt`\nFunding      ${FormattedString.b(signedUsd(unsettledFunding))}  ${FormattedString.i(unsettledFunding < 0 ? "(you owe)" : "(owed to you)")}`
+      : fmt``;
+
+  const pnlBlock = fmt`📈 ${FormattedString.b("P&L")}
+Mark         ${FormattedString.b(fmtPrice(mark))}  ${FormattedString.i(`(${pct(markPctFromEntry)} from entry)`)}
+Unrealized   ${FormattedString.b(signedUsd(upnl))} ${pnlEmoji(upnl)}${FormattedString.i(upnlPctStr)}${fundingLine}`;
+
+  // Top block
+  const topBlock = fmt`${sideEmoji} ${FormattedString.b(`${pos.symbol} ${sideLabel}${levLabel}`)} · ${FormattedString.i(marginLabel)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 Margin       ${FormattedString.b(usd(margin))}
+📊 Exposure     ${FormattedString.b(`${cryptoSize(size, pos.symbol)}`)}  ${FormattedString.i(`(${usd(notional)} notional)`)}
+Entry          ${FormattedString.b(fmtPrice(entry))}`;
+
+  const text = FormattedString.join(
+    [topBlock, fmt``, pnlBlock, fmt``, liqBlock, fmt``, tpSection, fmt``, slSection.text],
+    "\n",
+  );
+
+  return { text, tpStatus, slStatus: slSection.status };
 }
 
 export async function sendPositionDetail(
@@ -185,7 +345,11 @@ export async function sendPositionDetail(
   edit = false,
 ): Promise<void> {
   if (!ctx.user) return;
-  const state = await getTraderState(ctx.user.walletAddress);
+  const [state, rungs, market] = await Promise.all([
+    getTraderState(ctx.user.walletAddress),
+    getPositionConditionals(ctx.user.walletAddress, symbol, side).catch(() => []),
+    getMarket(symbol).catch(() => null),
+  ]);
   const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
 
   if (!pos) {
@@ -198,17 +362,30 @@ export async function sendPositionDetail(
     return;
   }
 
+  const tpRungs = rungs.filter((r) => r.leg === "tp");
+  const slRungs = rungs.filter((r) => r.leg === "sl");
+
+  const baseLotsDecimals = market ? market.baseLotsDecimals : 4;
+  const positionLots = market ? BigInt(Math.round(Number(pos.size) * 10 ** baseLotsDecimals)) : 0n;
+
   const unsettledFunding = Number(state.unsettledFunding);
-  const msg = buildDetailText(pos, unsettledFunding);
-  const kb = positionKeyboard(symbol, side);
+  const built = buildDetailText(
+    pos,
+    unsettledFunding,
+    tpRungs,
+    slRungs,
+    positionLots,
+    baseLotsDecimals,
+  );
+  const kb = positionKeyboard(symbol, side, built.tpStatus, built.slStatus);
 
   if (edit && ctx.callbackQuery) {
-    await ctx.editMessageText(msg.text, {
-      entities: msg.entities,
+    await ctx.editMessageText(built.text.text, {
+      entities: built.text.entities,
       reply_markup: kb,
     });
   } else {
-    await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+    await ctx.reply(built.text.text, { entities: built.text.entities, reply_markup: kb });
   }
 }
 
@@ -388,20 +565,8 @@ export function registerPositions(bot: Bot<BotContext>) {
     })().catch((err) => logger.error({ err }, "add margin async error"));
   });
 
-  // SL/TP edit callbacks
-  bot.callbackQuery(/^editsl:([A-Z0-9]+):(long|short)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.user) return;
-    const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    await sendSlPrompt(ctx, symbol, side);
-  });
-
-  bot.callbackQuery(/^edittp:([A-Z0-9]+):(long|short)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.user) return;
-    const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    await sendTpPrompt(ctx, symbol, side);
-  });
+  // Legacy editsl:/edittp: callbacks are forwarded to the new manager by
+  // `registerTpSl` in tpsl.ts. No registration here.
 }
 
 async function executeClose(

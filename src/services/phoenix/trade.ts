@@ -1,13 +1,10 @@
 import {
   type Authority,
-  Direction,
   type ImmediateOrCancelOrderPacket,
   OrderFlags,
   SelfTradeBehavior,
   Side,
-  StopLossOrderKind,
   baseLots,
-  priceUsdToTicks,
   quoteLots,
   symbol as riseSymbol,
 } from "@ellipsis-labs/rise";
@@ -42,7 +39,6 @@ import { config } from "../../config/index.js";
 import { getKitSigner, getPrivyKitSigner } from "../wallet.js";
 import { getTradingClient } from "./client.js";
 import { fractionToCloseLots } from "./lots.js";
-import { getMarket } from "./market.js";
 import { getTraderStateSnapshot } from "./position.js";
 
 export interface MarketOrderParams {
@@ -59,24 +55,6 @@ export interface LimitOrderParams {
   baseUnits: string;
   priceUsd: string;
   walletAddress: string;
-}
-
-export interface TpSlLevel {
-  price: number;
-  fraction?: number;
-  mode?: "market" | "limit";
-}
-
-export interface TpSlParams {
-  symbol: string;
-  walletAddress: string;
-  positionSide: "long" | "short";
-  tpPrice?: number;
-  slPrice?: number;
-  slMode?: "market" | "limit";
-  tpMode?: "market" | "limit";
-  tpLevels?: TpSlLevel[];
-  slLevels?: TpSlLevel[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -313,18 +291,6 @@ function toMarketSymbol(s: string) {
   return riseSymbol(s.toUpperCase().replace(/-PERP$/i, ""));
 }
 
-function priceToTicks(
-  priceUsd: number,
-  market: { tickSize: number; baseLotsDecimals: number },
-): bigint {
-  return BigInt(
-    priceUsdToTicks(priceUsd, {
-      tickSizeInQuoteLotsPerBaseLot: market.tickSize,
-      baseLotsDecimals: market.baseLotsDecimals,
-    }),
-  );
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────────────────
@@ -374,69 +340,43 @@ export async function placeLimitOrder(params: LimitOrderParams, fee?: FeeConfig)
   return dispatchInstruction(ix, params.walletAddress, fee);
 }
 
-export async function setTpSl(params: TpSlParams, fee?: FeeConfig): Promise<void> {
-  const client = getTradingClient();
-  await client.exchange.ready();
+export async function setPositionTpSl(
+  params: import("./conditional.js").SetPositionTpSlParams,
+  fee?: FeeConfig,
+): Promise<string> {
+  const { buildSetPositionTpSlIxs, markPdaInitialized } = await import("./conditional.js");
+  const { ixs, pdaInitNeeded } = await buildSetPositionTpSlIxs(params);
+  const sig = await dispatchInstructions(ixs as AnyInstruction[], params.walletAddress, fee);
+  if (pdaInitNeeded) markPdaInitialized(params.walletAddress);
+  return sig;
+}
 
-  const marketSymbol = toMarketSymbol(params.symbol);
-  const market = (await getMarket(params.symbol)) as {
-    tickSize: number;
-    baseLotsDecimals: number;
-  };
-  const closeSide = params.positionSide === "long" ? Side.Ask : Side.Bid;
+export async function cancelPositionConditional(
+  walletAddress: string,
+  symbol: string,
+  positionSide: "long" | "short",
+  leg: "tp" | "sl",
+  conditionalOrderIndex: number,
+  fee?: FeeConfig,
+): Promise<string> {
+  const { buildCancelIxs } = await import("./conditional.js");
+  const ixs = await buildCancelIxs(walletAddress, symbol, positionSide, {
+    leg,
+    index: conditionalOrderIndex,
+  });
+  return dispatchInstructions(ixs as AnyInstruction[], walletAddress, fee);
+}
 
-  const tpLevels: TpSlLevel[] = params.tpLevels?.length
-    ? params.tpLevels
-    : params.tpPrice !== undefined
-      ? [{ price: params.tpPrice, mode: params.tpMode ?? "limit" }]
-      : [];
-
-  const slLevels: TpSlLevel[] = params.slLevels?.length
-    ? params.slLevels
-    : params.slPrice !== undefined
-      ? [{ price: params.slPrice, mode: params.slMode ?? "market" }]
-      : [];
-
-  const ixs: AnyInstruction[] = [];
-
-  // TODO(ladder-fractions): `level.fraction` is ignored — every rung becomes a
-  // full-position close. `buildPlaceStopLoss` doesn't accept size; switch to
-  // `buildPlacePositionConditionalOrder` (sizeBaseLots/sizePercent) to fix.
-  for (const level of tpLevels) {
-    const triggerTicks = priceToTicks(level.price, market);
-    ixs.push(
-      await client.ixs.buildPlaceStopLoss({
-        authority: params.walletAddress as Authority,
-        symbol: marketSymbol,
-        tradeSide: closeSide,
-        executionDirection:
-          params.positionSide === "long" ? Direction.GreaterThan : Direction.LessThan,
-        orderKind:
-          (level.mode ?? "limit") === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
-        triggerPrice: triggerTicks,
-      }),
-    );
-  }
-
-  for (const level of slLevels) {
-    const triggerTicks = priceToTicks(level.price, market);
-    ixs.push(
-      await client.ixs.buildPlaceStopLoss({
-        authority: params.walletAddress as Authority,
-        symbol: marketSymbol,
-        tradeSide: closeSide,
-        executionDirection:
-          params.positionSide === "long" ? Direction.LessThan : Direction.GreaterThan,
-        orderKind:
-          (level.mode ?? "market") === "limit" ? StopLossOrderKind.Limit : StopLossOrderKind.IOC,
-        triggerPrice: triggerTicks,
-      }),
-    );
-  }
-
-  for (const ix of ixs) {
-    await dispatchInstruction(ix, params.walletAddress, fee);
-  }
+export async function cancelAllPositionConditionals(
+  walletAddress: string,
+  symbol: string,
+  positionSide: "long" | "short",
+  filter: "tp" | "sl" | "both",
+  fee?: FeeConfig,
+): Promise<string> {
+  const { buildCancelIxs } = await import("./conditional.js");
+  const ixs = await buildCancelIxs(walletAddress, symbol, positionSide, filter);
+  return dispatchInstructions(ixs as AnyInstruction[], walletAddress, fee);
 }
 
 export async function closePosition(
@@ -489,30 +429,6 @@ export async function closePosition(
     authority: walletAddress as Authority,
     symbol: marketSymbol,
     orderPacket,
-  });
-
-  return dispatchInstruction(ix, walletAddress, fee);
-}
-
-export async function cancelStopLoss(
-  symbol: string,
-  walletAddress: string,
-  direction: "long_sl" | "long_tp" | "short_sl" | "short_tp",
-  fee?: FeeConfig,
-): Promise<string> {
-  const client = getTradingClient();
-  await client.exchange.ready();
-
-  const marketSymbol = toMarketSymbol(symbol);
-  const executionDirection =
-    direction === "long_sl" || direction === "short_tp"
-      ? Direction.LessThan
-      : Direction.GreaterThan;
-
-  const ix = await client.ixs.buildCancelStopLoss({
-    authority: walletAddress as Authority,
-    symbol: marketSymbol,
-    executionDirection,
   });
 
   return dispatchInstruction(ix, walletAddress, fee);

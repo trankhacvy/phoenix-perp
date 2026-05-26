@@ -43,8 +43,6 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
       const liqPrice = liqPriceRaw > 0 ? String(liqPriceRaw) : "N/A";
       const marginApprox = Number(p.initialMargin.ui);
       const leverageApprox = marginApprox > 0 ? Math.round(posValue / marginApprox) : undefined;
-      const tpRaw = p.takeProfitPrice?.ui;
-      const slRaw = p.stopLossPrice?.ui;
       return {
         symbol: String(p.symbol),
         side: vq <= 0 ? "long" : "short",
@@ -56,8 +54,6 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
         marginMode: trader.traderSubaccountIndex === 0 ? ("cross" as const) : ("isolated" as const),
         subaccountIndex: trader.traderSubaccountIndex,
         leverage: leverageApprox,
-        takeProfit: tpRaw && Number(tpRaw) > 0 ? String(tpRaw) : undefined,
-        stopLoss: slRaw && Number(slRaw) > 0 ? String(slRaw) : undefined,
       };
     }),
   );
