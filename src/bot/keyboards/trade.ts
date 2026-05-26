@@ -4,13 +4,13 @@ import { usd } from "../lib/fmt.js";
 export function sizePickerKeyboard(
   side: "long" | "short",
   symbol: string,
-  availableMargin: number,
+  balance: number,
 ): InlineKeyboard {
   const pcts = [10, 25, 50, 100];
   const kb = new InlineKeyboard();
   for (let i = 0; i < pcts.length; i++) {
     const p = pcts[i];
-    const amt = Number.parseFloat(((availableMargin * p) / 100).toFixed(2));
+    const amt = Number.parseFloat(((balance * p) / 100).toFixed(2));
     kb.text(`${usd(amt)}  (${p}%)`, `trade_size:${side}:${symbol}:${amt}`);
     if (i % 2 === 1) kb.row();
   }

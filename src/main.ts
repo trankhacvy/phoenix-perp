@@ -10,6 +10,7 @@ import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { initTestSigner } from "./services/wallet.js";
 import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
+import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
@@ -40,6 +41,7 @@ async function main() {
   startActionLogRetention();
 
   startAlertWorker();
+  startMarketRefresher();
 
   await startWsManager();
 
@@ -105,6 +107,7 @@ async function shutdown() {
   await bot.stop();
   if (server) await server.close();
   stopWsManager();
+  stopMarketRefresher();
   await Promise.all([stopAlertWorker(), stopLeaderboardScanner()]);
   process.exit(0);
 }

@@ -94,11 +94,11 @@ const SDK_PATTERNS: SdkPattern[] = [
   },
   {
     match:
-      /insufficient (sol|lamports) for (gas|fees?)|insufficient lamports|out of (sol|lamports)/i,
+      /insufficient (sol|lamports) for (gas|fees?)|insufficient lamports|out of (sol|lamports)|InsufficientFundsForRent|insufficient funds for rent/i,
     category: "tx_failed",
     code: "INSUFFICIENT_SOL",
-    userMessage: "Not enough SOL for gas.",
-    hint: "Top up your wallet with a small amount of SOL.",
+    userMessage: "Not enough SOL for transaction fees.",
+    hint: "Send at least 0.01 SOL to your bot wallet to cover gas.",
     retryable: false,
   },
   {

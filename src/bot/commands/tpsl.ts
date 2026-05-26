@@ -1403,6 +1403,15 @@ async function sendSplitConfirm(
   const half = data.positionLots / 2n;
   const remainder = data.positionLots - half;
 
+  const liqStr = data.pos.liquidationPrice;
+  const liq = liqStr === "N/A" || liqStr === "0" || !liqStr ? null : Number(liqStr);
+  const liqCrossed =
+    liq !== null &&
+    ((side === "long" && secondPrice <= liq) || (side === "short" && secondPrice >= liq));
+  const liqWarnLine = liqCrossed
+    ? fmt`\n⚠️ ${FormattedString.i(`Level ② ${fmtPrice(secondPrice)} is past your liq (${fmtPrice(liq)}) — edit the price after splitting.`)}`
+    : fmt``;
+
   const kb = new InlineKeyboard()
     .text(
       "🪜 Split 50/50",
@@ -1419,7 +1428,7 @@ Will replace the single 100% rung with two:
   ① ${FormattedString.b(fmtPrice(existing.triggerPrice))} — ${tokens1.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol} (50%)
   ② ${FormattedString.b(fmtPrice(secondPrice))} — ${tokens2.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol} (50%)
 
-${FormattedString.i("You can edit either level's price/size after.")}`;
+${FormattedString.i("You can edit either level's price/size after.")}${liqWarnLine}`;
 
   if (ctx.callbackQuery) {
     await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
@@ -1705,6 +1714,7 @@ export function registerTpSl(bot: Bot<BotContext>) {
     async (ctx) => {
       await ctx.answerCallbackQuery("Switching…");
       if (!ctx.user) return;
+      if (!(await requireActivation(ctx))) return;
       const [leg, sym, side, idxStr] = ctx.match.slice(1) as [
         Leg,
         string,
@@ -1820,12 +1830,12 @@ export function registerTpSl(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [sym, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    await sendTpSlManager(ctx, "sl", shortSym(sym), side, false);
+    await sendTpSlManager(ctx, "sl", shortSym(sym), side, true);
   });
   bot.callbackQuery(/^edittp:([A-Z0-9]+):(long|short)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const [sym, side] = ctx.match.slice(1) as [string, "long" | "short"];
-    await sendTpSlManager(ctx, "tp", shortSym(sym), side, false);
+    await sendTpSlManager(ctx, "tp", shortSym(sym), side, true);
   });
 }

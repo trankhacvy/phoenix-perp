@@ -106,6 +106,31 @@ function getRpc() {
   return _rpc;
 }
 
+const _solCache = new Map<string, { balance: bigint; fetchedAt: number }>();
+const SOL_CACHE_TTL_MS = 30_000;
+const MIN_SOL_LAMPORTS = 5_000_000n; // 0.005 SOL — covers eco + normal fees with buffer
+
+async function getSolBalanceCached(walletAddress: string): Promise<bigint> {
+  const now = Date.now();
+  const cached = _solCache.get(walletAddress);
+  if (cached && now - cached.fetchedAt < SOL_CACHE_TTL_MS) return cached.balance;
+  const result = await getRpc()
+    .getBalance(walletAddress as Address, { commitment: "confirmed" })
+    .send();
+  const balance = BigInt(result.value);
+  _solCache.set(walletAddress, { balance, fetchedAt: now });
+  return balance;
+}
+
+async function checkSolPreflight(walletAddress: string): Promise<void> {
+  const balance = await getSolBalanceCached(walletAddress);
+  if (balance < MIN_SOL_LAMPORTS) {
+    throw new Error(
+      `Insufficient SOL for fees: wallet has ${balance} lamports (need at least ${MIN_SOL_LAMPORTS})`,
+    );
+  }
+}
+
 type LatestBlockhashValue = Awaited<
   ReturnType<ReturnType<ReturnType<typeof createSolanaRpc>["getLatestBlockhash"]>["send"]>
 >["value"];
@@ -174,7 +199,7 @@ async function pollConfirmation(
     const { value } = await rpc.getSignatureStatuses([sig]).send();
     const status = value[0];
     if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") {
-      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+      if (status.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`);
       return;
     }
     const slotRes = await rpc.getSlot({ commitment: "confirmed" }).send();
@@ -190,6 +215,8 @@ async function sendInstruction(
   signer: TransactionPartialSigner,
   fee: FeeConfig = DEFAULT_FEE,
 ): Promise<string> {
+  const walletAddress = signer.address as string;
+  await checkSolPreflight(walletAddress);
   const latestBlockhash = await getBlockhash();
   const tipAccount = JITO_TIP_ACCOUNTS[
     Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)
@@ -221,8 +248,13 @@ async function sendInstruction(
 
   const signedTx = await signTransactionMessageWithSigners(message);
   const txBytes = getTransactionEncoder().encode(signedTx);
-  const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
-  _cachedBlockhash = null;
+  let sig: string;
+  try {
+    sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
+  } finally {
+    _cachedBlockhash = null;
+    _solCache.delete(walletAddress);
+  }
   await pollConfirmation(sig, latestBlockhash);
   return sig;
 }
@@ -249,6 +281,7 @@ async function dispatchInstructions(
   if (ixs.length === 0) throw new Error("No instructions to dispatch");
   if (ixs.length === 1) return dispatchInstruction(ixs[0], walletAddress, fee);
 
+  await checkSolPreflight(walletAddress);
   const signer = await getSigner(walletAddress);
   const latestBlockhash = await getBlockhash();
   const tipAccount = JITO_TIP_ACCOUNTS[
@@ -279,8 +312,13 @@ async function dispatchInstructions(
 
   const signedTx = await signTransactionMessageWithSigners(message);
   const txBytes = getTransactionEncoder().encode(signedTx);
-  const sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
-  _cachedBlockhash = null;
+  let sig: string;
+  try {
+    sig = await sendViaHeliusSender(Buffer.from(txBytes).toString("base64"));
+  } finally {
+    _cachedBlockhash = null;
+    _solCache.delete(walletAddress);
+  }
   await pollConfirmation(sig, latestBlockhash);
   return sig;
 }

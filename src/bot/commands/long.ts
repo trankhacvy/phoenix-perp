@@ -6,7 +6,12 @@ import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { trackAction } from "../../services/action-log.js";
 import { marginToTokens } from "../../services/phoenix/lots.js";
-import { getMarketSnapshot, getMarkets, isIsolatedOnly } from "../../services/phoenix/market.js";
+import {
+  getMarketListItems,
+  getMarketSnapshot,
+  getMarkets,
+  isIsolatedOnly,
+} from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { type PreflightResult, preflightOpen } from "../../services/phoenix/preflight.js";
 import { getFeeConfig, placeMarketOrder, setPositionTpSl } from "../../services/phoenix/trade.js";
@@ -17,8 +22,9 @@ import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
 import {
+  funding1h,
+  fundingDot,
   price as fmtPrice,
-  fundingDailyUsd,
   num,
   parseAmount,
   parseLeverage,
@@ -111,7 +117,7 @@ export function registerLong(bot: Bot<BotContext>) {
     const symbol = ctx.match[1];
     const state = await getTraderState(ctx.user.walletAddress);
     const available = Number(state.effectiveCollateral);
-    const msg = fmt`Enter the amount you want to risk (USD):\n(Your balance: ${FormattedString.code(usd(available))})`;
+    const msg = fmt`Enter margin amount in USD:\n\nBalance: ${FormattedString.b(usd(available))}  ·  Min: $1.00`;
     await ctx.reply(msg.text, { entities: msg.entities });
     await setPending(ctx.from.id, `trade_size_input:long:${symbol}`);
   });
@@ -165,7 +171,7 @@ export function registerLong(bot: Bot<BotContext>) {
   });
 }
 
-const SYM_PICKER_PAGE_SIZE = 8;
+const SYM_PICKER_PAGE_SIZE = 10;
 
 export async function sendSymbolPicker(ctx: BotContext, side: "long" | "short"): Promise<void> {
   await sendSymbolPickerPage(ctx, side, 0, false);
@@ -184,29 +190,30 @@ export async function sendSymbolPickerPage(
     totalPages,
   } = paginate(allMarkets, page, SYM_PICKER_PAGE_SIZE);
 
-  const snaps = await Promise.allSettled(slice.map((m) => getMarketSnapshot(m.symbol)));
+  const listItems = await getMarketListItems(slice);
+  const botUsername = ctx.me.username || "bot";
 
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
-  const botUsername = ctx.me.username ?? "bot";
 
   const pageLabel =
-    totalPages > 1 ? fmt`  ·  ${FormattedString.i(`Page ${safePage + 1}/${totalPages}`)}` : fmt``;
+    totalPages > 1 ? fmt`  ·  ${FormattedString.i(`${safePage + 1}/${totalPages}`)}` : fmt``;
+  const header = fmt`${emoji} ${FormattedString.b(`${label} — pick a market`)}${pageLabel}\n`;
 
-  const header = fmt`${emoji} ${FormattedString.b(`${label} — pick a market`)}${pageLabel}`;
-
-  const rows = slice.map((m, i) => {
-    const snap = snaps[i].status === "fulfilled" ? snaps[i].value : null;
-    const maxLev = snap?.maxLeverage ?? m.leverageTiers[0]?.maxLeverage ?? 20;
-    const isoTag = isIsolatedOnly(m.symbol) ? " [ISO]" : "";
+  const rows = listItems.map((item, i) => {
     const globalIdx = safePage * SYM_PICKER_PAGE_SIZE + i + 1;
-    const rowLabel = `${globalIdx}. ${m.symbol}${isoTag} · ${maxLev}×`;
-    const deepLink = `https://t.me/${botUsername}?start=${side}_${m.symbol}_${safePage}`;
-    if (!snap) return fmt`${FormattedString.link(rowLabel, deepLink)}   —`;
-    return fmt`${FormattedString.link(rowLabel, deepLink)}   ${FormattedString.b(fmtPrice(snap.markPrice))}`;
+    const iso = item.isIsolatedOnly ? " [ISO]" : "";
+    const priceStr = item.markPrice > 0 ? fmtPrice(item.markPrice) : "—";
+    const dot = fundingDot(item.fundingRate);
+    const rate = funding1h(item.fundingRate);
+    const deepLink = `https://t.me/${botUsername}?start=${side}_${item.symbol}_${safePage}`;
+    const linkLabel = `${globalIdx}. ${item.symbol}${iso}`;
+    return fmt`${FormattedString.link(linkLabel, deepLink)}  ${FormattedString.b(priceStr)}
+  Leverage: ${FormattedString.b(String(item.maxLeverage))}  ·  Funding: ${rate} ${dot}`;
   });
 
-  const msg = FormattedString.join([header, fmt``, ...rows], "\n");
+  const footer = fmt`\n${FormattedString.i("Tap a market name to trade.")}`;
+  const msg = FormattedString.join([header, ...rows, footer], "\n");
 
   const kb = new InlineKeyboard();
   addPaginationRow(kb, `trade_sym:${side}`, safePage, totalPages);
@@ -257,11 +264,9 @@ export async function sendSizeStep(
 
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
-  const totalFeeRate = snapshot.takerFee + config.BUILDER_FEE_BPS / 10_000;
-  const maxSafeMargin = available / (1 + snapshot.maxLeverage * totalFeeRate);
-  const kb = sizePickerKeyboard(side, symbol, maxSafeMargin);
+  const kb = sizePickerKeyboard(side, symbol, available);
 
-  const msg = fmt`${emoji} ${FormattedString.b(`${label} ${symbol}`)}  ·  ${fmtPrice(snapshot.markPrice)}\n\nYour balance: ${FormattedString.b(usd(available))}\n\nHow much do you want to risk?`;
+  const msg = fmt`${emoji} ${FormattedString.b(`${label} ${symbol}`)}  ·  ${fmtPrice(snapshot.markPrice)}\n\nYour balance: ${FormattedString.b(usd(available))}\n\nHow much margin to put in?`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
@@ -303,15 +308,9 @@ export async function sendLevStep(
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
 
-  let fundingNote = fmt``;
-  const isLongPaying = snapshot.fundingRate > 0;
-  const youPay = side === "long" ? isLongPaying : !isLongPaying;
-  const dailyAtDefault = Math.abs(snapshot.fundingRate) * sizeUsdc * settings.defaultLeverage * 24;
-  if (dailyAtDefault > 0.05) {
-    const verb = youPay ? "costs you" : "earns you";
-    const dailyStr = fundingDailyUsd(snapshot.fundingRate, sizeUsdc * settings.defaultLeverage);
-    fundingNote = fmt`\n💸 Funding ${verb} ≈${FormattedString.b(dailyStr)} at ${settings.defaultLeverage}× (varies by leverage)\n`;
-  }
+  const instantNote = !settings.confirmTrades
+    ? fmt`\n⚡ ${FormattedString.b("Instant mode on")} — selecting leverage fires immediately.`
+    : fmt``;
 
   const kb = leveragePickerKeyboard(
     side,
@@ -321,7 +320,7 @@ export async function sendLevStep(
     settings.defaultLeverage,
   );
 
-  const msg = fmt`${emoji} ${FormattedString.b(`${label} ${symbol}`)}  ·  risking ${FormattedString.b(usd(sizeUsdc))}\n${fundingNote}\nPick your multiplier — buttons show what you'd control:`;
+  const msg = fmt`${emoji} ${FormattedString.b(`${label} ${symbol}`)}  ·  margin ${FormattedString.b(usd(sizeUsdc))}${instantNote}\n\n${FormattedString.i("★ = your default  ·  change in /settings")}\nEach button shows your total exposure:`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
@@ -354,7 +353,9 @@ export async function sendTradeConfirm(
   const feePct = ((feeUsdc / notional) * 100).toFixed(3);
 
   const liqDist = liqPrice > 0 ? Math.abs((liqPrice - entry) / entry) * 100 : null;
-  const liqDistStr = liqDist !== null ? ` (${liqDist.toFixed(1)}% away)` : "";
+  const liqArrow = side === "long" ? "↓" : "↑";
+  const liqWarn = liqDist !== null && liqDist < 10 ? " ⚠️" : "";
+  const liqDistStr = liqDist !== null ? ` ${liqArrow} ${liqDist.toFixed(1)}% away${liqWarn}` : "";
 
   const isLongPaying = snapshot.fundingRate > 0;
   const youPay = side === "long" ? isLongPaying : !isLongPaying;
@@ -370,7 +371,8 @@ export async function sendTradeConfirm(
 
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
-  const anchorStr = entry.toPrecision(12);
+  // toFixed never produces scientific notation; toPrecision does for prices < 1e-7
+  const anchorStr = entry.toFixed(12).replace(/\.?0+$/, "");
 
   const kb = new InlineKeyboard()
     .text(
@@ -378,9 +380,14 @@ export async function sendTradeConfirm(
       `confirm:${side}:${symbol}:${effectiveLeverage}:${sizeUsdc}:${anchorStr}`,
     )
     .row()
+    .text("← Change size", `trade:${side}:${symbol}`)
+    .text("← Change leverage", `trade_size:${side}:${symbol}:${sizeUsdc}`)
+    .row()
+    .text("🔄 Refresh price", `trade_refresh:${side}:${symbol}:${effectiveLeverage}:${sizeUsdc}`)
+    .row()
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n\nYou risk:       ${FormattedString.b(usd(sizeUsdc))}\nYou control:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:     ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:            ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nYou pay:        ${FormattedString.b(usd(totalCost))}${fundingLine}\n\nLiq price:      ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}\n\n${FormattedString.i("(Quote based on current price)")}`;
+  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n\nMargin:      ${FormattedString.b(usd(sizeUsdc))}\nExposure:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:  ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:         ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nTotal cost:  ${FormattedString.b(usd(totalCost))}${fundingLine}\n\nLiq price:   ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}\n\n${FormattedString.i("(Quote based on current price)")}`;
 
   const opts = {
     entities: msg.entities,
@@ -448,9 +455,9 @@ export async function executeTrade(
 
   ctx.actionLog = { skip: true };
   if (ctx.callbackQuery) {
-    await ctx.editMessageText("⏳ Submitting order to Solana…");
+    await ctx.editMessageText("⏳ Order on-chain — usually confirms in 2–5s…");
   } else {
-    await ctx.reply("⏳ Submitting order to Solana…");
+    await ctx.reply("⏳ Order on-chain — usually confirms in 2–5s…");
   }
 
   const user = ctx.user;
@@ -493,6 +500,8 @@ export async function executeTrade(
 
       await subscribeUser(wallet, telegramId);
 
+      let autoTpSet = false;
+      let autoSlSet = false;
       let autoTpSlNote = fmt``;
       if (settings.autoTpPct || settings.autoSlPct) {
         const entryPrice = pf.snapshot.markPrice;
@@ -507,6 +516,8 @@ export async function executeTrade(
             : entryPrice * (1 + settings.autoSlPct / 100)
           : undefined;
         try {
+          // Give the indexer time to reflect the new position before placing TP/SL
+          await new Promise((r) => setTimeout(r, 2_000));
           const tp = tpPrice
             ? [
                 {
@@ -528,6 +539,8 @@ export async function executeTrade(
               ]
             : [];
           await setPositionTpSl({ symbol, walletAddress: wallet, positionSide: side, tp, sl }, fee);
+          autoTpSet = !!tpPrice;
+          autoSlSet = !!slPrice;
           const parts: string[] = [];
           if (tpPrice) parts.push(`TP ${fmtPrice(tpPrice)}`);
           if (slPrice) parts.push(`SL ${fmtPrice(slPrice)}`);
@@ -540,9 +553,11 @@ export async function executeTrade(
 
       const tokenSize = pf.notional / pf.snapshot.markPrice;
       const sideLabel = side === "long" ? "Long" : "Short";
+      const tpLabel = autoTpSet ? "✏️ Edit TP" : "🎯 Set TP";
+      const slLabel = autoSlSet ? "✏️ Edit SL" : "🛑 Set SL";
       const kb = new InlineKeyboard()
-        .text("🛑 Set SL", `tpsl:open:sl:${symbol}:${side}`)
-        .text("🎯 Set TP", `tpsl:open:tp:${symbol}:${side}`)
+        .text(tpLabel, `tpsl:open:tp:${symbol}:${side}`)
+        .text(slLabel, `tpsl:open:sl:${symbol}:${side}`)
         .row()
         .text("📊 View position", "nav:positions");
 
@@ -561,7 +576,7 @@ export async function executeTrade(
       const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
       const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
       const kb = new InlineKeyboard()
-        .text("Try again", `trade:${side}:${symbol}`)
+        .text("🔄 Retry", `trade_refresh:${side}:${symbol}:${lev}:${sizeUsdc}`)
         .text("← Back", "nav:positions");
       try {
         if (chatId && msgId) {

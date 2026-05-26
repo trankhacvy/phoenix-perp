@@ -1,4 +1,5 @@
 import type { ExchangeConfig, ExchangeMarketConfig } from "@ellipsis-labs/rise";
+import { logger } from "../../lib/logger.js";
 import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
 
@@ -116,33 +117,16 @@ async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
 export async function getMarketListItems(
   markets: ExchangeMarketConfig[],
 ): Promise<MarketListItem[]> {
-  const results = await Promise.allSettled(
-    markets.map((m) =>
-      withRetry(async () => {
-        const [orderbook, fundingHistory] = await Promise.all([
-          getOrderbook(m.symbol),
-          getPhoenixClient()
-            .api.funding()
-            .getFundingRateHistory(m.symbol.toUpperCase(), { limit: 1 })
-            .catch(() => null),
-        ]);
-        const fundingRate = fundingHistory?.rates?.[0]
-          ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
-          : 0;
-        return {
-          symbol: m.symbol,
-          markPrice: orderbook.mid ?? 0,
-          fundingRate,
-          maxLeverage: m.leverageTiers.length > 0 ? m.leverageTiers[0].maxLeverage : 20,
-          isIsolatedOnly: isIsolatedOnly(m.symbol),
-        };
-      }),
-    ),
-  );
-
+  const results = await Promise.allSettled(markets.map((m) => getMarketSnapshot(m.symbol)));
   return results.map((r, i) =>
     r.status === "fulfilled"
-      ? r.value
+      ? {
+          symbol: r.value.symbol,
+          markPrice: r.value.markPrice,
+          fundingRate: r.value.fundingRate,
+          maxLeverage: r.value.maxLeverage,
+          isIsolatedOnly: r.value.isIsolatedOnly,
+        }
       : {
           symbol: markets[i].symbol,
           markPrice: 0,
@@ -167,4 +151,34 @@ export async function getMarketStatsHistory(symbol: string, limit = 1) {
     .api.markets()
     .getMarketStatsHistory(symbol.toUpperCase(), { limit })
     .catch(() => null);
+}
+
+// ── Background snapshot refresher ────────────────────────────────────────────
+
+const REFRESH_INTERVAL_MS = 25_000;
+let _refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+async function refreshAllSnapshots(): Promise<void> {
+  const markets = await getMarkets().catch(() => null);
+  if (!markets) return;
+  await Promise.allSettled(markets.map((m) => getMarketSnapshot(m.symbol, { skipCache: true })));
+}
+
+export function startMarketRefresher(): void {
+  stopMarketRefresher();
+  refreshAllSnapshots().catch((err) =>
+    logger.warn({ err }, "market snapshot initial warm-up failed"),
+  );
+  _refreshTimer = setInterval(() => {
+    refreshAllSnapshots().catch((err) =>
+      logger.warn({ err }, "market snapshot background refresh failed"),
+    );
+  }, REFRESH_INTERVAL_MS);
+}
+
+export function stopMarketRefresher(): void {
+  if (_refreshTimer) {
+    clearInterval(_refreshTimer);
+    _refreshTimer = null;
+  }
 }

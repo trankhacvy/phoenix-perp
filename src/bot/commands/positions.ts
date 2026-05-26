@@ -181,6 +181,9 @@ function buildTpSection(
   if (rungs.length === 0) {
     return fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${FormattedString.i("not set")}`;
   }
+  if (positionLots <= 0n) {
+    return fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${rungs.length} level${rungs.length > 1 ? "s" : ""} set`;
+  }
   const totalLots = rungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
   const totalPct = rungPctOfPosition(totalLots, positionLots);
   const header = fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${totalPct.toFixed(0)}% planned`;
@@ -215,6 +218,12 @@ function buildSlSection(
     return {
       text: fmt`🛑 ${FormattedString.b("Stop Loss")}  ·  ${FormattedString.i("⚠️ not set — unlimited downside")}`,
       status: "none",
+    };
+  }
+  if (positionLots <= 0n) {
+    return {
+      text: fmt`🛑 ${FormattedString.b("Stop Loss")}  ·  ${rungs.length} level${rungs.length > 1 ? "s" : ""} set`,
+      status: "partial",
     };
   }
   const totalLots = rungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);

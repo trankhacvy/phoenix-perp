@@ -97,7 +97,7 @@ export function registerShort(bot: Bot<BotContext>) {
     const { getTraderState } = await import("../../services/phoenix/position.js");
     const state = await getTraderState(ctx.user.walletAddress);
     const available = Number(state.effectiveCollateral);
-    const msg = fmt`Enter the amount you want to risk (USD):\n(Your balance: ${FormattedString.code(usd(available))})`;
+    const msg = fmt`Enter margin amount in USD:\n\nBalance: ${FormattedString.b(usd(available))}  ·  Min: $1.00`;
     await ctx.reply(msg.text, { entities: msg.entities });
     await setPending(ctx.from.id, `trade_size_input:short:${symbol}`);
   });

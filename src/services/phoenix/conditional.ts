@@ -625,9 +625,17 @@ export async function buildSetPositionTpSlIxs(params: SetPositionTpSlParams): Pr
   const traderPos = traderState.positions.find(
     (p) => p.symbol === params.symbol && p.side === params.positionSide,
   );
+  if (!traderPos) {
+    throw new BotError({
+      category: "api",
+      code: "NO_POSITION",
+      userMessage: "Position data not yet synced. Please try again in a moment.",
+      retryable: true,
+    });
+  }
   const posForValidation: PositionForValidation = {
     markPrice: marketSnap.markPrice.toString(),
-    liquidationPrice: traderPos?.liquidationPrice ?? "0",
+    liquidationPrice: traderPos.liquidationPrice,
   };
 
   const tpResolved = resolveRungs(
