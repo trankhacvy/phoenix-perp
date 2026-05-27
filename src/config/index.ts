@@ -44,6 +44,10 @@ const schema = z.object({
   // Server
   PORT: z.coerce.number().default(3000),
   HOST: z.string().default("0.0.0.0"),
+
+  // Dev-only: base58-encoded 64-byte Solana keypair secret key.
+  // When set in non-production, bypasses Privy signing entirely.
+  DEV_SIGNER_SECRET_KEY: z.string().optional(),
 });
 
 const parsed = schema

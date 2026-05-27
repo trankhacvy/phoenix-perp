@@ -1,7 +1,9 @@
 import * as crypto from "node:crypto";
 import { type SolanaKitSigner, createSolanaKitSigner } from "@privy-io/node/solana-kit";
 import type { Address } from "@solana/kit";
+import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { Connection, PublicKey } from "@solana/web3.js";
+import bs58 from "bs58";
 import { eq } from "drizzle-orm";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
@@ -85,6 +87,13 @@ export async function resolvePrivyWalletId(walletAddress: string): Promise<strin
 }
 
 export async function getPrivyKitSigner(walletAddress: string): Promise<SolanaKitSigner> {
+  if (config.NODE_ENV !== "production" && config.DEV_SIGNER_SECRET_KEY) {
+    const secretBytes = bs58.decode(config.DEV_SIGNER_SECRET_KEY);
+    // createKeyPairSignerFromBytes returns a KeyPairSigner which satisfies
+    // the TransactionSigner interface that the Rise SDK expects.
+    return createKeyPairSignerFromBytes(secretBytes) as unknown as SolanaKitSigner;
+  }
+
   const walletId = await resolvePrivyWalletId(walletAddress);
 
   return createSolanaKitSigner(privy, {
