@@ -36,7 +36,7 @@ import {
   signTransactionMessageWithSigners,
 } from "@solana/signers";
 import { config } from "../../config/index.js";
-import { getKitSigner, getPrivyKitSigner } from "../wallet.js";
+import { getPrivyKitSigner } from "../wallet.js";
 import { getTradingClient } from "./client.js";
 import { fractionToCloseLots } from "./lots.js";
 import { getTraderStateSnapshot } from "./position.js";
@@ -263,7 +263,6 @@ async function sendInstruction(
 }
 
 async function getSigner(walletAddress: string): Promise<TransactionPartialSigner> {
-  if (config.TEST_KEYPAIR) return getKitSigner(walletAddress);
   return getPrivyKitSigner(walletAddress);
 }
 

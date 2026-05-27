@@ -1,10 +1,7 @@
 import * as crypto from "node:crypto";
-import type { AuthorizationContext } from "@privy-io/node";
 import { type SolanaKitSigner, createSolanaKitSigner } from "@privy-io/node/solana-kit";
 import type { Address } from "@solana/kit";
-import { type KeyPairSigner, createKeyPairSignerFromBytes } from "@solana/signers";
 import { Connection, PublicKey } from "@solana/web3.js";
-import bs58 from "bs58";
 import { eq } from "drizzle-orm";
 import { config } from "../config/index.js";
 import { db } from "../db/index.js";
@@ -38,27 +35,14 @@ export async function getSolBalance(walletAddress: string): Promise<number> {
   return lamports / 1e9;
 }
 
-let _testSigner: KeyPairSigner | null = null;
-
 /** Derives SPKI/DER/base64 public key from the Privy authorization private key. */
 function getAppPublicKey(): string {
   const raw = config.PRIVY_AUTHORIZATION_PRIVATE_KEY;
-  if (!raw) throw new Error("PRIVY_AUTHORIZATION_PRIVATE_KEY not set");
   const stripped = raw.replace("wallet-auth:", "").replace("wallet-api:", "");
   const pkcs8 = Buffer.from(stripped, "base64");
   const privKey = crypto.createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
   const pubKey = crypto.createPublicKey(privKey);
   return Buffer.from(pubKey.export({ type: "spki", format: "der" })).toString("base64");
-}
-
-/** Call once at startup to wire TEST_KEYPAIR into getKitSigner. Idempotent. */
-export async function initTestSigner(): Promise<string> {
-  if (_testSigner) return _testSigner.address as string;
-  const raw = config.TEST_KEYPAIR;
-  if (!raw) throw new Error("TEST_KEYPAIR env var not set");
-  const bytes = bs58.decode(raw);
-  _testSigner = await createKeyPairSignerFromBytes(bytes);
-  return _testSigner.address as string;
 }
 
 export async function createEmbeddedWallet(telegramUserId: string) {
@@ -79,18 +63,6 @@ export async function createEmbeddedWallet(telegramUserId: string) {
     privyWalletId: wallet.id,
     walletAddress: wallet.address,
   };
-}
-
-export function getKitSigner(walletAddress: string): KeyPairSigner {
-  if (!_testSigner) {
-    throw new Error("TEST_KEYPAIR not initialized — call initTestSigner() first.");
-  }
-  if (_testSigner.address !== walletAddress) {
-    throw new Error(
-      `Test signer mismatch: signer is ${_testSigner.address}, requested ${walletAddress}`,
-    );
-  }
-  return _testSigner;
 }
 
 /**
@@ -115,14 +87,11 @@ export async function resolvePrivyWalletId(walletAddress: string): Promise<strin
 export async function getPrivyKitSigner(walletAddress: string): Promise<SolanaKitSigner> {
   const walletId = await resolvePrivyWalletId(walletAddress);
 
-  const authorizationContext: AuthorizationContext | undefined =
-    config.PRIVY_AUTHORIZATION_PRIVATE_KEY
-      ? { authorization_private_keys: [config.PRIVY_AUTHORIZATION_PRIVATE_KEY] }
-      : undefined;
-
   return createSolanaKitSigner(privy, {
     walletId,
     address: walletAddress as Address,
-    authorizationContext,
+    authorizationContext: {
+      authorization_private_keys: [config.PRIVY_AUTHORIZATION_PRIVATE_KEY],
+    },
   });
 }

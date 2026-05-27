@@ -6,7 +6,6 @@ import { registerActivate } from "./activate.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
 import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
-import { registerExport } from "./export.js";
 import { registerFunding } from "./funding.js";
 import { registerGuardian } from "./guardian.js";
 import { registerHelp } from "./help.js";
@@ -47,7 +46,6 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerFunding(bot);
   registerPortfolio(bot);
   registerTpSl(bot);
-  registerExport(bot);
   registerClaim(bot);
   registerPriceAlert(bot);
   registerWalletMonitor(bot);

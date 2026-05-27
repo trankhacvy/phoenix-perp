@@ -12,7 +12,10 @@ const schema = z.object({
   PRIVY_APP_ID: z.string().min(1),
   PRIVY_APP_SECRET: z.string().min(1),
   // Bot-first: authorization key from Privy Dashboard → Wallets → Authorization Keys
-  PRIVY_AUTHORIZATION_PRIVATE_KEY: z.string().optional(),
+  PRIVY_AUTHORIZATION_PRIVATE_KEY: z.string().min(1, {
+    message:
+      "PRIVY_AUTHORIZATION_PRIVATE_KEY is required. Generate one in Privy Dashboard → Wallets → Authorization Keys.",
+  }),
   PRIVY_AUTHORIZATION_KEY_ID: z.string().optional(),
 
   // Phoenix / Flight
@@ -26,8 +29,6 @@ const schema = z.object({
     .default("false")
     .transform((v) => v === "true" || v === "1"),
 
-  // Dev / testing — must NOT be set in production
-  TEST_KEYPAIR: z.string().optional(),
   PHOENIX_API_URL: z.string().url().default("https://perp-api.phoenix.trade"),
   PHOENIX_WS_URL: z.string().default("wss://perp-api.phoenix.trade/v1/ws"),
 
@@ -46,15 +47,6 @@ const schema = z.object({
 });
 
 const parsed = schema
-  .refine((d) => !(d.NODE_ENV === "production" && d.TEST_KEYPAIR), {
-    message: "TEST_KEYPAIR must not be set in production",
-    path: ["TEST_KEYPAIR"],
-  })
-  .refine((d) => d.TEST_KEYPAIR || d.PRIVY_AUTHORIZATION_PRIVATE_KEY, {
-    message:
-      "PRIVY_AUTHORIZATION_PRIVATE_KEY is required when TEST_KEYPAIR is not set. Generate one in Privy Dashboard → Wallets → Authorization Keys.",
-    path: ["PRIVY_AUTHORIZATION_PRIVATE_KEY"],
-  })
   .refine((d) => !(d.NODE_ENV === "production" && d.WEBHOOK_URL && !d.WEBHOOK_SECRET), {
     message: "WEBHOOK_SECRET is required in production when WEBHOOK_URL is set",
     path: ["WEBHOOK_SECRET"],

@@ -9,7 +9,6 @@ import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
-import { initTestSigner } from "./services/wallet.js";
 import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
@@ -33,11 +32,6 @@ function startActionLogRetention() {
 }
 
 async function main() {
-  if (config.TEST_KEYPAIR) {
-    const addr = await initTestSigner();
-    logger.info({ walletAddress: addr }, "Test signer loaded from TEST_KEYPAIR");
-  }
-
   startActionLogRetention();
 
   startAlertWorker();
