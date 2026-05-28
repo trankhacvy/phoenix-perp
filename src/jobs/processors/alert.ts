@@ -24,7 +24,7 @@ export function startAlertWorker() {
 
       try {
         await bot.api.sendMessage(telegramId, message, {
-          parse_mode: "HTML",
+          ...(job.data.entities ? { entities: job.data.entities } : { parse_mode: "HTML" }),
           reply_markup: job.data.keyboard ? { inline_keyboard: job.data.keyboard } : undefined,
           link_preview_options: { is_disabled: true },
         });

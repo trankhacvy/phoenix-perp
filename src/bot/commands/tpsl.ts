@@ -9,10 +9,11 @@ import {
   type Leg,
   type RungInput,
   type RungSize,
+  type SetPositionTpSlParams,
+  getPositionConditionals,
   resolveSize,
   validateTriggerPrice,
 } from "../../services/phoenix/conditional.js";
-import { getPositionConditionals } from "../../services/phoenix/conditional.js";
 import { getMarket } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import {
@@ -28,6 +29,7 @@ import { toBotError } from "../lib/errors.js";
 import { price as fmtPrice, parseAmount, pct, signedUsd, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
+import { CONFIRMING, txError } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -36,6 +38,17 @@ const PRESET_PCTS_TP = [5, 10, 20, 30, 50] as const;
 const PRESET_PCTS_SL = [2, 5, 10, 15] as const;
 const PRESET_SIZE_PCTS = [25, 50, 75, 100] as const;
 const TRADE_LOCK_TTL = 150;
+
+// Bracket plans, framed in % of MARGIN (money), not price. { sl, tp } are magnitudes.
+type PlanKey = "tight" | "balanced" | "runner";
+const PROTECT_PLANS: Record<PlanKey, { label: string; sl: number; tp: number }> = {
+  tight: { label: "🛡 Tight", sl: 25, tp: 50 },
+  balanced: { label: "⚖️ Balanced", sl: 50, tp: 100 },
+  runner: { label: "🚀 Runner", sl: 50, tp: 200 },
+};
+// Single-leg margin-% presets (magnitudes).
+const SL_MARGIN_PRESETS = [25, 50, 75] as const;
+const TP_MARGIN_PRESETS = [50, 100, 200] as const;
 
 // ── Callback / encoding helpers ─────────────────────────────────────────────
 
@@ -74,6 +87,21 @@ function pctToTriggerPrice(
   return greater ? mark * (1 + delta) : mark * (1 - delta);
 }
 
+// Convert a % of MARGIN (money) into a trigger price.
+// PnL at trigger = ±(marginFrac × margin); deltaPrice = that / size (tokens).
+function marginPctToTrigger(
+  leg: Leg,
+  side: "long" | "short",
+  entry: number,
+  size: number,
+  margin: number,
+  marginPctMag: number,
+): number {
+  if (size <= 0) return entry;
+  const delta = ((marginPctMag / 100) * margin) / size;
+  return isGreaterDir(leg, side) ? entry + delta : entry - delta;
+}
+
 function shortSym(s: string): string {
   return s.toUpperCase();
 }
@@ -102,18 +130,38 @@ interface PositionCtx {
   remainingLots: { tp: bigint; sl: bigint };
 }
 
+// Short-lived cache so a rapid sequence of screen renders for one position
+// doesn't re-hit Phoenix on every tap. Invalidated after any write.
+const _ctxCache = new Map<string, { data: PositionCtx | null; ts: number }>();
+const CTX_TTL_MS = 4000;
+
+function ctxKey(walletAddress: string, symbol: string, side: "long" | "short"): string {
+  return `${walletAddress}:${symbol}:${side}`;
+}
+
+export function invalidateCtx(walletAddress: string, symbol: string, side: "long" | "short"): void {
+  _ctxCache.delete(ctxKey(walletAddress, symbol, side));
+}
+
 async function loadPositionCtx(
   walletAddress: string,
   symbol: string,
   side: "long" | "short",
 ): Promise<PositionCtx | null> {
+  const key = ctxKey(walletAddress, symbol, side);
+  const cached = _ctxCache.get(key);
+  if (cached && Date.now() - cached.ts < CTX_TTL_MS) return cached.data;
+
   const [state, rungs, market] = await Promise.all([
     getTraderState(walletAddress),
     getPositionConditionals(walletAddress, symbol, side).catch(() => [] as ConditionalRung[]),
     getMarket(symbol),
   ]);
   const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
-  if (!pos) return null;
+  if (!pos) {
+    _ctxCache.set(key, { data: null, ts: Date.now() });
+    return null;
+  }
 
   const sizeTokens = Number(pos.size);
   const factor = 10 ** market.baseLotsDecimals;
@@ -126,7 +174,7 @@ async function loadPositionCtx(
     .filter((r) => r.leg === "sl")
     .reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
 
-  return {
+  const result: PositionCtx = {
     pos,
     rungs,
     market: {
@@ -141,6 +189,8 @@ async function loadPositionCtx(
       sl: positionLots > slAlloc ? positionLots - slAlloc : 0n,
     },
   };
+  _ctxCache.set(key, { data: result, ts: Date.now() });
+  return result;
 }
 
 // ── Position-gone helper ────────────────────────────────────────────────────
@@ -647,8 +697,8 @@ async function sendConfirmStep(
 
   const execLabel =
     mode === "limit"
-      ? `Order rests at $${fmtPrice(triggerPrice).replace("$", "")} until filled.`
-      : `Closes immediately at ${isGreaterDir(leg, side) ? "≥" : "≤"} $${fmtPrice(triggerPrice).replace("$", "")} (IOC, ±10% buffer).`;
+      ? `Limit — order rests at $${fmtPrice(triggerPrice).replace("$", "")} until filled.`
+      : "Market — closes immediately when price hits the trigger (may fill up to 10% past it on fast moves).";
 
   const msg = fmt`${legEmoji(leg)} ${FormattedString.b(`Confirm ${legLabel(leg)} — ${symbol}`)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -733,6 +783,7 @@ async function executeAdd(
         },
         fee,
       );
+      invalidateCtx(user.walletAddress, symbol, side);
 
       // Post-place state for the hint decision
       const postRungs = await getPositionConditionals(user.walletAddress, symbol, side).catch(
@@ -764,10 +815,7 @@ async function executeAdd(
       });
     } catch (err) {
       logger.error({ err, symbol, leg }, "tpsl add failed");
-      const be = toBotError(err);
-      const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-      const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-      const errMsg = fmt`${FormattedString.b(`❌ ${legLabel(leg)} failed`)}\n\n${be.userMessage}${hintLine}${retryLine}`;
+      const { msg: errMsg } = txError(err, legLabel(leg));
       const kb = new InlineKeyboard()
         .text("Try again", `tpsl:open:${leg}:${symbol}:${side}`)
         .text("✕ Close", "cancel");
@@ -886,6 +934,7 @@ async function executeFlipMode(
         },
         fee,
       );
+      invalidateCtx(user.walletAddress, symbol, side);
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       const okMsg = fmt`✅ Mode switched to ${FormattedString.b(newMode)} for ${legLabel(leg)} #${idx}.`;
       await api.editMessageText(chatId, msgId, okMsg.text, {
@@ -894,8 +943,7 @@ async function executeFlipMode(
       });
     } catch (err) {
       logger.error({ err, symbol, leg, idx }, "tpsl flip mode failed");
-      const be = toBotError(err);
-      const errMsg = fmt`${FormattedString.b("❌ Switch failed")}\n\n${be.userMessage}`;
+      const { msg: errMsg } = txError(err, "Switch mode");
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       try {
         await api.editMessageText(chatId, msgId, errMsg.text, {
@@ -960,6 +1008,7 @@ async function executeRemove(
       const s = await getSettings(user.id);
       const fee = getFeeConfig(s.feeMode, s.customFeeSol);
       await cancelPositionConditional(user.walletAddress, symbol, side, leg, idx, fee);
+      invalidateCtx(user.walletAddress, symbol, side);
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       const okMsg = fmt`✅ ${legLabel(leg)} #${idx} removed.`;
       await api.editMessageText(chatId, msgId, okMsg.text, {
@@ -968,8 +1017,7 @@ async function executeRemove(
       });
     } catch (err) {
       logger.error({ err, symbol, leg, idx }, "tpsl remove failed");
-      const be = toBotError(err);
-      const errMsg = fmt`${FormattedString.b("❌ Remove failed")}\n\n${be.userMessage}`;
+      const { msg: errMsg } = txError(err, "Remove");
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       try {
         await api.editMessageText(chatId, msgId, errMsg.text, {
@@ -1032,6 +1080,7 @@ async function executeClearAll(
       const s = await getSettings(user.id);
       const fee = getFeeConfig(s.feeMode, s.customFeeSol);
       await cancelAllPositionConditionals(user.walletAddress, symbol, side, leg, fee);
+      invalidateCtx(user.walletAddress, symbol, side);
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       const okMsg = fmt`✅ All ${legLabel(leg).toLowerCase()} levels removed.`;
       await api.editMessageText(chatId, msgId, okMsg.text, {
@@ -1040,8 +1089,7 @@ async function executeClearAll(
       });
     } catch (err) {
       logger.error({ err, symbol, leg }, "tpsl clear all failed");
-      const be = toBotError(err);
-      const errMsg = fmt`${FormattedString.b("❌ Clear failed")}\n\n${be.userMessage}`;
+      const { msg: errMsg } = txError(err, "Clear levels");
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       try {
         await api.editMessageText(chatId, msgId, errMsg.text, {
@@ -1171,13 +1219,15 @@ export async function executeEditCommit(
         },
         fee,
       );
+      invalidateCtx(user.walletAddress, symbol, side);
       await api.sendMessage(chatId, `✅ ${legLabel(leg)} #${idx} updated.`, {
         reply_markup: new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`),
       });
     } catch (err) {
       logger.error({ err, symbol, leg, idx }, "tpsl edit commit failed");
-      const be = toBotError(err);
-      await api.sendMessage(chatId, `❌ Edit failed: ${be.userMessage}`, {
+      const { msg: errMsg } = txError(err, "Update");
+      await api.sendMessage(chatId, errMsg.text, {
+        entities: errMsg.entities,
         reply_markup: new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`),
       });
     } finally {
@@ -1500,6 +1550,7 @@ async function executeSplit(
         },
         fee,
       );
+      invalidateCtx(user.walletAddress, symbol, side);
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       const okMsg = fmt`✅ ${FormattedString.b(`${legLabel(leg)} split into 2 levels.`)}\n\n${FormattedString.i("Tap a level in the manager to fine-tune price or size.")}`;
       await api.editMessageText(chatId, msgId, okMsg.text, {
@@ -1508,8 +1559,7 @@ async function executeSplit(
       });
     } catch (err) {
       logger.error({ err, symbol, leg }, "tpsl split failed");
-      const be = toBotError(err);
-      const errMsg = fmt`${FormattedString.b("❌ Split failed")}\n\n${be.userMessage}`;
+      const { msg: errMsg } = txError(err, "Split");
       const kb = new InlineKeyboard().text("← Manager", `tpsl:open:${leg}:${symbol}:${side}`);
       try {
         await api.editMessageText(chatId, msgId, errMsg.text, {
@@ -1562,11 +1612,364 @@ async function handlePopulatedPreset(
   await sendSizeStep(ctx, leg, symbol, side, priceForCb(triggerPrice), true);
 }
 
+// ════ Protect layer — bracket-first, money-framed (the 90% path) ═════════════
+
+function legIndices(rungs: ConditionalRung[], leg: Leg): number[] {
+  return rungs.filter((r) => r.leg === leg).map((r) => r.conditionalOrderIndex);
+}
+
+function fullRung(leg: Leg, triggerPrice: number): RungInput {
+  return { leg, triggerPrice, mode: leg === "tp" ? "limit" : "market", size: { kind: "full" } };
+}
+
+async function renderProtect(
+  ctx: BotContext,
+  msg: FormattedString,
+  kb: InlineKeyboard,
+  edit: boolean,
+): Promise<void> {
+  const opts = { entities: msg.entities, reply_markup: kb };
+  if (edit && ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(msg.text, opts);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      if (!m.includes("message is not modified")) throw err;
+    }
+  } else {
+    await ctx.reply(msg.text, opts);
+  }
+}
+
+export async function sendProtectScreen(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  edit = false,
+): Promise<void> {
+  if (!ctx.user) return;
+  const data = await loadPositionCtx(ctx.user.walletAddress, symbol, side);
+  if (!data) {
+    await sendPositionGone(
+      ctx,
+      edit,
+      `No open ${symbol} ${side} position. It may have been closed.`,
+    );
+    return;
+  }
+
+  const pos = data.pos;
+  const entry = Number(pos.entryPrice);
+  const mark = Number(pos.markPrice);
+  const margin = marginOf(pos);
+  const sideLabel = side === "long" ? "LONG" : "SHORT";
+  const levLabel = pos.leverage ? ` · ${pos.leverage}×` : "";
+  const moveVsEntry = entry > 0 ? ((mark - entry) / entry) * 100 : 0;
+  const liq = pos.liquidationPrice === "N/A" ? 0 : Number(pos.liquidationPrice);
+
+  const tpRungs = data.rungs.filter((r) => r.leg === "tp");
+  const slRungs = data.rungs.filter((r) => r.leg === "sl");
+
+  const legPnl = (legRungs: ConditionalRung[]): number =>
+    legRungs.reduce(
+      (s, r) =>
+        s + estimatePnl(r.triggerPrice, entry, side, r.maxSizeLots, data.market.baseLotsDecimals),
+      0,
+    );
+
+  const legLine = (leg: Leg, legRungs: ConditionalRung[]): FormattedString => {
+    const name = leg === "tp" ? "🎯 Target" : "🛑 Stop  ";
+    if (legRungs.length === 0) {
+      const warn = leg === "sl" ? "  ⚠️ unprotected" : "";
+      return fmt`${name}   ${FormattedString.i("not set")}${warn}`;
+    }
+    const pnl = legPnl(legRungs);
+    const marginPct = margin > 0 ? (pnl / margin) * 100 : 0;
+    if (legRungs.length > 1) {
+      const totalLots = legRungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
+      const cov =
+        data.positionLots > 0n ? Number((totalLots * 10000n) / data.positionLots) / 100 : 0;
+      return fmt`${name}   ${FormattedString.b(`${legRungs.length} rungs`)} · ${cov.toFixed(0)}%  →  ${FormattedString.b(signedUsd(pnl))} ${FormattedString.i(`(${pct(marginPct)})`)}`;
+    }
+    return fmt`${name}   ${FormattedString.b(fmtPrice(legRungs[0].triggerPrice))}  →  ${FormattedString.b(signedUsd(pnl))} ${FormattedString.i(`(${pct(marginPct)} margin)`)}`;
+  };
+
+  let liqLine = fmt``;
+  if (liq > 0 && mark > 0) {
+    const dist = Math.max(
+      0,
+      side === "long" ? ((mark - liq) / mark) * 100 : ((liq - mark) / mark) * 100,
+    );
+    liqLine = fmt`\nLiq      ${FormattedString.b(fmtPrice(liq))}  ·  ${dist.toFixed(1)}% away ${liqDistanceDot(dist)}`;
+  }
+
+  const header = fmt`🛡 ${FormattedString.b(`Protect — ${symbol} ${sideLabel}${levLabel}`)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Margin   ${FormattedString.b(usd(margin))}
+Entry    ${FormattedString.b(fmtPrice(entry))}  ·  Mark ${FormattedString.b(fmtPrice(mark))} ${FormattedString.i(`(${pct(moveVsEntry)})`)}${liqLine}
+─────────────────────────
+${legLine("tp", tpRungs)}
+${legLine("sl", slRungs)}`;
+
+  const hasAny = tpRungs.length > 0 || slRungs.length > 0;
+  const kb = new InlineKeyboard();
+
+  if (!hasAny) {
+    for (const key of Object.keys(PROTECT_PLANS) as PlanKey[]) {
+      const p = PROTECT_PLANS[key];
+      kb.text(`${p.label}  −${p.sl}% / +${p.tp}%`, `tpsl:plan:${symbol}:${side}:${key}`).row();
+    }
+    kb.text("🛑 Stop only", `tpsl:legmenu:sl:${symbol}:${side}`)
+      .text("🎯 Target only", `tpsl:legmenu:tp:${symbol}:${side}`)
+      .row()
+      .text("⚙️ Custom / ladder", `tpsl:adv:${symbol}:${side}`)
+      .row()
+      .text("← Back", `pos:detail:${symbol}:${side}`);
+    const sub = fmt`\n${FormattedString.i("Pick a plan — sets stop + target, full size. % = of your margin.")}`;
+    await renderProtect(ctx, FormattedString.join([header, sub], "\n"), kb, edit);
+    return;
+  }
+
+  let rrLine = fmt``;
+  if (tpRungs.length > 0 && slRungs.length > 0) {
+    const slPnl = legPnl(slRungs);
+    if (slPnl < 0) {
+      const rr = Math.abs(legPnl(tpRungs) / slPnl);
+      rrLine = fmt`\nRisk:Reward  ${FormattedString.b(`1:${rr.toFixed(1)}`)}`;
+    }
+  }
+
+  kb.text(tpRungs.length ? "✏️ Target" : "🎯 Set target", `tpsl:legmenu:tp:${symbol}:${side}`)
+    .text(slRungs.length ? "✏️ Stop" : "🛑 Set stop", `tpsl:legmenu:sl:${symbol}:${side}`)
+    .row();
+  if (tpRungs.length) kb.text("🗑 Target", `tpsl:rmleg:tp:${symbol}:${side}`);
+  if (slRungs.length) kb.text("🗑 Stop", `tpsl:rmleg:sl:${symbol}:${side}`);
+  kb.row()
+    .text("🪜 Ladder", `tpsl:adv:${symbol}:${side}`)
+    .text("← Back", `pos:detail:${symbol}:${side}`);
+
+  await renderProtect(ctx, FormattedString.join([header, rrLine], ""), kb, edit);
+}
+
+async function sendLegPresetMenu(
+  ctx: BotContext,
+  leg: Leg,
+  symbol: string,
+  side: "long" | "short",
+  edit = true,
+): Promise<void> {
+  if (!ctx.user) return;
+  const data = await loadPositionCtx(ctx.user.walletAddress, symbol, side);
+  if (!data) {
+    await sendPositionGone(ctx, edit, `No open ${symbol} ${side} position.`);
+    return;
+  }
+  const entry = Number(data.pos.entryPrice);
+  const size = Number(data.pos.size);
+  const margin = marginOf(data.pos);
+  const presets = leg === "tp" ? TP_MARGIN_PRESETS : SL_MARGIN_PRESETS;
+
+  const kb = new InlineKeyboard();
+  let i = 0;
+  for (const mp of presets) {
+    const trig = marginPctToTrigger(leg, side, entry, size, margin, mp);
+    const sign = leg === "tp" ? "+" : "−";
+    kb.text(`${sign}${mp}%  ${fmtPrice(trig)}`, `tpsl:legset:${leg}:${symbol}:${side}:${mp}`);
+    i++;
+    if (i % 2 === 0) kb.row();
+  }
+  if (i % 2 === 1) kb.row();
+  kb.text("✏️ Custom price", `tpsl:pxc:${leg}:${symbol}:${side}`).row();
+  kb.text("← Back", `tpsl:protect:${symbol}:${side}`);
+
+  const name = leg === "tp" ? "🎯 Take profit" : "🛑 Stop loss";
+  const msg = fmt`${name} — ${FormattedString.b(symbol)} ${side.toUpperCase()}
+Entry ${FormattedString.b(fmtPrice(entry))} · Mark ${FormattedString.b(fmtPrice(Number(data.pos.markPrice)))}
+${FormattedString.i("Full size, market exit. % = of your margin.")}
+
+Pick a level:`;
+  await renderProtect(ctx, msg, kb, edit);
+}
+
+async function sendAdvancedChooser(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  edit = true,
+): Promise<void> {
+  const kb = new InlineKeyboard()
+    .text("🎯 TP ladder", `tpsl:open:tp:${symbol}:${side}`)
+    .text("🛑 SL ladder", `tpsl:open:sl:${symbol}:${side}`)
+    .row()
+    .text("← Back", `tpsl:protect:${symbol}:${side}`);
+  const msg = fmt`⚙️ ${FormattedString.b("Advanced — ladders")}
+
+Set multiple levels per leg, with custom sizes and limit/market modes.
+
+Which leg?`;
+  await renderProtect(ctx, msg, kb, edit);
+}
+
+// Shared scaffold for the Protect write actions: rate-limit, idempotency, lock,
+// run the bracket write, then re-render the Protect screen.
+async function runProtectWrite(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  errorAction: string,
+  build: (data: PositionCtx, walletAddress: string) => SetPositionTpSlParams,
+): Promise<void> {
+  if (!ctx.user || !ctx.from) return;
+  if (!(await checkOrderRateLimit(ctx))) return;
+  if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery?.id ?? ""))) return;
+
+  const user = ctx.user;
+  const chatId = ctx.chat?.id;
+  const msgId = ctx.callbackQuery?.message?.message_id;
+  if (!chatId || !msgId) return;
+  const api = ctx.api;
+
+  const data = await loadPositionCtx(user.walletAddress, symbol, side);
+  if (!data) {
+    await sendPositionGone(ctx, true, `No open ${symbol} ${side} position.`);
+    return;
+  }
+  const params = build(data, user.walletAddress);
+
+  const lockKey = `trade:lock:${user.id}`;
+  const locked = await redis.set(lockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
+  if (!locked) {
+    await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
+    return;
+  }
+  await ctx.editMessageText(CONFIRMING);
+
+  void (async () => {
+    try {
+      const s = await getSettings(user.id);
+      const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+      await setPositionTpSl(params, fee);
+      invalidateCtx(user.walletAddress, symbol, side);
+      await sendProtectScreen(ctx, symbol, side, true);
+    } catch (err) {
+      logger.error({ err, symbol, side, errorAction }, "protect write failed");
+      const { msg: errMsg } = txError(err, errorAction);
+      const kb = new InlineKeyboard().text("← Back", `tpsl:protect:${symbol}:${side}`);
+      await api
+        .editMessageText(chatId, msgId, errMsg.text, {
+          entities: errMsg.entities,
+          reply_markup: kb,
+        })
+        .catch(() => undefined);
+    } finally {
+      await redis.del(lockKey);
+    }
+  })().catch((err) => logger.error({ err }, "protect write async error"));
+}
+
+async function executeBracketPreset(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  planKey: PlanKey,
+): Promise<void> {
+  const plan = PROTECT_PLANS[planKey];
+  await runProtectWrite(ctx, symbol, side, "Protect", (data, walletAddress) => {
+    const entry = Number(data.pos.entryPrice);
+    const size = Number(data.pos.size);
+    const margin = marginOf(data.pos);
+    const tpTrig = marginPctToTrigger("tp", side, entry, size, margin, plan.tp);
+    const slTrig = marginPctToTrigger("sl", side, entry, size, margin, plan.sl);
+    return {
+      symbol,
+      walletAddress,
+      positionSide: side,
+      tp: [fullRung("tp", tpTrig)],
+      sl: [fullRung("sl", slTrig)],
+      cancelTpIndices: legIndices(data.rungs, "tp"),
+      cancelSlIndices: legIndices(data.rungs, "sl"),
+    };
+  });
+}
+
+async function executeLegPreset(
+  ctx: BotContext,
+  leg: Leg,
+  symbol: string,
+  side: "long" | "short",
+  marginPctMag: number,
+): Promise<void> {
+  await runProtectWrite(ctx, symbol, side, legLabel(leg), (data, walletAddress) => {
+    const entry = Number(data.pos.entryPrice);
+    const size = Number(data.pos.size);
+    const margin = marginOf(data.pos);
+    const trig = marginPctToTrigger(leg, side, entry, size, margin, marginPctMag);
+    const cancelIdx = legIndices(data.rungs, leg);
+    return {
+      symbol,
+      walletAddress,
+      positionSide: side,
+      tp: leg === "tp" ? [fullRung("tp", trig)] : [],
+      sl: leg === "sl" ? [fullRung("sl", trig)] : [],
+      cancelTpIndices: leg === "tp" ? cancelIdx : [],
+      cancelSlIndices: leg === "sl" ? cancelIdx : [],
+    };
+  });
+}
+
+async function executeRemoveLeg(
+  ctx: BotContext,
+  leg: Leg,
+  symbol: string,
+  side: "long" | "short",
+): Promise<void> {
+  if (!ctx.user || !ctx.from) return;
+  if (!(await checkOrderRateLimit(ctx))) return;
+  if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery?.id ?? ""))) return;
+
+  const user = ctx.user;
+  const chatId = ctx.chat?.id;
+  const msgId = ctx.callbackQuery?.message?.message_id;
+  if (!chatId || !msgId) return;
+  const api = ctx.api;
+
+  const lockKey = `trade:lock:${user.id}`;
+  const locked = await redis.set(lockKey, "1", "EX", TRADE_LOCK_TTL, "NX");
+  if (!locked) {
+    await ctx.editMessageText("Another trade is in progress. Wait a moment and try again.");
+    return;
+  }
+  await ctx.editMessageText(CONFIRMING);
+
+  void (async () => {
+    try {
+      const s = await getSettings(user.id);
+      const fee = getFeeConfig(s.feeMode, s.customFeeSol);
+      await cancelAllPositionConditionals(user.walletAddress, symbol, side, leg, fee);
+      invalidateCtx(user.walletAddress, symbol, side);
+      await sendProtectScreen(ctx, symbol, side, true);
+    } catch (err) {
+      logger.error({ err, symbol, side, leg }, "protect remove leg failed");
+      const { msg: errMsg } = txError(err, `Remove ${legLabel(leg).toLowerCase()}`);
+      const kb = new InlineKeyboard().text("← Back", `tpsl:protect:${symbol}:${side}`);
+      await api
+        .editMessageText(chatId, msgId, errMsg.text, {
+          entities: errMsg.entities,
+          reply_markup: kb,
+        })
+        .catch(() => undefined);
+    } finally {
+      await redis.del(lockKey);
+    }
+  })().catch((err) => logger.error({ err }, "protect remove leg async error"));
+}
+
 // ── Register ────────────────────────────────────────────────────────────────
 
 const LEG_RE = "(tp|sl)";
 const SIDE_RE = "(long|short)";
 const SYM_RE = "([A-Z0-9]+)";
+const PLAN_RE = "(tight|balanced|runner)";
 
 export function registerTpSl(bot: Bot<BotContext>) {
   // Open manager
@@ -1576,6 +1979,58 @@ export function registerTpSl(bot: Bot<BotContext>) {
     if (!(await requireActivation(ctx))) return;
     const [leg, sym, side] = ctx.match.slice(1) as [Leg, string, "long" | "short"];
     await sendTpSlManager(ctx, leg, shortSym(sym), side, true);
+  });
+
+  // ── Protect layer (bracket-first) ──
+  bot.callbackQuery(new RegExp(`^tpsl:protect:${SYM_RE}:${SIDE_RE}$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
+    const [sym, side] = ctx.match.slice(1) as [string, "long" | "short"];
+    await sendProtectScreen(ctx, shortSym(sym), side, true);
+  });
+
+  bot.callbackQuery(new RegExp(`^tpsl:plan:${SYM_RE}:${SIDE_RE}:${PLAN_RE}$`), async (ctx) => {
+    await ctx.answerCallbackQuery("Submitting…");
+    if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
+    const [sym, side, plan] = ctx.match.slice(1) as [string, "long" | "short", PlanKey];
+    await executeBracketPreset(ctx, shortSym(sym), side, plan);
+  });
+
+  bot.callbackQuery(new RegExp(`^tpsl:legmenu:${LEG_RE}:${SYM_RE}:${SIDE_RE}$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
+    const [leg, sym, side] = ctx.match.slice(1) as [Leg, string, "long" | "short"];
+    await sendLegPresetMenu(ctx, leg, shortSym(sym), side, true);
+  });
+
+  bot.callbackQuery(
+    new RegExp(`^tpsl:legset:${LEG_RE}:${SYM_RE}:${SIDE_RE}:(\\d+)$`),
+    async (ctx) => {
+      await ctx.answerCallbackQuery("Submitting…");
+      if (!ctx.user) return;
+      if (!(await requireActivation(ctx))) return;
+      const [leg, sym, side, mp] = ctx.match.slice(1) as [Leg, string, "long" | "short", string];
+      await executeLegPreset(ctx, leg, shortSym(sym), side, Number(mp));
+    },
+  );
+
+  bot.callbackQuery(new RegExp(`^tpsl:rmleg:${LEG_RE}:${SYM_RE}:${SIDE_RE}$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
+    const [leg, sym, side] = ctx.match.slice(1) as [Leg, string, "long" | "short"];
+    await executeRemoveLeg(ctx, leg, shortSym(sym), side);
+  });
+
+  bot.callbackQuery(new RegExp(`^tpsl:adv:${SYM_RE}:${SIDE_RE}$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
+    const [sym, side] = ctx.match.slice(1) as [string, "long" | "short"];
+    await sendAdvancedChooser(ctx, shortSym(sym), side, true);
   });
 
   // Empty-state preset → confirm directly (size full, mode default)

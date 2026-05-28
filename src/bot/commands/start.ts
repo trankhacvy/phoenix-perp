@@ -132,13 +132,13 @@ export function registerStart(bot: Bot<BotContext>) {
 
       const solLine =
         sol !== null
-          ? fmt`⛽ ${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt` (${usd(sol * solPrice)})` : fmt``}`
-          : fmt`⛽ SOL balance unavailable`;
+          ? fmt`⛽ Gas               ${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt` (${usd(sol * solPrice)})` : fmt``}`
+          : fmt`⛽ Gas               —`;
 
       const usdcLine =
         walletUsdc !== null
-          ? fmt`💳 Wallet USDC       ${FormattedString.b(usd(walletUsdc))}`
-          : fmt`💳 Wallet USDC       —`;
+          ? fmt`💳 Bot wallet        ${FormattedString.b(usd(walletUsdc))}`
+          : fmt`💳 Bot wallet        —`;
 
       const collateralLine =
         collateral !== null
@@ -211,10 +211,12 @@ export function registerStart(bot: Bot<BotContext>) {
       if (referredBy && config.REFERRAL_ENABLED) await linkReferral(telegramId, referredBy);
 
       const kb = new InlineKeyboard()
+        .text("🔑 Enter invite code", "nav:activate")
+        .row()
         .text("💰 Deposit", "nav:deposit")
         .text("📈 Markets", "nav:markets");
 
-      const msg = fmt`🔥 ${FormattedString.b("Welcome to SuperNova!")}\n\nWe created a Solana wallet for you:\n${FormattedString.code(walletAddress)}\n\nDeposit USDC to fund your account.\n\n⚠️ ${FormattedString.b("Activate trading:")}\nUse /activate <code> with your Phoenix invite or referral code to unlock trading.\n\n${FormattedString.i("⚠️ SuperNova is in beta. Trade at your own risk. Perpetual futures involve significant risk of loss.")}`;
+      const msg = fmt`🔥 ${FormattedString.b("Welcome to SuperNova!")}\n\nWe created a bot wallet for you:\n${FormattedString.code(walletAddress)}\n\n${FormattedString.b("Get started in 3 steps:")}\n${FormattedString.b("1.")} Activate with a Phoenix invite or referral code (/activate <code>)\n${FormattedString.b("2.")} Deposit USDC to your bot wallet\n${FormattedString.b("3.")} Open your first trade\n\n${FormattedString.i("⚠️ SuperNova is in beta. Trade at your own risk. Perpetual futures involve significant risk of loss.")}`;
 
       await ctx.api.editMessageText(chatId, msgId, msg.text, {
         entities: msg.entities,

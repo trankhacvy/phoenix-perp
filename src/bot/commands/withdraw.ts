@@ -14,9 +14,9 @@ import { getSettings } from "../../services/settings.js";
 import { getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { toBotError } from "../lib/errors.js";
 import { shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
+import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const MIN_WITHDRAW_USD = 1;
@@ -584,7 +584,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
       return;
     }
 
-    await ctx.editMessageText("⏳ Processing withdrawal…");
+    await ctx.editMessageText(CONFIRMING);
 
     const user = ctx.user;
     const chatId = ctx.chat?.id;
@@ -602,25 +602,18 @@ export function registerWithdraw(bot: Bot<BotContext>) {
         const sig = await withdrawCollateral(user.walletAddress, amountNative, fee);
         await redis.del(lockKey);
 
-        const msg = fmt`✅ ${FormattedString.b("Withdrawal complete")}
-
-${FormattedString.b(usd(amount))} USDC is now in your bot wallet.
-
-${FormattedString.link("View on Solscan →", solscanUrl(sig))}
-
-Use /deposit to re-add it for trading, or /withdraw to send it to an external wallet.`;
+        const body = fmt`${FormattedString.b(usd(amount))} USDC is now in your bot wallet.`;
+        const footer = fmt`${FormattedString.i("Use /deposit to re-add it for trading, or /withdraw to send it to an external wallet.")}`;
+        const msg = txSuccess({ header: "Withdrawal complete", body, signature: sig, footer });
 
         await api.editMessageText(chatId, msgId, msg.text, {
           entities: msg.entities,
-          link_preview_options: { is_disabled: true },
+          ...TX_MSG_OPTS,
         });
       } catch (err) {
         logger.error({ err, amount }, "withdrawCollateral failed");
         await redis.del(lockKey);
-        const be = toBotError(err);
-        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-        const errMsg = fmt`${FormattedString.b("❌ Withdrawal failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        const { msg: errMsg } = txError(err, "Withdrawal");
         try {
           await api.editMessageText(chatId, msgId, errMsg.text, { entities: errMsg.entities });
         } catch (editErr) {
@@ -657,9 +650,7 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
 
     await ctx.answerCallbackQuery("Processing…");
     await ctx.editMessageText(
-      source === "trading"
-        ? "⏳ Processing external withdrawal…"
-        : "⏳ Sending USDC to your address…",
+      source === "trading" ? "⏳ Step 1/2 — Phoenix → bot wallet…" : "⏳ Sending… (1 transaction)",
     );
 
     const user = ctx.user;
@@ -687,8 +678,7 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
           logger.error({ err, amount, toAddress }, "External withdraw step 1 failed");
           await redis.del(lockKey);
           await storeExtConfirm(fromId, amount, toAddress, source);
-          const be = toBotError(err);
-          const errMsg = fmt`${FormattedString.b("❌ Withdrawal (step 1) failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}`;
+          const { msg: errMsg } = txError(err, "Withdrawal (step 1)");
           try {
             await api.editMessageText(chatId, msgId, errMsg.text, { entities: errMsg.entities });
           } catch (editErr) {
@@ -698,11 +688,7 @@ Use /deposit to re-add it for trading, or /withdraw to send it to an external wa
         }
 
         try {
-          await api.editMessageText(
-            chatId,
-            msgId,
-            "⏳ Step 1 done — moving funds to your address…",
-          );
+          await api.editMessageText(chatId, msgId, "⏳ Step 2/2 — bot wallet → your address…");
         } catch {
           /* best effort */
         }
@@ -754,8 +740,7 @@ ${FormattedString.link("Step 1 tx →", solscanUrl(sig1))}`;
         } else {
           // wallet source: simpler — funds stayed in wallet. Re-queue same confirm.
           await storeExtConfirm(fromId, amount, toAddress, source);
-          const be = toBotError(err);
-          const errMsg = fmt`${FormattedString.b("❌ Transfer failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}${be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``}`;
+          const { msg: errMsg } = txError(err, "Transfer");
           try {
             await api.editMessageText(chatId, msgId, errMsg.text, { entities: errMsg.entities });
           } catch (editErr) {
@@ -767,10 +752,7 @@ ${FormattedString.link("Step 1 tx →", solscanUrl(sig1))}`;
 
       await redis.del(lockKey);
       const displayAmount = Number(transferAmount) / 1_000_000;
-      const successHeader =
-        source === "trading"
-          ? fmt`✅ ${FormattedString.b("External withdrawal complete")}`
-          : fmt`✅ ${FormattedString.b("USDC sent")}`;
+      const successHeader = fmt`✅ ${FormattedString.b("Withdrawal complete")}`;
       const txLinks =
         source === "trading" && sig1
           ? fmt`${FormattedString.link("Step 1 (Phoenix → bot wallet) →", solscanUrl(sig1))}

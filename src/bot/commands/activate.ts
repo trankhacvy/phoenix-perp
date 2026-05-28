@@ -60,7 +60,7 @@ export function registerActivate(bot: Bot<BotContext>) {
         await ctx.api.editMessageText(
           chatId,
           msgId,
-          "❌ Invalid code. Check the code and try again.",
+          "❌ That code didn't work.\n\nDouble-check it's an active Phoenix invite or referral code, then send it again with /activate <code>.",
         );
         return;
       }
@@ -86,7 +86,7 @@ export function registerActivate(bot: Bot<BotContext>) {
       await ctx.api.editMessageText(
         chatId,
         msgId,
-        "❌ Activation failed — the code may be invalid or expired. Try a different code.",
+        "⚠️ Couldn't reach Phoenix right now.\n\nYour code may be fine — try again in a minute with /activate <code>.\n\n↩️ Safe to retry.",
       );
       throw err;
     }

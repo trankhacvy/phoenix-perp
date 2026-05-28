@@ -130,8 +130,8 @@ const SDK_PATTERNS: SdkPattern[] = [
     match: /slippage|price moved|exceeded price|exceeded.*price.*tolerance/i,
     category: "tx_failed",
     code: "SLIPPAGE_EXCEEDED",
-    userMessage: "Price moved too fast.",
-    hint: "Try again.",
+    userMessage: "Price moved past your slippage limit.",
+    hint: "Tap Refresh to requote, then retry.",
     retryable: true,
   },
   {
@@ -190,7 +190,7 @@ export function toBotError(err: unknown): BotError {
     category: "internal",
     code: "UNKNOWN",
     userMessage: "Something went wrong.",
-    hint: "Try again or contact support if this keeps happening.",
+    hint: "Try again, or /help if it keeps happening.",
     retryable: false,
     cause: err,
   });

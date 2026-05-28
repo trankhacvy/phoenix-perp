@@ -137,7 +137,7 @@ export function registerSettings(bot: Bot<BotContext>) {
       const star = opt.bps === s.slippageBps ? "★ " : "";
       kb.text(`${star}${opt.label}`, `slip:${opt.bps}`);
     }
-    kb.row().text("✏️ Custom %", "slip:custom_prompt").row().text("◀ Back", "settings:back");
+    kb.row().text("✏️ Custom %", "slip:custom_prompt").row().text("← Back", "settings:back");
     const msg = fmt`${FormattedString.b("Slippage Tolerance")}
 
 Max price deviation accepted on entry and exit.
@@ -184,7 +184,7 @@ Low values may cause tx failures on fast-moving markets.`;
     kb.row()
       .text("✏️ Custom (1–100×)", "deflev:custom_prompt")
       .row()
-      .text("◀ Back", "settings:back");
+      .text("← Back", "settings:back");
     const msg = fmt`${FormattedString.b("Default Leverage")}
 
 Pre-fills leverage when you open a trade.
@@ -232,7 +232,7 @@ Pre-fills your leverage when opening trades. Changeable per-trade.`;
       .row()
       .text("🚫 Turn Off", "autotp:off")
       .row()
-      .text("◀ Back", "settings:back");
+      .text("← Back", "settings:back");
     const msg = fmt`${FormattedString.b("Auto Take Profit")}
 
 Automatically places a TP order after each trade opens.
@@ -291,7 +291,7 @@ e.g. ${FormattedString.code("15")} to close at +15% unrealized PnL`;
       .row()
       .text("🚫 Turn Off", "autosl:off")
       .row()
-      .text("◀ Back", "settings:back");
+      .text("← Back", "settings:back");
     const msg = fmt`${FormattedString.b("Auto Stop Loss")}
 
 Automatically places an SL order after each trade opens.

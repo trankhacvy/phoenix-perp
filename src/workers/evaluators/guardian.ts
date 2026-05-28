@@ -51,9 +51,10 @@ export async function evaluateGuardianRules(ctx: EvalContext) {
         if (elapsed < rule.cooldownSec * 1000) continue;
       }
 
+      const allPositions = ctx.event.positions ?? [];
       const positions = rule.symbol
-        ? ctx.event.positions.filter((p) => p.symbol === rule.symbol)
-        : ctx.event.positions;
+        ? allPositions.filter((p) => p.symbol === rule.symbol)
+        : allPositions;
 
       if (
         positions.length === 0 &&

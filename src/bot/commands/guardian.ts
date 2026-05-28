@@ -17,10 +17,10 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
 import type { BotContext } from "../../types/index.js";
-import { renderBotError, toBotError } from "../lib/errors.js";
-import { solscanUrl } from "../lib/fmt.js";
+import { renderBotError } from "../lib/errors.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
+import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const CIRCLE = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
@@ -786,7 +786,7 @@ Rules affected: ${String(autoCount)}`;
 
     const kb = new InlineKeyboard()
       .text("⏸ Disable auto-actions", "grd:killgo")
-      .text("← Cancel", "grd:list");
+      .text("✕ Cancel", "grd:list");
 
     await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
   });
@@ -846,7 +846,7 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
     const msgId = ctx.callbackQuery.message?.message_id;
     if (!chatId || !msgId) return;
 
-    await ctx.editMessageText("⏳ Closing position…");
+    await ctx.editMessageText(CONFIRMING);
 
     void (async () => {
       try {
@@ -854,39 +854,25 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
         const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
         const txSig = await closePosition(symbol, user.walletAddress, 1, fee);
 
-        const link = `<a href="${solscanUrl(txSig)}">${txSig.slice(0, 8)}…</a>`;
-        await ctx.api.editMessageText(
-          chatId,
-          msgId,
-          `✅ ${symbol} position closed\n\nTx: ${link}`,
-          {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: "📊 Positions", callback_data: "nav:positions" },
-                  { text: "🛡 Guardian", callback_data: "grd:list" },
-                ],
-              ],
-            },
-            link_preview_options: { is_disabled: true },
-          },
-        );
+        const body = fmt`${symbol} ${_side === "long" ? "Long" : "Short"} position closed.`;
+        const msg = txSuccess({ header: "Position closed", body, signature: txSig });
+        const kb = new InlineKeyboard()
+          .text("📊 Positions", "nav:positions")
+          .text("🛡 Guardian", "grd:list");
+        await ctx.api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: kb,
+          ...TX_MSG_OPTS,
+        });
       } catch (err) {
-        const be = toBotError(err);
+        const { msg: errMsg } = txError(err, "Close position");
+        const kb = new InlineKeyboard()
+          .text(`🔴 Retry close ${symbol}`, `grd:close:${symbol}:${_side}`)
+          .text("📊 Positions", "nav:positions");
         await ctx.api
-          .editMessageText(chatId, msgId, `❌ Close failed: ${be.userMessage}`, {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: `🔴 Retry close ${symbol}`,
-                    callback_data: `grd:close:${symbol}:${_side}`,
-                  },
-                  { text: "📊 Positions", callback_data: "nav:positions" },
-                ],
-              ],
-            },
+          .editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+            reply_markup: kb,
           })
           .catch(() => undefined);
       }
@@ -918,46 +904,32 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
     const msgId = ctx.callbackQuery.message?.message_id;
     if (!chatId || !msgId) return;
 
-    await ctx.editMessageText(`⏳ Reducing ${pctStr}% of ${symbol}…`);
+    await ctx.editMessageText(CONFIRMING);
 
     void (async () => {
       try {
         const settings = await getSettings(user.id);
         const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
         const txSig = await closePosition(symbol, user.walletAddress, fraction, fee);
-        const link = `<a href="${solscanUrl(txSig)}">${txSig.slice(0, 8)}…</a>`;
-        await ctx.api.editMessageText(
-          chatId,
-          msgId,
-          `✅ Reduced ${pctStr}% of ${symbol}\n\nTx: ${link}`,
-          {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: "📊 Positions", callback_data: "nav:positions" },
-                  { text: "🛡 Guardian", callback_data: "grd:list" },
-                ],
-              ],
-            },
-            link_preview_options: { is_disabled: true },
-          },
-        );
+        const body = fmt`Reduced ${FormattedString.b(`${pctStr}%`)} of ${symbol}.`;
+        const msg = txSuccess({ header: "Position reduced", body, signature: txSig });
+        const kb = new InlineKeyboard()
+          .text("📊 Positions", "nav:positions")
+          .text("🛡 Guardian", "grd:list");
+        await ctx.api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: kb,
+          ...TX_MSG_OPTS,
+        });
       } catch (err) {
-        const be = toBotError(err);
+        const { msg: errMsg } = txError(err, "Reduce position");
+        const kb = new InlineKeyboard()
+          .text(`🟡 Retry reduce ${symbol}`, `grd:reduce:${symbol}:${side}:${pctStr}`)
+          .text("📊 Positions", "nav:positions");
         await ctx.api
-          .editMessageText(chatId, msgId, `❌ Reduce failed: ${be.userMessage}`, {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: `🟡 Retry reduce ${symbol}`,
-                    callback_data: `grd:reduce:${symbol}:${side}:${pctStr}`,
-                  },
-                  { text: "📊 Positions", callback_data: "nav:positions" },
-                ],
-              ],
-            },
+          .editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+            reply_markup: kb,
           })
           .catch(() => undefined);
       }
@@ -989,41 +961,32 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
     const msgId = ctx.callbackQuery.message?.message_id;
     if (!chatId || !msgId) return;
 
-    await ctx.editMessageText(`⏳ Adding $${amount} margin…`);
+    await ctx.editMessageText(CONFIRMING);
 
     void (async () => {
       try {
         const settings = await getSettings(user.id);
         const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
         const txSig = await addMargin(symbol, user.walletAddress, amount, fee);
-        const link = `<a href="${solscanUrl(txSig)}">${txSig.slice(0, 8)}…</a>`;
-        await ctx.api.editMessageText(chatId, msgId, `✅ Added $${amount} margin\n\nTx: ${link}`, {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "📊 Positions", callback_data: "nav:positions" },
-                { text: "🛡 Guardian", callback_data: "grd:list" },
-              ],
-            ],
-          },
-          link_preview_options: { is_disabled: true },
+        const body = fmt`${FormattedString.b(`$${amount}`)} added to ${symbol}.`;
+        const msg = txSuccess({ header: "Margin added", body, signature: txSig });
+        const kb = new InlineKeyboard()
+          .text("📊 Positions", "nav:positions")
+          .text("🛡 Guardian", "grd:list");
+        await ctx.api.editMessageText(chatId, msgId, msg.text, {
+          entities: msg.entities,
+          reply_markup: kb,
+          ...TX_MSG_OPTS,
         });
       } catch (err) {
-        const be = toBotError(err);
+        const { msg: errMsg } = txError(err, "Add margin");
+        const kb = new InlineKeyboard()
+          .text(`📥 Retry $${amount}`, `grd:margin:${symbol}:${amountStr}`)
+          .text("📊 Positions", "nav:positions");
         await ctx.api
-          .editMessageText(chatId, msgId, `❌ Add margin failed: ${be.userMessage}`, {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: `📥 Retry $${amount}`,
-                    callback_data: `grd:margin:${symbol}:${amountStr}`,
-                  },
-                  { text: "📊 Positions", callback_data: "nav:positions" },
-                ],
-              ],
-            },
+          .editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
+            reply_markup: kb,
           })
           .catch(() => undefined);
       }

@@ -470,7 +470,7 @@ Alert fires once, then auto-disables.`;
     const msg = fmt`🗑 Delete all ${String(count)} price alerts?`;
     const kb = new InlineKeyboard()
       .text("🗑 Clear all", "al:pa:rmallgo")
-      .text("← Cancel", "al:prices");
+      .text("✕ Cancel", "al:prices");
     await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
   });
 

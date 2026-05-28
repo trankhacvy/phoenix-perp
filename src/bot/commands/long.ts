@@ -28,12 +28,12 @@ import {
   num,
   parseAmount,
   parseLeverage,
-  solscanUrl,
   usd,
 } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
 import { setPending } from "../lib/pending.js";
+import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const TRADE_LOCK_TTL = 150;
@@ -334,6 +334,8 @@ export async function sendTradeConfirm(
 ): Promise<void> {
   if (!ctx.user) return;
 
+  const settings = await getSettings(ctx.user.id);
+
   let pf: PreflightResult;
   try {
     pf = await preflightOpen({
@@ -374,9 +376,16 @@ export async function sendTradeConfirm(
   // toFixed never produces scientific notation; toPrecision does for prices < 1e-7
   const anchorStr = entry.toFixed(12).replace(/\.?0+$/, "");
 
+  const plainLine = fmt`${FormattedString.i(`You put in ${usd(sizeUsdc)} to control ${usd(notional, 0, 0)} (${effectiveLeverage}×).`)}`;
+  const slipLine = fmt`\nMax slippage:  ${FormattedString.b(`${settings.slippageBps / 100}%`)}`;
+  const levWarn =
+    effectiveLeverage >= 20 && liqDist !== null
+      ? fmt`\n\n⚡ ${FormattedString.b("High leverage")} — a ${liqDist.toFixed(1)}% move against you triggers liquidation.`
+      : fmt``;
+
   const kb = new InlineKeyboard()
     .text(
-      `✅ ${label} ${usd(notional, 0, 0)} of ${symbol}`,
+      `✅ Open ${usd(notional, 0, 0)} ${symbol} · ${usd(sizeUsdc, 0, 0)} margin`,
       `confirm:${side}:${symbol}:${effectiveLeverage}:${sizeUsdc}:${anchorStr}`,
     )
     .row()
@@ -387,7 +396,7 @@ export async function sendTradeConfirm(
     .row()
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n\nMargin:      ${FormattedString.b(usd(sizeUsdc))}\nExposure:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:  ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:         ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nTotal cost:  ${FormattedString.b(usd(totalCost))}${fundingLine}\n\nLiq price:   ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}\n\n${FormattedString.i("(Quote based on current price)")}`;
+  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n${plainLine}\n\nMargin:      ${FormattedString.b(usd(sizeUsdc))}\nExposure:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:  ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:         ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nTotal cost:  ${FormattedString.b(usd(totalCost))}${slipLine}${fundingLine}\n\nLiq price:   ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}${levWarn}\n\n${FormattedString.i("(Quote based on current price)")}`;
 
   const opts = {
     entities: msg.entities,
@@ -455,9 +464,9 @@ export async function executeTrade(
 
   ctx.actionLog = { skip: true };
   if (ctx.callbackQuery) {
-    await ctx.editMessageText("⏳ Order on-chain — usually confirms in 2–5s…");
+    await ctx.editMessageText(CONFIRMING);
   } else {
-    await ctx.reply("⏳ Order on-chain — usually confirms in 2–5s…");
+    await ctx.reply(CONFIRMING);
   }
 
   const user = ctx.user;
@@ -553,28 +562,24 @@ export async function executeTrade(
 
       const tokenSize = pf.notional / pf.snapshot.markPrice;
       const sideLabel = side === "long" ? "Long" : "Short";
-      const tpLabel = autoTpSet ? "✏️ Edit TP" : "🎯 Set TP";
-      const slLabel = autoSlSet ? "✏️ Edit SL" : "🛑 Set SL";
+      const protectLabel = autoTpSet || autoSlSet ? "🛡 TP / SL" : "🛡 Protect (set TP/SL)";
       const kb = new InlineKeyboard()
-        .text(tpLabel, `tpsl:open:tp:${symbol}:${side}`)
-        .text(slLabel, `tpsl:open:sl:${symbol}:${side}`)
+        .text(protectLabel, `tpsl:protect:${symbol}:${side}`)
         .row()
         .text("📊 View position", "nav:positions");
 
-      const msg = fmt`✅ ${FormattedString.b(`${sideLabel} ${usd(pf.notional, 0, 0)} of ${symbol} opened`)}\n\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}${autoTpSlNote}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+      const body = fmt`Position:  ${FormattedString.b(`${usd(pf.notional, 0, 0)} ${symbol}`)}  ·  ${FormattedString.b(`${usd(sizeUsdc, 0, 0)} margin`)}\nEntry:     ~${FormattedString.b(fmtPrice(pf.snapshot.markPrice))}\nSize:      ~${FormattedString.b(`${num(tokenSize, 2, 4)} ${symbol}`)}\nFee paid:  ${FormattedString.b(usd(pf.feeUsdc))}\nLiq price: ~${FormattedString.b(fmtPrice(pf.liqPrice))}${autoTpSlNote}`;
+      const msg = txSuccess({ header: `${sideLabel} ${symbol} opened`, body, signature: sig });
       if (chatId && msgId) {
         await api.editMessageText(chatId, msgId, msg.text, {
           entities: msg.entities,
           reply_markup: kb,
-          link_preview_options: { is_disabled: true },
+          ...TX_MSG_OPTS,
         });
       }
     } catch (e) {
       logger.error({ err: e, symbol, side }, "placeMarketOrder failed");
-      const be = toBotError(e);
-      const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-      const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-      const errMsg = fmt`${FormattedString.b("❌ Trade failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+      const { msg: errMsg } = txError(e, "Trade");
       const kb = new InlineKeyboard()
         .text("🔄 Retry", `trade_refresh:${side}:${symbol}:${lev}:${sizeUsdc}`)
         .text("← Back", "nav:positions");

@@ -1,7 +1,9 @@
+import { FormattedString, fmt } from "@grammyjs/parse-mode";
+import type { MessageEntity } from "grammy/types";
 import { type AlertButton, alertQueue } from "../../jobs/queues.js";
 import { redis } from "../../lib/redis.js";
 import type { RiskTier, TraderStateEvent } from "../../types/index.js";
-import { esc, isAlertEnabled } from "./shared.js";
+import { isAlertEnabled } from "./shared.js";
 
 const RISK_DEDUP_TTL = 300;
 
@@ -14,16 +16,11 @@ const RISK_ALERT_TIERS: RiskTier[] = [
   "highRisk",
 ];
 
-const NAV_RISK_KB: AlertButton[][] = [
-  [
-    { text: "📊 Positions", callback_data: "nav:positions" },
-    { text: "📥 Deposit", callback_data: "nav:deposit" },
-  ],
-];
-
 interface AlertPayload {
   message: string;
-  keyboard?: AlertButton[][];
+  entities: MessageEntity[];
+  keyboard: AlertButton[][];
+  alertType: string;
 }
 
 function riskAlertType(tier: RiskTier): string {
@@ -32,23 +29,49 @@ function riskAlertType(tier: RiskTier): string {
   return "liquidatable";
 }
 
-function buildRiskAlert(event: TraderStateEvent): (AlertPayload & { alertType: string }) | null {
+// One open position → offer the two fastest de-risk actions inline.
+function riskKb(event: TraderStateEvent): AlertButton[][] {
+  const positions = event.positions ?? [];
+  if (positions.length === 1) {
+    const p = positions[0];
+    return [
+      [
+        { text: "💰 Add margin", callback_data: `margin:${p.symbol}` },
+        { text: "🛑 Add stop", callback_data: `tpsl:protect:${p.symbol}:${p.side}` },
+      ],
+      [{ text: "📊 Positions", callback_data: "nav:positions" }],
+    ];
+  }
+  return [
+    [
+      { text: "📊 Positions", callback_data: "nav:positions" },
+      { text: "📥 Deposit", callback_data: "nav:deposit" },
+    ],
+  ];
+}
+
+function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
   if (!RISK_ALERT_TIERS.includes(event.riskTier)) return null;
-  const col = esc(`$${Number(event.effectiveCollateral).toFixed(2)}`);
+  const col = FormattedString.b(`$${Number(event.effectiveCollateral).toFixed(2)}`);
   const tier = event.riskTier;
 
-  const messages: Record<string, string> = {
-    atRisk: `⚠️ <b>Margin Low</b>\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
-    at_risk: `⚠️ <b>Margin Low</b>\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
-    cancellable: `🟠 <b>Margin Warning</b>\n\nYour collateral (${col}) is critically low.\nOpen orders may be force-cancelled to protect your account.`,
-    liquidatable: `🚨 <b>Liquidation Risk</b>\n\nYour account (${col}) can be liquidated.\nDeposit funds or close positions immediately.`,
-    backstopLiquidatable: `🆘 <b>Liquidation Imminent</b>\n\nYour account (${col}) is past the normal liquidation threshold.\nAct now — deposit or close everything.`,
-    highRisk: `🆘 <b>Liquidation Imminent</b>\n\nYour account (${col}) is deeply underwater.\nAct now — deposit or close everything.`,
+  const messages: Partial<Record<RiskTier, FormattedString>> = {
+    atRisk: fmt`⚠️ ${FormattedString.b("Margin Low")}\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
+    at_risk: fmt`⚠️ ${FormattedString.b("Margin Low")}\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
+    cancellable: fmt`🟠 ${FormattedString.b("Margin Warning")}\n\nYour collateral (${col}) is critically low.\nOpen orders may be force-cancelled to protect your account.`,
+    liquidatable: fmt`🚨 ${FormattedString.b("Liquidation Risk")}\n\nYour account (${col}) can be liquidated.\nDeposit funds or close positions immediately.`,
+    backstopLiquidatable: fmt`🆘 ${FormattedString.b("Liquidation Imminent")}\n\nYour account (${col}) is past the normal liquidation threshold.\nAct now — deposit or close everything.`,
+    highRisk: fmt`🆘 ${FormattedString.b("Liquidation Imminent")}\n\nYour account (${col}) is deeply underwater.\nAct now — deposit or close everything.`,
   };
 
   const msg = messages[tier];
   if (!msg) return null;
-  return { message: msg, keyboard: NAV_RISK_KB, alertType: riskAlertType(tier) };
+  return {
+    message: msg.text,
+    entities: msg.entities,
+    keyboard: riskKb(event),
+    alertType: riskAlertType(tier),
+  };
 }
 
 export async function evaluateRiskTier(
@@ -72,6 +95,7 @@ export async function evaluateRiskTier(
     type: riskAlert.alertType,
     symbol: symbols || undefined,
     message: riskAlert.message,
+    entities: riskAlert.entities,
     keyboard: riskAlert.keyboard,
   });
 }

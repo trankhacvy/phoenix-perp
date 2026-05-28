@@ -68,7 +68,7 @@ Multi-step flows (e.g., "enter margin amount") use Redis pending state: `pending
 
 ### Phoenix integration
 
-All Phoenix SDK code is in `src/services/phoenix/`. **The Rise SDK is not yet installed** — `client.ts` contains stubs that throw. The npm package name must be confirmed with Phoenix/Ellipsis Labs before any trade execution code can work.
+All Phoenix SDK code is in `src/services/phoenix/`. The Rise SDK (`@ellipsis-labs/rise`) is installed and fully wired — `client.ts` builds read + trading clients (Flight routing enabled when `BUILDER_AUTHORITY_PUBKEY` is a real pubkey). The trade/conditional/position layers call it directly.
 
 Key facts:
 - Phoenix USDC (`PhUsd...`) is distinct from standard USDC (`EPjFWdd5...`); all deposits/withdrawals go through the **Ember proxy contract** which wraps 1:1.
@@ -131,6 +131,16 @@ Key rules:
 - Pass `{ entities: msg.entities }` to `ctx.reply` / `ctx.editMessageText`, never `{ parse_mode: "HTML" }`
 - Use `FormattedString.join(arr, separator)` to build lists from an array of `FormattedString`
 - `link_preview_options: { is_disabled: true }` whenever the message contains URLs
+- This applies to **push alerts** too: build with `FormattedString`, pass `message: msg.text` + `entities: msg.entities` through `alertQueue` (`AlertJobData.entities`). Raw-HTML alert callers are legacy and must `esc()` every interpolated value.
+
+### UX & copy standards
+
+See `docs/ux-standards.md` — mandatory for all user-facing strings and on-chain flows. Non-negotiables:
+- On-chain loading/success/error copy comes from `src/bot/lib/tx-flow.ts` (`CONFIRMING`, `txSuccess`, `txError`, `TX_MSG_OPTS`). Never hand-roll it.
+- All errors route through `toBotError` / `txError` / `renderBotError`.
+- Terminology is locked (`src/bot/lib/terms.ts`): "bot wallet", "trading account", "margin", "position size", "liquidation price".
+- Trade confirm must separate margin vs position size, show max slippage, and warn at ≥20×.
+- Buttons: "← Back", "✕ Cancel", "✕ Close", "✅ <Verb>", "View on Solscan →".
 
 ### ESM / import rules
 

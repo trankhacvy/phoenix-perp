@@ -341,7 +341,7 @@ bot.on("message:text", async (ctx) => {
       .row()
       .text("⚡ Auto-close", `grd:act:${ruleType}:${symbol}:${val}:auto_close`)
       .row()
-      .text("← Cancel", "grd:list");
+      .text("✕ Cancel", "grd:list");
     await ctx.reply(`Value set to ${val}. Choose an action:`, { reply_markup: kb });
     return;
   }

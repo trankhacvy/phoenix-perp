@@ -20,20 +20,12 @@ import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { requireActivation } from "../lib/activation.js";
-import { toBotError } from "../lib/errors.js";
-import {
-  cryptoSize,
-  price as fmtPrice,
-  num,
-  pct,
-  pnlEmoji,
-  signedUsd,
-  solscanUrl,
-  usd,
-} from "../lib/fmt.js";
+import { cryptoSize, price as fmtPrice, num, pct, pnlEmoji, signedUsd, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
+import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
+import { invalidateCtx } from "./tpsl.js";
 
 const CIRCLE_NUMS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
 
@@ -539,7 +531,7 @@ export function registerPositions(bot: Bot<BotContext>) {
 
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
 
-    await ctx.editMessageText("⏳ Adding margin…");
+    await ctx.editMessageText(CONFIRMING);
 
     const user = ctx.user;
     const chatId = ctx.chat?.id;
@@ -552,20 +544,22 @@ export function registerPositions(bot: Bot<BotContext>) {
       try {
         const s = await getSettings(user.id);
         const marginFee = getFeeConfig(s.feeMode, s.customFeeSol);
-        await addMargin(symbol, user.walletAddress, amount, marginFee);
-        const doneMsg = fmt`✅ Added ${FormattedString.b(usd(amount))} margin to ${FormattedString.b(symbol)}.`;
+        const sig = await addMargin(symbol, user.walletAddress, amount, marginFee);
+        // Margin/liq changed — drop the TP/SL Protect-screen cache for this symbol.
+        invalidateCtx(user.walletAddress, symbol, "long");
+        invalidateCtx(user.walletAddress, symbol, "short");
+        const body = fmt`${FormattedString.b(usd(amount))} added to ${FormattedString.b(symbol)}.`;
+        const doneMsg = txSuccess({ header: "Margin added", body, signature: sig });
         await api.editMessageText(chatId, msgId, doneMsg.text, {
           entities: doneMsg.entities,
+          ...TX_MSG_OPTS,
         });
       } catch (e) {
         logger.error({ err: e, symbol, amount }, "addMargin failed");
-        const be = toBotError(e);
-        const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-        const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-        const errorText = fmt`${FormattedString.b("❌ Add margin failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+        const { msg: errMsg } = txError(e, "Add margin");
         try {
-          await api.editMessageText(chatId, msgId, errorText.text, {
-            entities: errorText.entities,
+          await api.editMessageText(chatId, msgId, errMsg.text, {
+            entities: errMsg.entities,
           });
         } catch (editErr) {
           logger.warn({ err: editErr }, "failed to edit error message after addMargin failure");
@@ -588,10 +582,14 @@ async function executeClose(
   if (!ctx.user) return;
   const fraction = closePct / 100;
 
+  // Snapshot before closing so realized PnL is reportable even on a full close.
+  const pre = await getTraderState(ctx.user.walletAddress).catch(() => null);
+  const prePos = pre?.positions.find((p) => p.symbol === symbol && p.side === side) ?? null;
+
   if (ctx.callbackQuery) {
-    await ctx.editMessageText("⏳ Closing position…");
+    await ctx.editMessageText(CONFIRMING);
   } else {
-    await ctx.reply("⏳ Closing position…");
+    await ctx.reply(CONFIRMING);
   }
 
   const user = ctx.user;
@@ -608,13 +606,10 @@ async function executeClose(
     } catch (e) {
       logger.error({ err: e, symbol, fraction }, "closePosition failed");
       const kb = new InlineKeyboard().text("← Back", "nav:positions");
-      const be = toBotError(e);
-      const hintLine = be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``;
-      const retryLine = be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``;
-      const errorText = fmt`${FormattedString.b("❌ Close position failed")}\n\n${be.userMessage}${hintLine}${retryLine}`;
+      const { msg: errMsg } = txError(e, "Close position");
       try {
-        await api.editMessageText(chatId, msgId, errorText.text, {
-          entities: errorText.entities,
+        await api.editMessageText(chatId, msgId, errMsg.text, {
+          entities: errMsg.entities,
           reply_markup: kb,
         });
       } catch (editErr) {
@@ -622,13 +617,12 @@ async function executeClose(
       }
       return;
     }
+    // Position size changed — drop the TP/SL Protect-screen cache so it re-reads.
+    invalidateCtx(user.walletAddress, symbol, side);
 
-    const state = await getTraderState(user.walletAddress).catch(() => null);
-    const pos = state?.positions.find((p) => p.symbol === symbol && p.side === side);
-
-    if (pos) {
-      const markPrice = Number(pos.markPrice);
-      const totalSize = Number(pos.size);
+    if (prePos) {
+      const markPrice = Number(prePos.markPrice);
+      const totalSize = Number(prePos.size);
       const closingSize = totalSize * fraction;
       const notional = closingSize * markPrice;
       recordTrade({
@@ -656,13 +650,24 @@ async function executeClose(
             .text("📊 View position", `pos:detail:${symbol}:${side}`)
             .row()
             .text("📋 Positions", "nav:positions");
+
     const closedLabel = closePct === 100 ? "closed" : `${closePct}% closed`;
-    const successMsg = fmt`✅ ${FormattedString.b("Position closed")}\n\n${symbol} — ${FormattedString.b(closedLabel)}\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}`;
+    let resultBody = fmt`${symbol} — ${FormattedString.b(closedLabel)}`;
+    if (prePos) {
+      const realized = Number(prePos.unrealizedPnl) * fraction;
+      const margin =
+        (Number(prePos.entryPrice) * Number(prePos.size)) / Math.max(prePos.leverage ?? 1, 1);
+      const roi = margin > 0 ? (realized / margin) * 100 : null;
+      const sideLabel = prePos.side === "long" ? "Long" : "Short";
+      const roiPart = roi !== null ? FormattedString.i(`  (${pct(roi)})`) : fmt``;
+      resultBody = fmt`${symbol} ${sideLabel} — ${FormattedString.b(closedLabel)}\nRealized:  ${FormattedString.b(signedUsd(realized))} ${pnlEmoji(realized)}${roiPart}`;
+    }
+    const successMsg = txSuccess({ header: "Position closed", body: resultBody, signature: sig });
     try {
       await api.editMessageText(chatId, msgId, successMsg.text, {
         entities: successMsg.entities,
         reply_markup: afterKb,
-        link_preview_options: { is_disabled: true },
+        ...TX_MSG_OPTS,
       });
     } catch (editErr) {
       logger.warn(
@@ -671,17 +676,17 @@ async function executeClose(
       );
     }
 
-    if (pos) {
+    if (prePos) {
       try {
-        const pnl = Number(pos.unrealizedPnl) * fraction;
-        const leverage = pos.leverage ?? 1;
-        const margin = (Number(pos.entryPrice) * Number(pos.size)) / Math.max(leverage, 1);
+        const pnl = Number(prePos.unrealizedPnl) * fraction;
+        const leverage = prePos.leverage ?? 1;
+        const margin = (Number(prePos.entryPrice) * Number(prePos.size)) / Math.max(leverage, 1);
         const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
         const card = await generatePnlCard({
           symbol,
-          side: pos.side,
-          entryPrice: pos.entryPrice,
-          exitPrice: pos.markPrice,
+          side: prePos.side,
+          entryPrice: prePos.entryPrice,
+          exitPrice: prePos.markPrice,
           roiPercent: Number(roiPct),
           pnlUsdc: pnl,
         });

@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import type { MessageEntity } from "grammy/types";
 import { redis } from "../lib/redis.js";
 
 export const alertQueue = new Queue("alerts", {
@@ -17,6 +18,7 @@ export interface AlertJobData {
   telegramId: string;
   type: string;
   message: string;
+  entities?: MessageEntity[];
   symbol?: string;
   keyboard?: AlertButton[][];
 }

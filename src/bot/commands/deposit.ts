@@ -6,10 +6,10 @@ import { depositCollateral, getFeeConfig } from "../../services/phoenix/trade.js
 import { getSettings } from "../../services/settings.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { toBotError } from "../lib/errors.js";
-import { parseAmount, solscanUrl, usd } from "../lib/fmt.js";
+import { parseAmount, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
+import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 
 const MIN_DEPOSIT_USD = 1;
@@ -79,7 +79,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
       return;
     }
 
-    await ctx.editMessageText("⏳ Adding collateral…");
+    await ctx.editMessageText(CONFIRMING);
 
     const user = ctx.user;
     const chatId = ctx.chat?.id;
@@ -93,15 +93,16 @@ export function registerDeposit(bot: Bot<BotContext>) {
         const s = await getSettings(user.id);
         const fee = getFeeConfig(s.feeMode, s.customFeeSol);
         const sig = await depositCollateral(user.walletAddress, amountNative, fee);
-        const msg = fmt`✅ ${FormattedString.b("Collateral added")}\n\n${FormattedString.b(usd(amount))} is now in your trading account.\n\n${FormattedString.link("View on Solscan →", solscanUrl(sig))}\n\nYou're ready to trade — try /long or /short.`;
+        const body = fmt`${FormattedString.b(usd(amount))} is now in your trading account.`;
+        const footer = fmt`${FormattedString.i("You're ready to trade — try /long or /short.")}`;
+        const msg = txSuccess({ header: "Added to trading account", body, signature: sig, footer });
         await api.editMessageText(chatId, msgId, msg.text, {
           entities: msg.entities,
-          link_preview_options: { is_disabled: true },
+          ...TX_MSG_OPTS,
         });
       } catch (err) {
         logger.error({ err }, "Deposit collateral failed");
-        const be = toBotError(err);
-        const errMsg = fmt`${FormattedString.b("❌ Add collateral failed")}\n\n${be.userMessage}${be.hint ? fmt`\n${FormattedString.i(be.hint)}` : fmt``}${be.retryable ? fmt`\n\n↩️ ${FormattedString.i("Safe to retry.")}` : fmt``}`;
+        const { msg: errMsg } = txError(err, "Add to trading account");
         try {
           await api.editMessageText(chatId, msgId, errMsg.text, {
             entities: errMsg.entities,
@@ -130,16 +131,16 @@ export async function sendDepositScreen(ctx: BotContext): Promise<void> {
 
   const msg = fmt`📥 ${FormattedString.b("Deposit — Step 1 of 2")}
 
-Send ${FormattedString.b("USDC")} to your wallet:
+Send ${FormattedString.b("USDC")} to your bot wallet:
 ${FormattedString.code(walletAddress)}
 ${FormattedString.i("(tap to copy)")}
 
 ${FormattedString.b("How it works")}
 ${FormattedString.b("1.")} Send USDC here (this screen)
-${FormattedString.b("2.")} Tap continue to add it as collateral
+${FormattedString.b("2.")} Tap continue to move it into your trading account
 ${FormattedString.b("3.")} Start trading
 
-${FormattedString.i("Send USDC on Solana only. Also keep a small amount of SOL in your wallet — it's needed to pay transaction fees when trading.")}`;
+${FormattedString.i("Send USDC on Solana only. Also keep a small amount of SOL in your bot wallet — it's needed to pay transaction fees when trading.")}`;
 
   await ctx.replyWithPhoto(new InputFile(qr, "deposit-qr.png"), {
     caption: msg.caption,

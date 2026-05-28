@@ -151,10 +151,10 @@ export async function preflightOpen(input: PreflightInput): Promise<PreflightRes
       throw new BotError({
         category: "validation",
         code: "PRICE_DRIFT",
-        userMessage: `Price moved ${(drift * 100).toFixed(2)}% since you opened this quote.`,
-        hint: "Re-open the trade to see the new price.",
+        userMessage: `Price moved ${(drift * 100).toFixed(2)}% since your quote (your limit is ${(tolerance * 100).toFixed(2)}%).`,
+        hint: "Tap Refresh to requote, then confirm again.",
         retryable: true,
-        meta: { anchorPrice, currentPrice: snapshot.markPrice, slippageBps },
+        meta: { anchorPrice, currentPrice: snapshot.markPrice, slippageBps, driftPct: drift * 100 },
       });
     }
   }
