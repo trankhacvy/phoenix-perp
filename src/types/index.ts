@@ -72,3 +72,42 @@ export interface PhoenixFill {
   fee: string;
   timestamp: number;
 }
+
+export interface CachedPosition {
+  symbol: string;
+  side: "long" | "short";
+  sizeTokens: number;
+  basePositionLots: number;
+  entryPrice: number;
+  subaccountIndex: number;
+  unsettledFundingUsdc: number;
+  hasTp: boolean;
+  hasSl: boolean;
+}
+
+export interface AccountSnapshot {
+  walletAddress: string;
+  collateralBySub: Record<number, number>;
+  depositedCollateralUsdc: number;
+  positions: CachedPosition[];
+  sequenceBySub: Record<number, number>;
+  updatedAt: number;
+}
+
+export interface RestDerived {
+  riskTier: RiskTier;
+  effectiveCollateralUsdc: number;
+  liqPriceBySymbol: Record<string, number>;
+  updatedAt: number;
+}
+
+export interface DerivedPosition extends CachedPosition {
+  mark: number;
+  uPnl: number;
+  notional: number;
+}
+
+export interface DerivedMetrics {
+  positions: DerivedPosition[];
+  totalExposure: number;
+}

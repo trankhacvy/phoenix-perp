@@ -1,5 +1,21 @@
-import { type Authority, type PhoenixClient, createPhoenixClient } from "@ellipsis-labs/rise";
+import {
+  type Authority,
+  type PhoenixClient,
+  type PhoenixWsClient,
+  createPhoenixClient,
+  createPhoenixWsClient,
+} from "@ellipsis-labs/rise";
+import { WebSocket as NodeWebSocket } from "ws";
 import { config } from "../../config/index.js";
+import { logger } from "../../lib/logger.js";
+
+// The Rise WS client relies on a global `WebSocket`, which Node does not always
+// expose. Provide the `ws` implementation before the SDK opens a connection.
+function ensureWebSocketGlobal(): void {
+  if (typeof globalThis.WebSocket === "undefined") {
+    Object.assign(globalThis, { WebSocket: NodeWebSocket });
+  }
+}
 
 export type PhoenixRiseClient = PhoenixClient; //ReturnType<typeof createPhoenixClient>;
 
@@ -38,4 +54,23 @@ export function getTradingClient(): PhoenixRiseClient {
     });
   }
   return _tradingClient;
+}
+
+let _wsClient: PhoenixWsClient | null = null;
+
+export function getPhoenixWsClient(): PhoenixWsClient {
+  if (!_wsClient) {
+    ensureWebSocketGlobal();
+    _wsClient = createPhoenixWsClient({
+      url: config.PHOENIX_WS_URL,
+      backoff: { baseMs: 1000, maxMs: 30_000 },
+      onServerError: (message) => logger.error({ message }, "Phoenix WS server error"),
+    });
+  }
+  return _wsClient;
+}
+
+export function closePhoenixWsClient(): void {
+  _wsClient?.close();
+  _wsClient = null;
 }

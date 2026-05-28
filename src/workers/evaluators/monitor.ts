@@ -1,7 +1,13 @@
+import type { TraderStateTradeHistoryDelta } from "@ellipsis-labs/rise";
 import { type AlertButton, alertQueue } from "../../jobs/queues.js";
 import { isIsolatedOnly } from "../../services/phoenix/market.js";
-import type { PhoenixPosition, TraderStateEvent } from "../../types/index.js";
+import type { CachedPosition } from "../../types/index.js";
+import { fillSide } from "../trader-state-merge.js";
 import { esc } from "./shared.js";
+
+function fmtNum(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(4).replace(/\.?0+$/, "");
+}
 
 function copyCounterKb(
   symbol: string,
@@ -29,26 +35,22 @@ function traderKb(walletAddress: string): AlertButton[][] {
 export async function evaluateMonitorAlerts(
   walletAddress: string,
   watcherTelegramIds: string[],
-  event: TraderStateEvent,
-  prevPositions: PhoenixPosition[] | null,
+  positions: CachedPosition[],
+  prevPositions: CachedPosition[] | null,
 ) {
   if (!prevPositions) return;
 
-  const positions = event.positions ?? [];
-
+  const shortEsc = esc(walletAddress);
   const alerts: { type: string; symbol: string; message: string; keyboard?: AlertButton[][] }[] =
     [];
-
-  const shortEsc = esc(walletAddress);
 
   for (const pos of positions) {
     const existed = prevPositions.find((p) => p.symbol === pos.symbol);
     if (!existed) {
-      const levPart = pos.leverage ? ` · ${esc(pos.leverage)}x` : "";
       alerts.push({
         type: "monitor_open",
         symbol: pos.symbol,
-        message: `👁 <b>${shortEsc} opened ${esc(pos.symbol)}</b>\n${esc(pos.side.toUpperCase())} · ${esc(pos.size)} ${esc(pos.symbol)} @ $${esc(pos.entryPrice)}${levPart}`,
+        message: `👁 <b>${shortEsc} opened ${esc(pos.symbol)}</b>\n${esc(pos.side.toUpperCase())} · ${esc(fmtNum(pos.sizeTokens))} ${esc(pos.symbol)} @ $${esc(fmtNum(pos.entryPrice))}`,
         keyboard: copyCounterKb(pos.symbol, pos.side, walletAddress),
       });
     } else if (existed.side !== pos.side) {
@@ -67,19 +69,10 @@ export async function evaluateMonitorAlerts(
       alerts.push({
         type: "monitor_close",
         symbol: prevPos.symbol,
-        message: `👁 <b>${shortEsc} closed ${esc(prevPos.symbol)}</b>\nWas ${esc(prevPos.side.toUpperCase())} · ${esc(prevPos.size)} ${esc(prevPos.symbol)}`,
+        message: `👁 <b>${shortEsc} closed ${esc(prevPos.symbol)}</b>\nWas ${esc(prevPos.side.toUpperCase())} · ${esc(fmtNum(prevPos.sizeTokens))} ${esc(prevPos.symbol)}`,
         keyboard: traderKb(walletAddress),
       });
     }
-  }
-
-  for (const fill of event.fills ?? []) {
-    alerts.push({
-      type: "monitor_fill",
-      symbol: fill.symbol,
-      message: `👁 <b>${shortEsc} filled ${esc(fill.symbol)}</b>\n${esc(fill.side.toUpperCase())} · ${esc(fill.size)} @ $${esc(fill.price)}`,
-      keyboard: traderKb(walletAddress),
-    });
   }
 
   for (const telegramId of watcherTelegramIds) {
@@ -90,6 +83,26 @@ export async function evaluateMonitorAlerts(
         symbol: alert.symbol,
         message: alert.message,
         keyboard: alert.keyboard,
+      });
+    }
+  }
+}
+
+export function emitMonitorFills(
+  walletAddress: string,
+  watcherTelegramIds: string[],
+  fills: TraderStateTradeHistoryDelta[],
+) {
+  const shortEsc = esc(walletAddress);
+  for (const telegramId of watcherTelegramIds) {
+    for (const fill of fills) {
+      const verb = fillSide(fill) === "long" ? "BUY" : "SELL";
+      void alertQueue.add("monitor-fill", {
+        telegramId,
+        type: "monitor_fill",
+        symbol: fill.market,
+        message: `👁 <b>${shortEsc} filled ${esc(fill.market)}</b>\n${verb} · ${esc(fill.size)} @ $${esc(Number(fill.price).toFixed(4))} (${esc(fill.liquidity)})`,
+        keyboard: [[{ text: "📊 Trader", callback_data: `walletinfo:back:${walletAddress}` }]],
       });
     }
   }

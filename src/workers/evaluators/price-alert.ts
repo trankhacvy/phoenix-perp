@@ -1,19 +1,16 @@
 import { and, eq } from "drizzle-orm";
-import WebSocket from "ws";
-import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { alertSubscriptions, users } from "../../db/schema/index.js";
 import { alertQueue } from "../../jobs/queues.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
+import { onMids } from "../../services/phoenix/price-feed.js";
 import { esc } from "./shared.js";
 
-let allMidsWs: WebSocket | null = null;
-let allMidsReconnecting = false;
 let priceAlertCheckRunning = false;
 let lastPriceAlertCheckMs = 0;
 const PRICE_ALERT_THROTTLE_MS = 1000;
-let shuttingDown = false;
+let unsubscribe: (() => void) | null = null;
 
 interface PriceAlertSub {
   id: string;
@@ -50,12 +47,12 @@ export function bustPriceAlertCache() {
   _priceAlertCache = null;
 }
 
-async function checkPriceAlerts(mids: Record<string, number>) {
+export async function checkPriceAlerts(mids: ReadonlyMap<string, number>) {
   const subs = await getPriceAlertSubs();
 
   for (const sub of subs) {
     if (!sub.symbol || !sub.triggerPrice) continue;
-    const current = mids[sub.symbol];
+    const current = mids.get(sub.symbol.toUpperCase());
     if (current === undefined) continue;
 
     const trigger = Number(sub.triggerPrice);
@@ -99,51 +96,24 @@ async function checkPriceAlerts(mids: Record<string, number>) {
   }
 }
 
-function subscribeAllMids() {
-  if (allMidsWs) return;
-  allMidsWs = new WebSocket(config.PHOENIX_WS_URL);
-
-  allMidsWs.on("open", () => {
-    allMidsWs?.send(JSON.stringify({ type: "subscribe", subscription: { channel: "allMids" } }));
-    logger.info("WS subscribed: allMids");
-  });
-
-  allMidsWs.on("message", async (raw) => {
+export function startPriceAlertWatcher() {
+  if (unsubscribe) return;
+  unsubscribe = onMids(async (mids) => {
     const now = Date.now();
     if (priceAlertCheckRunning || now - lastPriceAlertCheckMs < PRICE_ALERT_THROTTLE_MS) return;
     priceAlertCheckRunning = true;
     lastPriceAlertCheckMs = now;
     try {
-      const data = JSON.parse(raw.toString()) as Record<string, number>;
-      await checkPriceAlerts(data);
+      await checkPriceAlerts(mids);
     } catch (err) {
-      logger.error({ err }, "allMids parse error");
+      logger.error({ err }, "price alert check failed");
     } finally {
       priceAlertCheckRunning = false;
     }
   });
-
-  allMidsWs.on("close", () => {
-    allMidsWs = null;
-    if (shuttingDown || allMidsReconnecting) return;
-    allMidsReconnecting = true;
-    setTimeout(() => {
-      allMidsReconnecting = false;
-      if (!shuttingDown) subscribeAllMids();
-    }, 5000);
-  });
-
-  allMidsWs.on("error", (err) => {
-    logger.error({ err }, "allMids WS error");
-  });
-}
-
-export function startPriceAlertWatcher() {
-  shuttingDown = false;
-  subscribeAllMids();
 }
 
 export function stopPriceAlertWatcher() {
-  shuttingDown = true;
-  if (allMidsWs) allMidsWs.close();
+  unsubscribe?.();
+  unsubscribe = null;
 }

@@ -1,15 +1,19 @@
 import { toBotError } from "../../bot/lib/errors.js";
 import { solscanUrl } from "../../bot/lib/fmt.js";
 import type { GuardianRule } from "../../db/schema/guardian.js";
-import type { AlertButton } from "../../jobs/queues.js";
-import { alertQueue } from "../../jobs/queues.js";
+import { type AlertButton, alertQueue } from "../../jobs/queues.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getActiveRules, markTriggered } from "../../services/guardian.js";
-import { getMarketSnapshot } from "../../services/phoenix/market.js";
+import { getStats } from "../../services/phoenix/market-stats-feed.js";
 import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
-import type { PhoenixPosition, TraderStateEvent } from "../../types/index.js";
+import type {
+  AccountSnapshot,
+  DerivedMetrics,
+  DerivedPosition,
+  RestDerived,
+} from "../../types/index.js";
 import { esc } from "./shared.js";
 
 interface PeakRecord {
@@ -37,7 +41,9 @@ export interface EvalContext {
   userId: string;
   telegramId: string;
   walletAddress: string;
-  event: TraderStateEvent;
+  snapshot: AccountSnapshot;
+  derived: DerivedMetrics;
+  rest: RestDerived | undefined;
 }
 
 export async function evaluateGuardianRules(ctx: EvalContext) {
@@ -51,7 +57,7 @@ export async function evaluateGuardianRules(ctx: EvalContext) {
         if (elapsed < rule.cooldownSec * 1000) continue;
       }
 
-      const allPositions = ctx.event.positions ?? [];
+      const allPositions = ctx.derived.positions;
       const positions = rule.symbol
         ? allPositions.filter((p) => p.symbol === rule.symbol)
         : allPositions;
@@ -85,25 +91,28 @@ export async function evaluateGuardianRules(ctx: EvalContext) {
 }
 
 interface CheckResult {
-  triggerPosition: PhoenixPosition | null;
+  triggerPosition: DerivedPosition | null;
   detail: string;
+}
+
+function marginForPosition(pos: DerivedPosition, snapshot: AccountSnapshot): number {
+  return snapshot.collateralBySub[pos.subaccountIndex] ?? snapshot.depositedCollateralUsdc;
 }
 
 async function checkRule(
   rule: GuardianRule,
-  positions: PhoenixPosition[],
+  positions: DerivedPosition[],
   ctx: EvalContext,
 ): Promise<CheckResult | null> {
   const threshold = Number(rule.threshold);
 
   switch (rule.ruleType) {
     case "liq_distance": {
+      if (!ctx.rest) return null;
       for (const pos of positions) {
-        if (pos.liquidationPrice === "N/A") continue;
-        const mark = Number(pos.markPrice);
-        const liq = Number(pos.liquidationPrice);
-        if (mark === 0) continue;
-        const dist = (Math.abs(mark - liq) / mark) * 100;
+        const liq = ctx.rest.liqPriceBySymbol[pos.symbol] ?? 0;
+        if (liq <= 0 || pos.mark <= 0) continue;
+        const dist = (Math.abs(pos.mark - liq) / pos.mark) * 100;
         if (dist < threshold) {
           return {
             triggerPosition: pos,
@@ -116,7 +125,7 @@ async function checkRule(
 
     case "drawdown": {
       for (const pos of positions) {
-        const currentPnl = Number(pos.unrealizedPnl);
+        const currentPnl = pos.uPnl;
         const peak = await getPeak(ctx.userId, pos.symbol);
 
         if (!peak || currentPnl > peak.peakPnl) {
@@ -140,9 +149,9 @@ async function checkRule(
 
     case "pnl_target": {
       for (const pos of positions) {
-        const margin = estimateMargin(pos);
-        if (margin === 0) continue;
-        const pnlPct = (Number(pos.unrealizedPnl) / margin) * 100;
+        const margin = marginForPosition(pos, ctx.snapshot);
+        if (margin <= 0) continue;
+        const pnlPct = (pos.uPnl / margin) * 100;
         if (rule.direction === "above" && pnlPct >= threshold) {
           return {
             triggerPosition: pos,
@@ -161,31 +170,24 @@ async function checkRule(
 
     case "funding_drain": {
       for (const pos of positions) {
-        try {
-          const snap = await getMarketSnapshot(pos.symbol);
-          const notional = Number(pos.size) * Number(pos.markPrice);
-          const dailyCost = Math.abs(snap.fundingRate) * notional * 24;
-          if (dailyCost >= threshold) {
-            return {
-              triggerPosition: pos,
-              detail: `Daily funding: $${dailyCost.toFixed(2)} (limit: $${threshold})`,
-            };
-          }
-        } catch {
-          // skip this position
+        const stats = getStats(pos.symbol);
+        if (!stats) continue;
+        const dailyCost = (Math.abs(stats.annualizedFunding) * pos.notional) / 365;
+        if (dailyCost >= threshold) {
+          return {
+            triggerPosition: pos,
+            detail: `Daily funding: $${dailyCost.toFixed(2)} (limit: $${threshold})`,
+          };
         }
       }
       return null;
     }
 
     case "exposure_limit": {
-      const totalNotional = ctx.event.positions.reduce(
-        (sum, p) => sum + Math.abs(Number(p.size)) * Number(p.markPrice),
-        0,
-      );
+      const totalNotional = ctx.derived.totalExposure;
       if (totalNotional >= threshold) {
         return {
-          triggerPosition: ctx.event.positions[0] ?? null,
+          triggerPosition: ctx.derived.positions[0] ?? null,
           detail: `Total exposure: $${totalNotional.toFixed(2)} (limit: $${threshold})`,
         };
       }
@@ -193,15 +195,13 @@ async function checkRule(
     }
 
     case "margin_ratio": {
-      const totalExposure = ctx.event.positions.reduce(
-        (sum, p) => sum + Math.abs(Number(p.size)) * Number(p.markPrice),
-        0,
-      );
+      if (!ctx.rest) return null;
+      const totalExposure = ctx.derived.totalExposure;
       if (totalExposure === 0) return null;
-      const ratio = (Number(ctx.event.effectiveCollateral) / totalExposure) * 100;
+      const ratio = (ctx.rest.effectiveCollateralUsdc / totalExposure) * 100;
       if (ratio < threshold) {
         return {
-          triggerPosition: ctx.event.positions[0] ?? null,
+          triggerPosition: ctx.derived.positions[0] ?? null,
           detail: `Margin ratio: ${ratio.toFixed(1)}% (min: ${threshold}%)`,
         };
       }
@@ -211,12 +211,6 @@ async function checkRule(
     default:
       return null;
   }
-}
-
-function estimateMargin(pos: PhoenixPosition): number {
-  const notional = Number(pos.size) * Number(pos.markPrice);
-  const lev = pos.leverage ?? 1;
-  return lev > 0 ? notional / lev : notional;
 }
 
 function timeSince(tsMs: number): string {
@@ -273,7 +267,7 @@ async function queueGuardianAlert(rule: GuardianRule, result: CheckResult, ctx: 
 
 async function executeAutoAction(
   rule: GuardianRule,
-  triggerPosition: PhoenixPosition | null,
+  triggerPosition: DerivedPosition | null,
   ctx: EvalContext,
 ) {
   const lockKey = `guardian:auto:lock:${ctx.userId}`;

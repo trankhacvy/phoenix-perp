@@ -1,20 +1,19 @@
 import { alertQueue } from "../../jobs/queues.js";
 import { redis } from "../../lib/redis.js";
-import type { PhoenixPosition, TraderStateEvent } from "../../types/index.js";
+import type { CachedPosition } from "../../types/index.js";
 import { esc, isAlertEnabled } from "./shared.js";
 
 const TPSL_DEDUP_TTL = 60;
 
 export async function evaluatePositionFlip(
-  _walletAddress: string,
   telegramId: string,
   userId: string,
-  event: TraderStateEvent,
-  prevPositions: PhoenixPosition[] | null,
+  positions: CachedPosition[],
+  prevPositions: CachedPosition[] | null,
 ) {
   if (!prevPositions) return;
 
-  for (const pos of event.positions ?? []) {
+  for (const pos of positions) {
     const prevPos = prevPositions.find((p) => p.symbol === pos.symbol);
     if (!prevPos || prevPos.side === pos.side) continue;
 

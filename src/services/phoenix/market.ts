@@ -3,7 +3,12 @@ import { logger } from "../../lib/logger.js";
 import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
 
-export const ISOLATED_ONLY_MARKETS = new Set(["GOLD", "SILVER", "SKR", "WTIOIL"]);
+export const ISOLATED_ONLY_MARKETS = new Set([
+  "GOLD",
+  "SILVER",
+  "SKR",
+  "WTIOIL",
+]);
 
 let _exchangeCache: { data: ExchangeConfig; ts: number } | null = null;
 const EXCHANGE_TTL_MS = 5 * 60_000;
@@ -12,13 +17,17 @@ export async function getExchangeConfig(): Promise<ExchangeConfig> {
   if (_exchangeCache && Date.now() - _exchangeCache.ts < EXCHANGE_TTL_MS) {
     return _exchangeCache.data;
   }
-  const data = await withRetry(() => getPhoenixClient().api.exchange().getExchange());
+  const data = await withRetry(() =>
+    getPhoenixClient().api.exchange().getExchange(),
+  );
   _exchangeCache = { data, ts: Date.now() };
   return data;
 }
 
 export async function getMarkets(): Promise<ExchangeMarketConfig[]> {
   const exchange = await getExchangeConfig();
+
+  // console.dir(exchange, { depth: null });
   return exchange.markets;
 }
 
@@ -32,7 +41,9 @@ export async function getMarket(symbol: string): Promise<ExchangeMarketConfig> {
 
 export function isIsolatedOnly(symbol: string): boolean {
   if (_exchangeCache) {
-    const market = _exchangeCache.data.markets.find((m) => m.symbol === symbol.toUpperCase());
+    const market = _exchangeCache.data.markets.find(
+      (m) => m.symbol === symbol.toUpperCase(),
+    );
     if (market) return market.isolatedOnly;
   }
   return ISOLATED_ONLY_MARKETS.has(symbol.toUpperCase());
@@ -88,7 +99,8 @@ async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
       .catch(() => null),
   ]);
 
-  const maxLeverage = market.leverageTiers.length > 0 ? market.leverageTiers[0].maxLeverage : 20;
+  const maxLeverage =
+    market.leverageTiers.length > 0 ? market.leverageTiers[0].maxLeverage : 20;
   const fundingRate = fundingHistory?.rates?.[0]
     ? Number(fundingHistory.rates[0].fundingRatePercentage) / 100
     : 0;
@@ -117,7 +129,9 @@ async function _getMarketSnapshot(symbol: string): Promise<MarketSnapshot> {
 export async function getMarketListItems(
   markets: ExchangeMarketConfig[],
 ): Promise<MarketListItem[]> {
-  const results = await Promise.allSettled(markets.map((m) => getMarketSnapshot(m.symbol)));
+  const results = await Promise.allSettled(
+    markets.map((m) => getMarketSnapshot(m.symbol)),
+  );
   return results.map((r, i) =>
     r.status === "fulfilled"
       ? {
@@ -132,7 +146,9 @@ export async function getMarketListItems(
           markPrice: 0,
           fundingRate: 0,
           maxLeverage:
-            markets[i].leverageTiers.length > 0 ? markets[i].leverageTiers[0].maxLeverage : 20,
+            markets[i].leverageTiers.length > 0
+              ? markets[i].leverageTiers[0].maxLeverage
+              : 20,
           isIsolatedOnly: isIsolatedOnly(markets[i].symbol),
         },
   );
@@ -143,7 +159,9 @@ export async function getOrderbook(symbol: string) {
 }
 
 export async function getFundingRateHistory(symbol: string, limit = 24) {
-  return getPhoenixClient().api.funding().getFundingRateHistory(symbol.toUpperCase(), { limit });
+  return getPhoenixClient()
+    .api.funding()
+    .getFundingRateHistory(symbol.toUpperCase(), { limit });
 }
 
 export async function getMarketStatsHistory(symbol: string, limit = 1) {
@@ -161,7 +179,9 @@ let _refreshTimer: ReturnType<typeof setInterval> | null = null;
 async function refreshAllSnapshots(): Promise<void> {
   const markets = await getMarkets().catch(() => null);
   if (!markets) return;
-  await Promise.allSettled(markets.map((m) => getMarketSnapshot(m.symbol, { skipCache: true })));
+  await Promise.allSettled(
+    markets.map((m) => getMarketSnapshot(m.symbol, { skipCache: true })),
+  );
 }
 
 export function startMarketRefresher(): void {

@@ -8,8 +8,14 @@ import { db } from "./db/index.js";
 import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
+import { closePhoenixWsClient } from "./services/phoenix/client.js";
+import { stopMarketStatsFeed } from "./services/phoenix/market-stats-feed.js";
 import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
+import { startPriceFeed, stopPriceFeed } from "./services/phoenix/price-feed.js";
+import { startEvalLoop, stopEvalLoop } from "./workers/eval-loop.js";
+import { startPriceAlertWatcher, stopPriceAlertWatcher } from "./workers/evaluators/price-alert.js";
 import { startLeaderboardScanner, stopLeaderboardScanner } from "./workers/leaderboard.js";
+import { startRestRefreshLoop, stopRestRefreshLoop } from "./workers/rest-refresh.js";
 import { startWsManager, stopWsManager } from "./workers/ws.js";
 
 const ACTION_LOG_RETENTION_DAYS = 30;
@@ -36,6 +42,10 @@ async function main() {
 
   startAlertWorker();
   startMarketRefresher();
+  startRestRefreshLoop();
+  startPriceFeed();
+  startPriceAlertWatcher();
+  startEvalLoop();
 
   await startWsManager();
 
@@ -102,7 +112,13 @@ async function shutdown() {
   await bot.stop();
   if (server) await server.close();
   stopWsManager();
+  stopEvalLoop();
+  stopPriceAlertWatcher();
+  stopPriceFeed();
+  stopMarketStatsFeed();
+  stopRestRefreshLoop();
   stopMarketRefresher();
+  closePhoenixWsClient();
   await Promise.all([stopAlertWorker(), stopLeaderboardScanner()]);
   process.exit(0);
 }

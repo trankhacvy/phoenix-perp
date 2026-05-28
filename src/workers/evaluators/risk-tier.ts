@@ -2,7 +2,7 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { MessageEntity } from "grammy/types";
 import { type AlertButton, alertQueue } from "../../jobs/queues.js";
 import { redis } from "../../lib/redis.js";
-import type { RiskTier, TraderStateEvent } from "../../types/index.js";
+import type { CachedPosition, RestDerived, RiskTier } from "../../types/index.js";
 import { isAlertEnabled } from "./shared.js";
 
 const RISK_DEDUP_TTL = 300;
@@ -29,9 +29,7 @@ function riskAlertType(tier: RiskTier): string {
   return "liquidatable";
 }
 
-// One open position → offer the two fastest de-risk actions inline.
-function riskKb(event: TraderStateEvent): AlertButton[][] {
-  const positions = event.positions ?? [];
+function riskKb(positions: CachedPosition[]): AlertButton[][] {
   if (positions.length === 1) {
     const p = positions[0];
     return [
@@ -50,10 +48,10 @@ function riskKb(event: TraderStateEvent): AlertButton[][] {
   ];
 }
 
-function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
-  if (!RISK_ALERT_TIERS.includes(event.riskTier)) return null;
-  const col = FormattedString.b(`$${Number(event.effectiveCollateral).toFixed(2)}`);
-  const tier = event.riskTier;
+function buildRiskAlert(rest: RestDerived, positions: CachedPosition[]): AlertPayload | null {
+  const tier = rest.riskTier;
+  if (!RISK_ALERT_TIERS.includes(tier)) return null;
+  const col = FormattedString.b(`$${rest.effectiveCollateralUsdc.toFixed(2)}`);
 
   const messages: Partial<Record<RiskTier, FormattedString>> = {
     atRisk: fmt`⚠️ ${FormattedString.b("Margin Low")}\n\nYour collateral (${col}) dropped below initial margin.\nYou can't open new positions until you add funds or close existing ones.`,
@@ -69,27 +67,28 @@ function buildRiskAlert(event: TraderStateEvent): AlertPayload | null {
   return {
     message: msg.text,
     entities: msg.entities,
-    keyboard: riskKb(event),
+    keyboard: riskKb(positions),
     alertType: riskAlertType(tier),
   };
 }
 
 export async function evaluateRiskTier(
-  _walletAddress: string,
   telegramId: string,
   userId: string,
-  event: TraderStateEvent,
+  rest: RestDerived | undefined,
+  positions: CachedPosition[],
 ) {
-  const riskAlert = buildRiskAlert(event);
+  if (!rest) return;
+  const riskAlert = buildRiskAlert(rest, positions);
   if (!riskAlert) return;
 
   if (!(await isAlertEnabled(userId, riskAlert.alertType))) return;
 
-  const symbols = (event.positions ?? []).map((p) => p.symbol).join(",");
   const dedupKey = `ws:dedup:${telegramId}:risk:${riskAlert.alertType}`;
   const isNew = await redis.set(dedupKey, "1", "EX", RISK_DEDUP_TTL, "NX");
   if (!isNew) return;
 
+  const symbols = positions.map((p) => p.symbol).join(",");
   await alertQueue.add("risk-tier", {
     telegramId,
     type: riskAlert.alertType,
