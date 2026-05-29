@@ -1,5 +1,6 @@
 import { ATR, BollingerBands, MACD, RSI } from "technicalindicators";
 import { getPhoenixClient } from "./client.js";
+import { acquirePhoenixRest } from "./rest-limit.js";
 
 export interface Candle {
   timestamp: number;
@@ -11,6 +12,7 @@ export interface Candle {
 }
 
 export async function getCandles(symbol: string, timeframe = "1h", limit = 60): Promise<Candle[]> {
+  await acquirePhoenixRest();
   const raw = await getPhoenixClient()
     .api.candles()
     .getCandles(symbol.toUpperCase(), { timeframe, limit })

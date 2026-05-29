@@ -9,8 +9,7 @@ import { startAlertWorker, stopAlertWorker } from "./jobs/processors/alert.js";
 import { logger } from "./lib/logger.js";
 import { createServer } from "./server/index.js";
 import { closePhoenixWsClient } from "./services/phoenix/client.js";
-import { stopMarketStatsFeed } from "./services/phoenix/market-stats-feed.js";
-import { startMarketRefresher, stopMarketRefresher } from "./services/phoenix/market.js";
+import { startAllMarketStats, stopMarketStatsFeed } from "./services/phoenix/market-stats-feed.js";
 import { startPriceFeed, stopPriceFeed } from "./services/phoenix/price-feed.js";
 import { startEvalLoop, stopEvalLoop } from "./workers/eval-loop.js";
 import { startPriceAlertWatcher, stopPriceAlertWatcher } from "./workers/evaluators/price-alert.js";
@@ -41,9 +40,9 @@ async function main() {
   startActionLogRetention();
 
   startAlertWorker();
-  startMarketRefresher();
   startRestRefreshLoop();
   startPriceFeed();
+  startAllMarketStats();
   startPriceAlertWatcher();
   startEvalLoop();
 
@@ -69,7 +68,6 @@ async function main() {
       { command: "guardian", description: "Risk rules & auto-protection" },
       { command: "alerts", description: "Toggle alert types" },
       { command: "settings", description: "Slippage & leverage defaults" },
-      { command: "funding", description: "Top funding rates" },
       { command: "leaderboard", description: "Top traders" },
       { command: "help", description: "All commands & help" },
     ]);
@@ -117,7 +115,6 @@ async function shutdown() {
   stopPriceFeed();
   stopMarketStatsFeed();
   stopRestRefreshLoop();
-  stopMarketRefresher();
   closePhoenixWsClient();
   await Promise.all([stopAlertWorker(), stopLeaderboardScanner()]);
   process.exit(0);

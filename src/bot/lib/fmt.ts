@@ -128,3 +128,24 @@ export function fundingTrend(rates: number[]): string {
   if (avgDelta < 0) return "↓";
   return "→";
 }
+
+// Live marketStats funding values are already percentages — append %, no scaling.
+export function fundingAnnual(pctPerYear: number): string {
+  const sign = pctPerYear >= 0 ? "+" : "";
+  return `${sign}${num(pctPerYear, 1, 2)}%/yr`;
+}
+
+export function fundingHourly(pctPerHour: number): string {
+  const sign = pctPerHour >= 0 ? "+" : "";
+  return `${sign}${num(pctPerHour, 4, 4)}%/h`;
+}
+
+export function change24h(pctValue: number): string {
+  const arrow = pctValue >= 0 ? "▲" : "▼";
+  return `${arrow} ${num(Math.abs(pctValue), 2, 2)}%`;
+}
+
+export function fundingDotAnnual(annualPct: number): string {
+  if (Math.abs(annualPct) < 1) return "⚪";
+  return annualPct >= 0 ? "🟢" : "🔴";
+}

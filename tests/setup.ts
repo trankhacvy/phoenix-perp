@@ -2,6 +2,7 @@ process.env.NODE_ENV = "test";
 process.env.TELEGRAM_BOT_TOKEN = "test:token";
 process.env.PRIVY_APP_ID = "test-privy-app";
 process.env.PRIVY_APP_SECRET = "test-privy-secret";
+process.env.PRIVY_AUTHORIZATION_PRIVATE_KEY = "test-privy-authorization-key";
 process.env.BUILDER_AUTHORITY_PUBKEY = "11111111111111111111111111111111";
 process.env.BUILDER_ACCESS_CODE = "test-code";
 process.env.HELIUS_RPC_URL = "https://rpc.example.com";

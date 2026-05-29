@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { fundingDailyUsd, liqDistanceLabel } from "../../../src/bot/lib/fmt.js";
+import {
+  change24h,
+  fundingAnnual,
+  fundingDailyUsd,
+  fundingDotAnnual,
+  fundingHourly,
+  liqDistanceLabel,
+} from "../../../src/bot/lib/fmt.js";
 
 describe("fundingDailyUsd", () => {
   it("computes positive rate correctly (24 hourly periods/day)", () => {
@@ -16,6 +23,31 @@ describe("fundingDailyUsd", () => {
 
   it("formats small values with two decimals", () => {
     expect(fundingDailyUsd(0.00001, 1000)).toBe("$0.24/day");
+  });
+});
+
+describe("marketStats funding formatters (values are already percentages)", () => {
+  it("fundingAnnual appends %/yr with sign, no scaling", () => {
+    expect(fundingAnnual(21.41)).toBe("+21.41%/yr");
+    expect(fundingAnnual(0)).toBe("+0.0%/yr");
+    expect(fundingAnnual(-5)).toBe("-5.0%/yr");
+  });
+
+  it("fundingHourly keeps 4 decimals with sign, no scaling", () => {
+    expect(fundingHourly(0.0024)).toBe("+0.0024%/h");
+    expect(fundingHourly(-0.0012)).toBe("-0.0012%/h");
+  });
+
+  it("change24h shows arrow + absolute percent", () => {
+    expect(change24h(1.51)).toBe("▲ 1.51%");
+    expect(change24h(-2)).toBe("▼ 2.00%");
+    expect(change24h(0)).toBe("▲ 0.00%");
+  });
+
+  it("fundingDotAnnual keys off annualized magnitude", () => {
+    expect(fundingDotAnnual(21)).toBe("🟢");
+    expect(fundingDotAnnual(-21)).toBe("🔴");
+    expect(fundingDotAnnual(0.5)).toBe("⚪");
   });
 });
 

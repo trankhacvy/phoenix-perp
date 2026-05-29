@@ -1,5 +1,3 @@
-import WebSocket from "ws";
-import { config } from "../config/index.js";
 import { logger } from "../lib/logger.js";
 import { TokenBucket } from "../lib/rate-limiter.js";
 import { redis } from "../lib/redis.js";
@@ -13,13 +11,13 @@ import {
   upsertAndHydrateWallet,
 } from "../services/leaderboard.js";
 import { getMarkets } from "../services/phoenix/market.js";
+import { subscribeMarketTakers } from "../services/phoenix/trades-feed.js";
 
 const log = logger.child({ worker: "leaderboard" });
 
 const SCAN_INTERVAL_MS = 30 * 60 * 1000;
 const HISTORY_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const WS_DEDUP_TTL = 3600;
-const MAX_RECONNECT_FAILURES = 3;
 
 // Worker rate limiter: 0.5 wallets/sec sustained (1 every 2s), burst up to 2.
 // Each wallet = 1-3 Phoenix API calls → keeps worker at ~1-2 req/s.
@@ -31,82 +29,31 @@ let scanInFlight: Promise<void> | null = null;
 let scanIntervalId: ReturnType<typeof setInterval> | null = null;
 let historyIntervalId: ReturnType<typeof setInterval> | null = null;
 
-const tradeWsConnections = new Map<string, WebSocket>();
-const reconnectFailures = new Map<string, number>();
+const tradeUnsubs = new Map<string, () => void>();
+
+function handleDiscoveredTaker(symbol: string, taker: string) {
+  void (async () => {
+    try {
+      const isNew = await redis.set(`lb:known:${taker}`, "1", "EX", WS_DEDUP_TTL, "NX");
+      if (!isNew) return;
+      log.debug({ taker, symbol }, "New trader discovered via WS");
+      await upsertAndHydrateWallet(taker, workerRateLimiter);
+    } catch (err) {
+      log.warn({ taker, symbol, err }, "Failed to process discovered trader");
+    }
+  })();
+}
 
 function subscribeTradesForMarket(symbol: string) {
-  if (shuttingDown) return;
-
-  const ws = new WebSocket(config.PHOENIX_WS_URL);
-
-  ws.on("open", () => {
-    reconnectFailures.delete(symbol);
-    ws.send(
-      JSON.stringify({
-        type: "subscribe",
-        subscription: { channel: "trades", symbol },
-      }),
-    );
-    log.debug({ symbol }, "WS trades subscribed");
-  });
-
-  ws.on("message", async (raw) => {
-    let msg: { channel?: string; trades?: { taker?: string }[] };
-    try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-    if (msg.channel !== "trades" || !msg.trades) return;
-
-    for (const trade of msg.trades) {
-      const taker = trade.taker;
-      if (!taker) continue;
-
-      try {
-        const dedupKey = `lb:known:${taker}`;
-        const isNew = await redis.set(dedupKey, "1", "EX", WS_DEDUP_TTL, "NX");
-        if (!isNew) continue;
-
-        log.debug({ taker, symbol }, "New trader discovered via WS");
-        await upsertAndHydrateWallet(taker, workerRateLimiter);
-      } catch (err) {
-        log.warn({ taker, symbol, err }, "Failed to process discovered trader");
-      }
-    }
-  });
-
-  ws.on("close", () => {
-    tradeWsConnections.delete(symbol);
-    if (shuttingDown) return;
-
-    const failures = (reconnectFailures.get(symbol) ?? 0) + 1;
-    reconnectFailures.set(symbol, failures);
-
-    if (failures > MAX_RECONNECT_FAILURES) {
-      log.error({ symbol, failures }, "WS trades max reconnect failures reached, giving up");
-      return;
-    }
-
-    log.warn({ symbol, failures }, "WS trades connection closed, reconnecting in 5s");
-    setTimeout(() => subscribeTradesForMarket(symbol), 5000);
-  });
-
-  ws.on("error", (err) => {
-    log.error({ symbol, err: err.message }, "WS trades error");
-  });
-
-  tradeWsConnections.set(symbol, ws);
+  if (shuttingDown || tradeUnsubs.has(symbol)) return;
+  const unsub = subscribeMarketTakers(symbol, (taker) => handleDiscoveredTaker(symbol, taker));
+  tradeUnsubs.set(symbol, unsub);
 }
 
 async function subscribeAllMarketTrades() {
   try {
     const markets = await getMarkets();
-    for (const m of markets) {
-      if (!tradeWsConnections.has(m.symbol)) {
-        subscribeTradesForMarket(m.symbol);
-      }
-    }
+    for (const m of markets) subscribeTradesForMarket(m.symbol);
     log.info({ count: markets.length }, "WS trades subscriptions started");
   } catch (err) {
     log.error({ err }, "Failed to subscribe to market trades");
@@ -239,13 +186,14 @@ export async function stopLeaderboardScanner() {
   shuttingDown = true;
   if (scanIntervalId) clearInterval(scanIntervalId);
   if (historyIntervalId) clearInterval(historyIntervalId);
-  for (const [, ws] of tradeWsConnections) ws.close();
+  for (const [, unsub] of tradeUnsubs) unsub();
+  tradeUnsubs.clear();
   if (scanInFlight) await scanInFlight.catch(() => {});
 }
 
 export function getLeaderboardScannerStats() {
   return {
-    wsConnections: tradeWsConnections.size,
+    tradeSubscriptions: tradeUnsubs.size,
     isScanning: scanInFlight !== null,
   };
 }

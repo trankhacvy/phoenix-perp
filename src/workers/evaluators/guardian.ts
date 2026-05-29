@@ -172,7 +172,7 @@ async function checkRule(
       for (const pos of positions) {
         const stats = getStats(pos.symbol);
         if (!stats) continue;
-        const dailyCost = (Math.abs(stats.annualizedFunding) * pos.notional) / 365;
+        const dailyCost = ((Math.abs(stats.fundingAnnualPct) / 100) * pos.notional) / 365;
         if (dailyCost >= threshold) {
           return {
             triggerPosition: pos,

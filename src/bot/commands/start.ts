@@ -59,8 +59,9 @@ export function registerStart(bot: Bot<BotContext>) {
         const parts = payload.slice(4).split("_");
         const symbol = parts[0]?.toUpperCase();
         const fromPage = Number(parts[1] ?? "0");
+        const sort = parts[2] === "funding" || parts[2] === "chg" ? parts[2] : "vol";
         if (symbol) {
-          await sendMarketDetail(ctx, symbol, Number.isNaN(fromPage) ? 0 : fromPage);
+          await sendMarketDetail(ctx, symbol, Number.isNaN(fromPage) ? 0 : fromPage, sort);
           return;
         }
       }

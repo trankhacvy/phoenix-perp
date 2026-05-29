@@ -3,57 +3,70 @@ import { getPhoenixWsClient } from "./client.js";
 
 export interface MarketStatsLive {
   markPrice: number;
-  annualizedFunding: number;
-  eightHourFunding: number;
+  oraclePrice: number;
+  prevDayMarkPrice: number;
+  dayVolumeUsd: number;
+  openInterestBase: number;
+  fundingHourPct: number;
+  funding8hPct: number;
+  fundingAnnualPct: number;
   updatedAt: number;
 }
 
 const stats = new Map<string, MarketStatsLive>();
-const controllers = new Map<string, AbortController>();
+let controller: AbortController | null = null;
 
 export function getStats(symbol: string): MarketStatsLive | undefined {
   return stats.get(symbol.toUpperCase());
 }
 
-export function ensureMarketStats(symbol: string): void {
-  const key = symbol.toUpperCase();
-  if (controllers.has(key)) return;
-  const controller = new AbortController();
-  controllers.set(key, controller);
+export function getAllStats(): ReadonlyMap<string, MarketStatsLive> {
+  return stats;
+}
+
+export function getMarkPrice(symbol: string): number | undefined {
+  return getStats(symbol)?.markPrice;
+}
+
+export function get24hChangePct(symbol: string): number | null {
+  const s = getStats(symbol);
+  if (!s || !s.prevDayMarkPrice) return null;
+  return ((s.markPrice - s.prevDayMarkPrice) / s.prevDayMarkPrice) * 100;
+}
+
+export function getOpenInterestUsd(symbol: string): number | undefined {
+  const s = getStats(symbol);
+  return s ? s.openInterestBase * s.markPrice : undefined;
+}
+
+export function startAllMarketStats(): void {
+  if (controller) return;
+  const ac = new AbortController();
+  controller = ac;
 
   void (async () => {
-    for await (const update of getPhoenixWsClient().marketStats(key, controller.signal)) {
-      stats.set(key, {
-        markPrice: update.stats.markPrice,
-        annualizedFunding: update.stats.annualizedFundingRate,
-        eightHourFunding: update.stats.eightHourFundingRate,
+    for await (const update of getPhoenixWsClient().marketStats(undefined, ac.signal)) {
+      const s = update.stats;
+      stats.set(update.symbol.toUpperCase(), {
+        markPrice: s.markPrice,
+        oraclePrice: s.oraclePrice,
+        prevDayMarkPrice: s.prevDayMarkPrice,
+        dayVolumeUsd: s.dayVolumeUsd,
+        openInterestBase: s.openInterest,
+        fundingHourPct: s.currentFundingRate,
+        funding8hPct: s.eightHourFundingRate,
+        fundingAnnualPct: s.annualizedFundingRate,
         updatedAt: Date.now(),
       });
     }
   })().catch((err) => {
     if (err instanceof Error && err.name === "AbortError") return;
-    logger.error({ err, symbol: key }, "marketStats subscription failed");
+    logger.error({ err }, "all-markets marketStats subscription failed");
   });
 }
 
-export function dropMarketStats(symbol: string): void {
-  const key = symbol.toUpperCase();
-  controllers.get(key)?.abort();
-  controllers.delete(key);
-  stats.delete(key);
-}
-
-export function syncMarketStats(symbols: Iterable<string>): void {
-  const wanted = new Set<string>();
-  for (const s of symbols) wanted.add(s.toUpperCase());
-  for (const sym of wanted) ensureMarketStats(sym);
-  for (const sym of [...controllers.keys()]) {
-    if (!wanted.has(sym)) dropMarketStats(sym);
-  }
-}
-
 export function stopMarketStatsFeed(): void {
-  for (const [, controller] of controllers) controller.abort();
-  controllers.clear();
+  controller?.abort();
+  controller = null;
   stats.clear();
 }

@@ -10,7 +10,6 @@ import { type AlertButton, alertQueue } from "../jobs/queues.js";
 import { MONITOR_EVENTS_CHANNEL } from "../lib/constants.js";
 import { logger } from "../lib/logger.js";
 import { getPhoenixWsClient } from "../services/phoenix/client.js";
-import { syncMarketStats } from "../services/phoenix/market-stats-feed.js";
 import { getMarket } from "../services/phoenix/market.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { AccountSnapshot, CachedPosition } from "../types/index.js";
@@ -73,14 +72,6 @@ export async function getOwnerUserId(walletAddress: string): Promise<string | nu
   return user?.id ?? null;
 }
 
-function syncHeldMarketStats() {
-  const symbols = new Set<string>();
-  for (const snap of snapshots.values()) {
-    for (const p of snap.positions) symbols.add(p.symbol);
-  }
-  syncMarketStats(symbols);
-}
-
 async function resolveDecimals(symbol: string): Promise<number | null> {
   const market = await getMarket(symbol).catch(() => null);
   return market ? market.baseLotsDecimals : null;
@@ -93,7 +84,6 @@ async function applyTraderState(walletAddress: string, update: TraderStateUpdate
   const next = await mergeTraderState(prev ?? null, update, resolveDecimals);
   next.walletAddress = walletAddress;
   snapshots.set(walletAddress, next);
-  syncHeldMarketStats();
 
   if (update.messageType === "delta") {
     const fills = update.deltas.flatMap((d) => d.tradeHistory ?? []);
@@ -206,7 +196,6 @@ function unsubscribeTrader(walletAddress: string) {
   controllers.get(walletAddress)?.abort();
   controllers.delete(walletAddress);
   snapshots.delete(walletAddress);
-  syncHeldMarketStats();
 }
 
 export async function subscribeUser(walletAddress: string, telegramId: string) {

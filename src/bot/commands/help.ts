@@ -53,8 +53,7 @@ const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[
 
 /guardian — Risk rules & auto-protection
 /alerts — Price & account alerts
-/monitor — Follow traders & get live alerts
-/funding — Top funding rates across markets`,
+/monitor — Follow traders & get live alerts`,
   },
 ];
 

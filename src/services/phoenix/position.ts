@@ -2,12 +2,14 @@ import type { Position, TraderStateResponse, TraderView } from "@ellipsis-labs/r
 import { withRetry } from "../../lib/retry.js";
 import type { TraderStateEvent } from "../../types/index.js";
 import { getPhoenixClient } from "./client.js";
+import { acquirePhoenixRest } from "./rest-limit.js";
 
 export async function getTraderState(walletAddress: string): Promise<TraderStateEvent> {
   return withRetry(() => _getTraderState(walletAddress));
 }
 
 async function _getTraderState(walletAddress: string): Promise<TraderStateEvent> {
+  await acquirePhoenixRest();
   const res = (await getPhoenixClient()
     .api.traders()
     .getTraderState(walletAddress)) as TraderStateResponse;
@@ -80,6 +82,7 @@ async function _getTraderState(walletAddress: string): Promise<TraderStateEvent>
 }
 
 export async function getTraderStateSnapshot(walletAddress: string) {
+  await acquirePhoenixRest();
   return getPhoenixClient()
     .api.traders()
     .getTraderStateSnapshot(walletAddress, { traderPdaIndex: 0 });
@@ -110,6 +113,7 @@ async function _fetchPage(
 ): Promise<TradeHistoryResponse> {
   // biome-ignore lint/suspicious/noExplicitAny: cursor param not in SDK type definitions
   const opts: any = cursor ? { limit, cursor } : { limit };
+  await acquirePhoenixRest();
   const res = await getPhoenixClient().api.trades().getTraderTradesHistory(walletAddress, opts);
   const trades: TradeHistoryEntry[] = res.data.map((r) => ({
     symbol: r.marketSymbol,
