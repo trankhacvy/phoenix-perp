@@ -8,12 +8,11 @@ import { logger } from "../lib/logger.js";
 import { getMarketSnapshot } from "../services/phoenix/market.js";
 import { getWalletUsdcBalance } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
-import { requireActivation } from "./lib/activation.js";
+import { sendPriceAlertConfirm } from "./commands/alerts.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
 import { saveBreakevenRuleFromInput, saveTrailRuleFromInput } from "./commands/guardian.js";
 import { registerCommands } from "./commands/index.js";
 import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
-import { sendPriceAlertConfirm } from "./commands/alerts.js";
 import { handleTpSlPriceInput, handleTpSlSizeInput } from "./commands/tpsl.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import {
@@ -22,6 +21,7 @@ import {
   sendWithdrawConfirmExternal,
   sendWithdrawConfirmInternal,
 } from "./commands/withdraw.js";
+import { requireActivation } from "./lib/activation.js";
 import { renderBotError } from "./lib/errors.js";
 import { parseAmount, parseLeverage, usd } from "./lib/fmt.js";
 import { clearPending, getPending } from "./lib/pending.js";
