@@ -14,7 +14,6 @@ import { registerLong, sendSymbolPicker } from "./long.js";
 import { registerMarkets, sendMarketsScreen } from "./markets.js";
 import { registerPortfolio, sendPortfolioScreen } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
-import { registerPriceAlert } from "./pricealert.js";
 import { registerReferral } from "./referral.js";
 import { registerSettings } from "./settings.js";
 import { registerShort } from "./short.js";
@@ -42,7 +41,6 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerReferral(bot);
   registerPortfolio(bot);
   registerTpSl(bot);
-  registerPriceAlert(bot);
   registerWalletMonitor(bot);
   registerWallet(bot);
   registerLeaderboard(bot);
@@ -61,6 +59,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   bot.callbackQuery("nav:deposit", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendDepositScreen(ctx);
   });
 

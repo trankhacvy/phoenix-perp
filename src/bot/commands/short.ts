@@ -1,9 +1,9 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
-import { InlineKeyboard } from "grammy";
 import { getMarketSnapshot } from "../../services/phoenix/market.js";
 import { getSettings } from "../../services/settings.js";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { parseAmount, parseLeverage, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
@@ -23,14 +23,7 @@ export function registerShort(bot: Bot<BotContext>) {
       await ctx.reply("Please run /start first to set up your account.");
       return;
     }
-    if (!ctx.user.phoenixActivated) {
-      const kb = new InlineKeyboard().text("Activate account", "nav:activate");
-      await ctx.reply(
-        "Your trading account isn't activated yet.\nUse /activate <code> to unlock trading.",
-        { reply_markup: kb },
-      );
-      return;
-    }
+    if (!(await requireActivation(ctx))) return;
 
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
     const symbol = parts[0]?.toUpperCase().replace("/USD", "").replace("/USDT", "");
@@ -77,10 +70,7 @@ export function registerShort(bot: Bot<BotContext>) {
   bot.callbackQuery(/^trade:short:([A-Z0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
-    if (!ctx.user.phoenixActivated) {
-      await ctx.reply("Activate your account first. Use /activate <code>.");
-      return;
-    }
+    if (!(await requireActivation(ctx))) return;
     await sendSizeStep(ctx, "short", ctx.match[1]);
   });
 

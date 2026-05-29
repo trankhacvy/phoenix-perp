@@ -19,6 +19,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { renderBotError } from "../lib/errors.js";
 import { price as fmtPrice, money, moneyShort, num, pct, signedMoney, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
@@ -905,6 +906,7 @@ export function registerGuardian(bot: Bot<BotContext>) {
       await ctx.reply("Please run /start first.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     const arg = ctx.match?.trim().toLowerCase();
     if (arg === "off") {
       const count = await disableAllAutoActions(ctx.user.id);
@@ -919,6 +921,18 @@ You'll still receive alerts for all active rules.`;
       return;
     }
     await sendGuardianScreen(ctx);
+  });
+
+  // Activation gate for the whole Guardian surface (grd:* and protect:*).
+  // Registered before the specific handlers so it runs first; passes through
+  // via next() only when the user is activated.
+  bot.callbackQuery(/^(grd|protect):/, async (ctx, next) => {
+    if (ctx.user?.phoenixActivated) {
+      await next();
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await requireActivation(ctx);
   });
 
   bot.callbackQuery("grd:list", async (ctx) => {

@@ -8,11 +8,12 @@ import { logger } from "../lib/logger.js";
 import { getMarketSnapshot } from "../services/phoenix/market.js";
 import { getWalletUsdcBalance } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
+import { requireActivation } from "./lib/activation.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
 import { saveBreakevenRuleFromInput, saveTrailRuleFromInput } from "./commands/guardian.js";
 import { registerCommands } from "./commands/index.js";
 import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
-import { sendPriceAlertConfirm } from "./commands/pricealert.js";
+import { sendPriceAlertConfirm } from "./commands/alerts.js";
 import { handleTpSlPriceInput, handleTpSlSizeInput } from "./commands/tpsl.js";
 import { handleAddMonitor } from "./commands/wallet-monitor.js";
 import {
@@ -136,6 +137,7 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (pending === "deposit_amount") {
+    if (!(await requireActivation(ctx))) return;
     const amount = parseAmount(text);
     if (Number.isNaN(amount) || amount <= 0) {
       await ctx.reply("Invalid amount. Enter a positive number like 50.");
@@ -340,6 +342,16 @@ bot.on("message:text", async (ctx) => {
     // handler looks the rung up by editIdx and uses its current triggerPrice.
     await handleTpSlSizeInput(ctx, leg, symbol, positionSide, "0", text, idx);
     return;
+  }
+
+  // Guardian rule inputs all act on the trading account — require activation.
+  if (
+    parts[0] === "grd_threshold" ||
+    parts[0] === "grd_margin_amt" ||
+    parts[0] === "protect_trail" ||
+    parts[0] === "protect_be"
+  ) {
+    if (!(await requireActivation(ctx))) return;
   }
 
   if (parts[0] === "grd_threshold") {

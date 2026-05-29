@@ -7,6 +7,7 @@ import { depositCollateral, getFeeConfig } from "../../services/phoenix/trade.js
 import { getSettings } from "../../services/settings.js";
 import { getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
+import { requireActivation } from "../lib/activation.js";
 import { parseAmount, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
@@ -21,6 +22,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
       await ctx.reply("Please run /start first to set up your account.");
       return;
     }
+    if (!(await requireActivation(ctx))) return;
     await sendDepositScreen(ctx);
   });
 
@@ -28,6 +30,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
   bot.callbackQuery("deposit:fund", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendFundCollateralScreen(ctx);
   });
 
@@ -35,6 +38,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
   bot.callbackQuery("deposit:check", async (ctx) => {
     await ctx.answerCallbackQuery("Checking…");
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendFundCollateralScreen(ctx);
   });
 
@@ -42,6 +46,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
   bot.callbackQuery(/^deposit:all$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     const balance = await getWalletUsdcBalance(ctx.user.walletAddress);
     if (balance < MIN_DEPOSIT_USD) {
       await ctx.reply(
@@ -56,6 +61,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
   bot.callbackQuery("deposit:custom", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user || !ctx.from) return;
+    if (!(await requireActivation(ctx))) return;
     // Defensive: clear any prior pending flow before claiming this one.
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "deposit_amount");
@@ -70,6 +76,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
       return;
     }
     await ctx.answerCallbackQuery("Submitting…");
+    if (!(await requireActivation(ctx))) return;
     if (!(await checkOrderRateLimit(ctx))) return;
 
     if (!(await claimIdempotencyKey(ctx.from.id, ctx.callbackQuery.id))) return;
