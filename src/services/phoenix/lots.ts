@@ -51,7 +51,7 @@ export function marginToTokens(
   return rounded.toFixed(snap.baseLotsDecimals);
 }
 
-export function fractionToCloseLots(rawLots: number, fraction: number): bigint {
+export function fractionToCloseLots(rawLots: bigint, fraction: number): bigint {
   if (!Number.isFinite(fraction) || fraction <= 0 || fraction > 1) {
     throw new BotError({
       category: "validation",
@@ -59,9 +59,16 @@ export function fractionToCloseLots(rawLots: number, fraction: number): bigint {
       userMessage: "Invalid close fraction.",
     });
   }
-  const absLots = Math.abs(rawLots);
-  const closeLots = fraction >= 1 ? absLots : Math.ceil(absLots * fraction);
-  if (closeLots <= 0) {
+  const absLots = rawLots < 0n ? -rawLots : rawLots;
+  let closeLots: bigint;
+  if (fraction >= 1) {
+    closeLots = absLots;
+  } else {
+    const bps = BigInt(Math.round(fraction * 10_000)); // numfmt-ignore: UI fraction → integer bps, not a money amount
+    const product = absLots * bps;
+    closeLots = product / 10_000n + (product % 10_000n === 0n ? 0n : 1n);
+  }
+  if (closeLots <= 0n) {
     throw new BotError({
       category: "validation",
       code: "SIZE_TOO_SMALL",
@@ -69,7 +76,7 @@ export function fractionToCloseLots(rawLots: number, fraction: number): bigint {
       hint: "Use the full close button.",
     });
   }
-  return BigInt(closeLots);
+  return closeLots;
 }
 
 export function baseLotsToTokens(

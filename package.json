@@ -12,6 +12,7 @@
     "db:migrate": "tsx node_modules/drizzle-kit/bin.cjs migrate",
     "db:studio": "tsx node_modules/drizzle-kit/bin.cjs studio",
     "check": "biome check ./src",
+    "check:numbers": "bash scripts/check-numbers.sh",
     "lint": "biome lint ./src",
     "format": "biome format --write ./src",
     "test": "vitest run",

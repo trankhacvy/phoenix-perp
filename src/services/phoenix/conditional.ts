@@ -19,6 +19,7 @@ import {
 import { type Address, createSolanaRpc } from "@solana/kit";
 import { BotError } from "../../bot/lib/errors.js";
 import { config } from "../../config/index.js";
+import { tokensToLots } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
 import { withRetry } from "../../lib/retry.js";
 import { getPhoenixClient } from "./client.js";
@@ -32,7 +33,7 @@ export type TriggerDirectionStr = "greater_than" | "less_than";
 export type RungSize =
   | { kind: "full" }
   | { kind: "lots"; lots: bigint }
-  | { kind: "tokens"; tokens: number }
+  | { kind: "tokens"; tokens: string }
   | { kind: "percent"; pct: number };
 
 export interface RungInput {
@@ -111,9 +112,7 @@ export function priceUsdToTicksBig(priceUsd: number, market: MarketLike): bigint
 }
 
 export function computeMarketExecutionTicks(triggerTicks: bigint, closeSide: Side): bigint {
-  const num = Number(triggerTicks);
-  const mult = closeSide === Side.Ask ? 0.9 : 1.1;
-  return BigInt(Math.floor(num * mult));
+  return closeSide === Side.Ask ? (triggerTicks * 9n) / 10n : (triggerTicks * 11n) / 10n;
 }
 
 // ── Trigger ID parser ───────────────────────────────────────────────────────
@@ -152,9 +151,8 @@ export function resolveSize(
     case "lots":
       return size.lots;
     case "tokens": {
-      if (!Number.isFinite(size.tokens) || size.tokens <= 0) return 0n;
-      const factor = 10 ** market.baseLotsDecimals;
-      return BigInt(Math.floor(size.tokens * factor));
+      if (!size.tokens) return 0n;
+      return tokensToLots(size.tokens, market.baseLotsDecimals);
     }
     case "percent": {
       if (!Number.isFinite(size.pct) || size.pct <= 0 || size.pct > 100) return 0n;

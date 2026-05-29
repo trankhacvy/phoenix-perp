@@ -85,12 +85,33 @@ export function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+const _usdCompact = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+const _numCompact = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const _numCompactSigned = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+  signDisplay: "exceptZero",
+});
+
 export function compactUsd(n: number): string {
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 100_000) return `${sign}$${Math.round(abs / 1_000)}K`;
-  return usd(n, 0, 0);
+  return Number.isFinite(n) ? _usdCompact.format(n) : "$—";
+}
+
+export function compact(n: number): string {
+  return Number.isFinite(n) ? _numCompact.format(n) : "—";
+}
+
+export function compactSigned(n: number): string {
+  return Number.isFinite(n) ? _numCompactSigned.format(n) : "—";
 }
 
 export function fundingDailyUsd(rateDecimal: number, notionalUsdc: number): string {
@@ -148,4 +169,56 @@ export function change24h(pctValue: number): string {
 export function fundingDotAnnual(annualPct: number): string {
   if (Math.abs(annualPct) < 1) return "⚪";
   return annualPct >= 0 ? "🟢" : "🔴";
+}
+
+// ─── Semantic number API (Intl-backed; never .toFixed) ───────────────────────
+// Money: exact for transacted amounts, compact for aggregates.
+export function money(n: number): string {
+  return usd(n);
+}
+
+export function signedMoney(n: number): string {
+  return signedUsd(n);
+}
+
+export const moneyShort = compactUsd;
+
+// Percent: values are already in percent units (12.5 means 12.5%).
+const _pctCache = new Map<string, Intl.NumberFormat>();
+function pctFmt(dp: number, signed: boolean): Intl.NumberFormat {
+  const key = `${dp}:${signed}`;
+  let f = _pctCache.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: dp,
+      maximumFractionDigits: dp,
+      ...(signed ? { signDisplay: "exceptZero" as const } : {}),
+    });
+    _pctCache.set(key, f);
+  }
+  return f;
+}
+
+export function percent(n: number, dp = 2): string {
+  return Number.isFinite(n) ? `${pctFmt(dp, true).format(n)}%` : "—%";
+}
+
+export function percentAbs(n: number, dp = 2): string {
+  return Number.isFinite(n) ? `${pctFmt(dp, false).format(n)}%` : "—%";
+}
+
+const _tokCache = new Map<number, Intl.NumberFormat>();
+function tokFmt(dp: number): Intl.NumberFormat {
+  let f = _tokCache.get(dp);
+  if (!f) {
+    f = new Intl.NumberFormat("en-US", { maximumFractionDigits: dp });
+    _tokCache.set(dp, f);
+  }
+  return f;
+}
+
+export function tokenSize(n: number, baseLotsDecimals: number, symbol?: string): string {
+  if (!Number.isFinite(n)) return symbol ? `— ${symbol}` : "—";
+  const s = tokFmt(Math.min(4, baseLotsDecimals)).format(n);
+  return symbol ? `${s} ${symbol}` : s;
 }

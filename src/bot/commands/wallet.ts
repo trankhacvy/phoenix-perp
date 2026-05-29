@@ -24,8 +24,50 @@ import {
   timeAgo,
   usd,
 } from "../lib/fmt.js";
+import { addPaginationRow, paginate } from "../lib/paginate.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryScreen } from "./history.js";
+
+const POS_PAGE_SIZE = 6;
+
+// ── Short-lived caches for the wallet screen ──────────────────────────────────
+// A viewer screen doesn't need per-second freshness. Cache the two expensive
+// Phoenix REST reads so re-renders (pagination, follow/unfollow refresh) and the
+// "Generate Card" tap don't re-fetch — the card otherwise re-pulls full history.
+const STATE_TTL_MS = 20_000;
+const ANALYTICS_TTL_MS = 60_000;
+const CACHE_MAX = 500;
+
+type WalletState = Awaited<ReturnType<typeof getTraderState>>;
+type WalletAnalytics = ReturnType<typeof computeWalletAnalytics>;
+
+function cacheSet<T>(cache: Map<string, T>, key: string, value: T): void {
+  if (cache.size >= CACHE_MAX && !cache.has(key)) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+const stateCache = new Map<string, { data: WalletState; ts: number }>();
+const analyticsCache = new Map<string, { data: WalletAnalytics; ts: number }>();
+
+async function getCachedState(address: string): Promise<WalletState> {
+  const hit = stateCache.get(address);
+  if (hit && Date.now() - hit.ts < STATE_TTL_MS) return hit.data;
+  const data = await getTraderState(address);
+  cacheSet(stateCache, address, { data, ts: Date.now() });
+  return data;
+}
+
+async function getCachedAnalytics(address: string): Promise<WalletAnalytics> {
+  const hit = analyticsCache.get(address);
+  if (hit && Date.now() - hit.ts < ANALYTICS_TTL_MS) return hit.data;
+  const trades = await fetchAllTradeHistory(address);
+  const data = computeWalletAnalytics(trades);
+  cacheSet(analyticsCache, address, { data, ts: Date.now() });
+  return data;
+}
 
 function buildExternalPositionRow(
   pos: {
@@ -69,15 +111,14 @@ export async function sendWalletScreen(
 ): Promise<void> {
   const isOwn = walletAddress === ctx.user?.walletAddress;
 
-  const [state, allTrades, lbRow] = await Promise.all([
-    getTraderState(walletAddress),
-    fetchAllTradeHistory(walletAddress),
+  const [state, analytics, lbRow] = await Promise.all([
+    getCachedState(walletAddress),
+    getCachedAnalytics(walletAddress),
     db.query.leaderboardSnapshots.findFirst({
       where: eq(leaderboardSnapshots.walletAddress, walletAddress),
     }),
   ]);
 
-  const analytics = computeWalletAnalytics(allTrades);
   const collateral = Number(state.effectiveCollateral);
 
   if (collateral === 0 && analytics.totalFills === 0) {
@@ -221,7 +262,7 @@ export async function sendWalletScreen(
           ["📋 Trade History", `walletinfo:histopen:${walletAddress}`],
         ];
         if (validPositions.length > 5) {
-          actionRow.push(["📊 All Positions", `walletinfo:pos:${walletAddress}`]);
+          actionRow.push(["📊 All Positions", `walletinfo:posopen:${walletAddress}`]);
         }
         for (const [label, data] of actionRow) k.text(label, data);
         k.row();
@@ -234,6 +275,46 @@ export async function sendWalletScreen(
     reply_markup: kb,
     link_preview_options: { is_disabled: true },
   });
+}
+
+async function sendWalletPositions(
+  ctx: BotContext,
+  address: string,
+  page: number,
+  edit: boolean,
+): Promise<void> {
+  const state = await getCachedState(address);
+  const positions = (state.positions ?? []).filter(
+    (p) => Number(p.entryPrice) > 0 && Number(p.markPrice) > 0,
+  );
+
+  if (positions.length === 0) {
+    const text = `No open positions for ${shortAddr(address)}.`;
+    if (edit && ctx.callbackQuery) await ctx.editMessageText(text);
+    else await ctx.reply(text);
+    return;
+  }
+
+  const { items, page: safePage, totalPages } = paginate(positions, page, POS_PAGE_SIZE);
+  const botUsername = ctx.me.username ?? "bot";
+  const totalUpnl = positions.reduce((s, p) => s + Number(p.unrealizedPnl), 0);
+  const pageLabel =
+    totalPages > 1 ? fmt`  ·  ${FormattedString.i(`Page ${safePage + 1}/${totalPages}`)}` : fmt``;
+  const header = fmt`📊 ${FormattedString.b(`Open Positions (${positions.length})`)} · ${FormattedString.code(shortAddr(address))}${pageLabel}\nTotal uPnL: ${FormattedString.b(signedUsd(totalUpnl))} ${pnlEmoji(totalUpnl)}`;
+  const rows = items.map((pos) => buildExternalPositionRow(pos, botUsername));
+  const msg = FormattedString.join([header, ...rows], "\n\n");
+
+  const kb = new InlineKeyboard();
+  addPaginationRow(kb, `walletinfo:pos:${address}`, safePage, totalPages);
+  kb.text("← Trader", `walletinfo:back:${address}`);
+
+  const opts = {
+    entities: msg.entities,
+    reply_markup: kb,
+    link_preview_options: { is_disabled: true },
+  };
+  if (edit && ctx.callbackQuery) await ctx.editMessageText(msg.text, opts);
+  else await ctx.reply(msg.text, opts);
 }
 
 export function registerWallet(bot: Bot<BotContext>) {
@@ -374,30 +455,16 @@ export function registerWallet(bot: Bot<BotContext>) {
     }
   });
 
-  bot.callbackQuery(/^walletinfo:pos:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
+  bot.callbackQuery(/^walletinfo:posopen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
-    const address = ctx.match[1];
-    const state = await getTraderState(address);
-    const positions = (state.positions ?? []).filter(
-      (p) => Number(p.entryPrice) > 0 && Number(p.markPrice) > 0,
-    );
+    await sendWalletPositions(ctx, ctx.match[1], 0, false);
+  });
 
-    if (positions.length === 0) {
-      await ctx.reply(`No open positions for ${shortAddr(address)}.`);
-      return;
-    }
-
-    const botUsername = ctx.me.username ?? "bot";
-    const totalUpnl = positions.reduce((s, p) => s + Number(p.unrealizedPnl), 0);
-    const header = fmt`📊 ${FormattedString.b(`Open Positions (${positions.length})`)} · ${FormattedString.code(shortAddr(address))}\nTotal uPnL: ${FormattedString.b(signedUsd(totalUpnl))} ${pnlEmoji(totalUpnl)}`;
-    const rows = positions.map((pos) => buildExternalPositionRow(pos, botUsername));
-    const msg = FormattedString.join([header, ...rows], "\n\n");
-
-    await ctx.reply(msg.text, {
-      entities: msg.entities,
-      link_preview_options: { is_disabled: true },
-    });
+  bot.callbackQuery(/^walletinfo:pos:([1-9A-HJ-NP-Za-km-z]{32,44}):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendWalletPositions(ctx, ctx.match[1], Number(ctx.match[2]), true);
   });
 
   bot.callbackQuery(/^wc:gen:([1-9A-HJ-NP-Za-km-z]{32,44})$/, async (ctx) => {
@@ -405,8 +472,7 @@ export function registerWallet(bot: Bot<BotContext>) {
     const walletAddress = ctx.match[1];
 
     try {
-      const allTrades = await fetchAllTradeHistory(walletAddress);
-      const analytics = computeWalletAnalytics(allTrades);
+      const analytics = await getCachedAnalytics(walletAddress);
 
       const winRate =
         analytics.closedTrades > 0 ? (analytics.wins / analytics.closedTrades) * 100 : null;

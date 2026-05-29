@@ -6,7 +6,7 @@ import { getTraderState } from "../../services/phoenix/position.js";
 import { getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { pnlEmoji, signedUsd, usd } from "../lib/fmt.js";
+import { num, pnlEmoji, signedUsd, usd } from "../lib/fmt.js";
 import { buildPositionRows } from "./positions.js";
 
 const IDLE_USDC_THRESHOLD = 1;
@@ -90,8 +90,8 @@ export async function sendPortfolioScreen(ctx: BotContext, walletAddress?: strin
   // ── Trading account ──────────────────────────────────────────────────────────
   const solGasLine =
     solPrice > 0
-      ? fmt`⛽ Gas         ${FormattedString.b(`${sol.toFixed(4)} SOL`)}  ${FormattedString.i(`(${usd(sol * solPrice)})`)} `
-      : fmt`⛽ Gas         ${FormattedString.b(`${sol.toFixed(4)} SOL`)}`;
+      ? fmt`⛽ Gas         ${FormattedString.b(`${num(sol, 4, 4)} SOL`)}  ${FormattedString.i(`(${usd(sol * solPrice)})`)} `
+      : fmt`⛽ Gas         ${FormattedString.b(`${num(sol, 4, 4)} SOL`)}`;
   sections.push(
     FormattedString.join(
       [

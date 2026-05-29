@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { tokensToLots } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import {
@@ -26,7 +27,16 @@ import { getSettings } from "../../services/settings.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
 import { toBotError } from "../lib/errors.js";
-import { price as fmtPrice, parseAmount, pct, signedUsd, usd } from "../lib/fmt.js";
+import {
+  price as fmtPrice,
+  num,
+  parseAmount,
+  pct,
+  percentAbs,
+  signedUsd,
+  tokenSize,
+  usd,
+} from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { clearPending, setPending } from "../lib/pending.js";
 import { CONFIRMING, txError } from "../lib/tx-flow.js";
@@ -53,7 +63,7 @@ const TP_MARGIN_PRESETS = [50, 100, 200] as const;
 // ── Callback / encoding helpers ─────────────────────────────────────────────
 
 function priceForCb(p: number): string {
-  return p.toFixed(8).replace(/\.?0+$/, "");
+  return p.toFixed(8).replace(/\.?0+$/, ""); // numfmt-ignore: price key encoder
 }
 
 function legLabel(leg: Leg): string {
@@ -170,9 +180,7 @@ async function loadPositionCtx(
     return null;
   }
 
-  const sizeTokens = Number(pos.size);
-  const factor = 10 ** market.baseLotsDecimals;
-  const positionLots = BigInt(Math.round(sizeTokens * factor));
+  const positionLots = tokensToLots(pos.size, market.baseLotsDecimals);
 
   const tpAlloc = rungs
     .filter((r) => r.leg === "tp")
@@ -235,7 +243,7 @@ function marginMultLabel(amount: number, margin: number): string {
   if (margin <= 0) return "";
   const mult = amount / margin;
   const sign = mult >= 0 ? "+" : "";
-  return ` (${sign}${mult.toFixed(2)}× margin)`;
+  return ` (${sign}${num(mult, 2, 2)}× margin)`;
 }
 
 function formatRungBlock(
@@ -264,10 +272,10 @@ function formatRungBlock(
     rung.maxSizeLots,
     baseLotsDecimals,
   );
-  const sizeStr = sizeTokens.toFixed(Math.min(4, baseLotsDecimals));
+  const sizeStr = tokenSize(sizeTokens, baseLotsDecimals);
   const multStr = marginMultLabel(estPnl, margin);
   return fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(rung.triggerPrice))}  ${pct(pctFromEntry)}  ·  ${FormattedString.i(rung.mode)}
-     close ${FormattedString.b(`${sizeStr} ${symbol}`)} (${sizePctOfPos.toFixed(0)}%)  →  est ${FormattedString.b(signedUsd(estPnl))}${FormattedString.i(multStr)}`;
+     close ${FormattedString.b(`${sizeStr} ${symbol}`)} (${percentAbs(sizePctOfPos, 0)})  →  est ${FormattedString.b(signedUsd(estPnl))}${FormattedString.i(multStr)}`;
 }
 
 function buildManagerHeader(
@@ -293,7 +301,7 @@ function buildManagerHeader(
     const distRaw = pos.side === "long" ? ((mark - liq) / mark) * 100 : ((liq - mark) / mark) * 100;
     const dist = Math.max(0, distRaw);
     liqLine = fmt`
-Liq        ${FormattedString.b(fmtPrice(liq))}  ·  ${FormattedString.b(`${dist.toFixed(1)}% away`)} ${liqDistanceDot(dist)}`;
+Liq        ${FormattedString.b(fmtPrice(liq))}  ·  ${FormattedString.b(`${percentAbs(dist, 1)} away`)} ${liqDistanceDot(dist)}`;
   }
 
   return fmt`${legEmoji(leg)} ${FormattedString.b(`${pos.symbol} ${sideLabel} · ${legLabel(leg)}`)}${subtitle}
@@ -320,8 +328,8 @@ function crossLegFooter(ctxData: PositionCtx, currentLeg: Leg): FormattedString 
   const tag = fullyCovered ? "✅" : "⚠️";
   const summary =
     otherRungs.length === 1
-      ? `${fmtPrice(otherRungs[0].triggerPrice)} covering ${pctCov.toFixed(0)}%`
-      : `${otherRungs.length} rungs covering ${pctCov.toFixed(0)}%`;
+      ? `${fmtPrice(otherRungs[0].triggerPrice)} covering ${percentAbs(pctCov, 0)}`
+      : `${otherRungs.length} rungs covering ${percentAbs(pctCov, 0)}`;
   return fmt`${emoji} ${name}: ${summary}  ${tag}`;
 }
 
@@ -438,12 +446,12 @@ Pick a trigger — next step lets you choose ${FormattedString.b("how much")} of
     let coverageHeadline: FormattedString;
     if (leg === "tp") {
       const ok = fullyCovered ? "✅" : "";
-      coverageHeadline = fmt`${FormattedString.b(`Ladder (${legRungs.length} ${legRungs.length === 1 ? "rung" : "rungs"})`)} — ${allocPct.toFixed(0)}% covered ${ok}`;
+      coverageHeadline = fmt`${FormattedString.b(`Ladder (${legRungs.length} ${legRungs.length === 1 ? "rung" : "rungs"})`)} — ${percentAbs(allocPct, 0)} covered ${ok}`;
     } else {
       // SL — partial coverage is SAFETY ISSUE, must shout
       coverageHeadline = fullyCovered
         ? fmt`${FormattedString.b(`Stops (${legRungs.length} ${legRungs.length === 1 ? "rung" : "rungs"})`)} — 100% protected ✅`
-        : fmt`⚠️ ${FormattedString.b(`Stops cover only ${allocPct.toFixed(0)}% of position`)}`;
+        : fmt`⚠️ ${FormattedString.b(`Stops cover only ${percentAbs(allocPct, 0)} of position`)}`;
     }
 
     // Per-leg totals
@@ -468,7 +476,7 @@ Pick a trigger — next step lets you choose ${FormattedString.b("how much")} of
       // SL — always show max-loss summary and unprotected callout if partial
       const unprotectedLine = fullyCovered
         ? fmt``
-        : fmt`\n  ${FormattedString.i(`‼️ ${(100 - allocPct).toFixed(0)}% of position stays exposed past this level`)}`;
+        : fmt`\n  ${FormattedString.i(`‼️ ${percentAbs(100 - allocPct, 0)} of position stays exposed past this level`)}`;
       totalsLine = fmt`\n  ─────
   ${FormattedString.b(`Max loss if filled:  ${signedUsd(totals.pnl)}`)}${FormattedString.i(marginMultLabel(totals.pnl, margin))}${unprotectedLine}`;
     }
@@ -596,7 +604,7 @@ async function sendSizeStep(
     const tokens = Number(lots) * 10 ** -data.market.baseLotsDecimals;
     const label = p === 100 ? "Full rest" : `${p}%`;
     kb.text(
-      `${label}  ${tokens.toFixed(Math.min(4, data.market.baseLotsDecimals))}`,
+      `${label}  ${tokenSize(tokens, data.market.baseLotsDecimals)}`,
       `tpsl:sz:${leg}:${symbol}:${side}:${priceStr}:${p}`,
     );
     i++;
@@ -612,7 +620,7 @@ async function sendSizeStep(
       : 0;
 
   const msg = fmt`Trigger ${FormattedString.b(fmtPrice(triggerPrice))}  (${pct(pctFromMark)} from mark)
-Remaining unallocated: ${FormattedString.b(`${remainingTokens.toFixed(Math.min(4, data.market.baseLotsDecimals))} (${100 - allocPct}%)`)}
+Remaining unallocated: ${FormattedString.b(`${tokenSize(remainingTokens, data.market.baseLotsDecimals)} (${100 - allocPct}%)`)}
 
 How much to close here?`;
 
@@ -725,7 +733,7 @@ async function sendConfirmStep(
   const msg = fmt`${legEmoji(leg)} ${FormattedString.b(`Confirm ${legLabel(leg)} — ${symbol}`)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Trigger     ${FormattedString.b(fmtPrice(triggerPrice))}  (${pct(pctFromEntry)} from entry, ${pct(pctFromMark)} from mark)
-Size        ${FormattedString.b(`${sizeTokens.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol}`)}  (${sizePct.toFixed(0)}% of position)
+Size        ${FormattedString.b(`${tokenSize(sizeTokens, data.market.baseLotsDecimals)} ${symbol}`)}  (${percentAbs(sizePct, 0)} of position)
 Execution   ${FormattedString.b(mode === "limit" ? "Limit" : "Market (IOC)")}
 Est. PnL    ${FormattedString.b(signedUsd(estPnl))}  ${FormattedString.i("(approx, excl. fees)")}
 
@@ -891,7 +899,7 @@ async function sendRowMenu(
   const msg = fmt`${legEmoji(leg)} ${FormattedString.b(`${legLabel(leg)} #${idx} — ${symbol}`)}
 
 Price     ${FormattedString.b(fmtPrice(rung.triggerPrice))}
-Size      ${FormattedString.b(`${sizeTokens.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol}`)}
+Size      ${FormattedString.b(`${tokenSize(sizeTokens, data.market.baseLotsDecimals)} ${symbol}`)}
 Mode      ${FormattedString.b(rung.mode)}`;
 
   if (ctx.callbackQuery) {
@@ -1183,7 +1191,7 @@ async function sendEditSizeStep(
   const sizeTokens = Number(rung.maxSizeLots) * 10 ** -data.market.baseLotsDecimals;
   const msg = fmt`✏️ ${FormattedString.b(`Edit size — ${legLabel(leg)} #${idx}`)}
 
-Current: ${FormattedString.b(`${sizeTokens.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol}`)}
+Current: ${FormattedString.b(`${tokenSize(sizeTokens, data.market.baseLotsDecimals)} ${symbol}`)}
 
 Send the new size (in tokens).`;
   const kb = new InlineKeyboard().text("✕ Cancel", `tpsl:row:${leg}:${symbol}:${side}:${idx}`);
@@ -1334,13 +1342,13 @@ export async function handleTpSlSizeInput(
     await sendPositionGone(ctx, false, `No open ${symbol} ${side} position.`);
     return;
   }
-  const sizeLots = resolveSize({ kind: "tokens", tokens }, data.positionLots, {
+  const sizeLots = resolveSize({ kind: "tokens", tokens: String(tokens) }, data.positionLots, {
     baseLotsDecimals: data.market.baseLotsDecimals,
   });
   if (sizeLots <= 0n) {
     const minToken = 10 ** -data.market.baseLotsDecimals;
     await ctx.reply(
-      `Size too small. Minimum ~${minToken.toFixed(data.market.baseLotsDecimals)} tokens.`,
+      `Size too small. Minimum ~${num(minToken, data.market.baseLotsDecimals, data.market.baseLotsDecimals)} tokens.`,
     );
     return;
   }
@@ -1356,7 +1364,7 @@ export async function handleTpSlSizeInput(
     if (sizeLots > remainingMinusSelf) {
       const tokensRem = Number(remainingMinusSelf) * 10 ** -data.market.baseLotsDecimals;
       await ctx.reply(
-        `Size exceeds available (${tokensRem.toFixed(Math.min(4, data.market.baseLotsDecimals))} max).`,
+        `Size exceeds available (${tokenSize(tokensRem, data.market.baseLotsDecimals)} max).`,
       );
       return;
     }
@@ -1378,7 +1386,7 @@ export async function handleTpSlSizeInput(
   if (sizeLots > remaining) {
     const tokensRem = Number(remaining) * 10 ** -data.market.baseLotsDecimals;
     await ctx.reply(
-      `Size exceeds remaining (${tokensRem.toFixed(Math.min(4, data.market.baseLotsDecimals))} max).`,
+      `Size exceeds remaining (${tokenSize(tokensRem, data.market.baseLotsDecimals)} max).`,
     );
     return;
   }
@@ -1441,7 +1449,7 @@ async function sendCustomSizePrompt(
   const remTokens = Number(remaining) * 10 ** -data.market.baseLotsDecimals;
   const msg = fmt`Enter size in ${symbol} tokens.
 
-Max remaining: ${FormattedString.b(`${remTokens.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol}`)}`;
+Max remaining: ${FormattedString.b(`${tokenSize(remTokens, data.market.baseLotsDecimals)} ${symbol}`)}`;
   const kb = new InlineKeyboard().text("✕ Cancel", `tpsl:open:${leg}:${symbol}:${side}`);
   await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
 }
@@ -1497,8 +1505,8 @@ async function sendSplitConfirm(
   const msg = fmt`🪜 ${FormattedString.b(`Split ${legLabel(leg)} into ladder`)}
 
 Will replace the single 100% rung with two:
-  ① ${FormattedString.b(fmtPrice(existing.triggerPrice))} — ${tokens1.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol} (50%)
-  ② ${FormattedString.b(fmtPrice(secondPrice))} — ${tokens2.toFixed(Math.min(4, data.market.baseLotsDecimals))} ${symbol} (50%)
+  ① ${FormattedString.b(fmtPrice(existing.triggerPrice))} — ${tokenSize(tokens1, data.market.baseLotsDecimals)} ${symbol} (50%)
+  ② ${FormattedString.b(fmtPrice(secondPrice))} — ${tokenSize(tokens2, data.market.baseLotsDecimals)} ${symbol} (50%)
 
 ${FormattedString.i("You can edit either level's price/size after.")}${liqWarnLine}`;
 
@@ -1711,7 +1719,7 @@ export async function sendProtectScreen(
       const totalLots = legRungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
       const cov =
         data.positionLots > 0n ? Number((totalLots * 10000n) / data.positionLots) / 100 : 0;
-      return fmt`${name}   ${FormattedString.b(`${legRungs.length} rungs`)} · ${cov.toFixed(0)}%  →  ${FormattedString.b(signedUsd(pnl))} ${FormattedString.i(`(${pct(marginPct)})`)}`;
+      return fmt`${name}   ${FormattedString.b(`${legRungs.length} rungs`)} · ${percentAbs(cov, 0)}  →  ${FormattedString.b(signedUsd(pnl))} ${FormattedString.i(`(${pct(marginPct)})`)}`;
     }
     return fmt`${name}   ${FormattedString.b(fmtPrice(legRungs[0].triggerPrice))}  →  ${FormattedString.b(signedUsd(pnl))} ${FormattedString.i(`(${pct(marginPct)} margin)`)}`;
   };
@@ -1722,7 +1730,7 @@ export async function sendProtectScreen(
       0,
       side === "long" ? ((mark - liq) / mark) * 100 : ((liq - mark) / mark) * 100,
     );
-    liqLine = fmt`\nLiq      ${FormattedString.b(fmtPrice(liq))}  ·  ${dist.toFixed(1)}% away ${liqDistanceDot(dist)}`;
+    liqLine = fmt`\nLiq      ${FormattedString.b(fmtPrice(liq))}  ·  ${percentAbs(dist, 1)} away ${liqDistanceDot(dist)}`;
   }
 
   const header = fmt`🛡 ${FormattedString.b(`Protect — ${symbol} ${sideLabel}${levLabel}`)}
@@ -1757,7 +1765,7 @@ ${legLine("sl", slRungs)}`;
     const slPnl = legPnl(slRungs);
     if (slPnl < 0) {
       const rr = Math.abs(legPnl(tpRungs) / slPnl);
-      rrLine = fmt`\nRisk:Reward  ${FormattedString.b(`1:${rr.toFixed(1)}`)}`;
+      rrLine = fmt`\nRisk:Reward  ${FormattedString.b(`1:${num(rr, 1, 1)}`)}`;
     }
   }
 

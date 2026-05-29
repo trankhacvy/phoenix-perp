@@ -3,6 +3,7 @@ import { generatePnlCard } from "../../services/image.js";
 import { getTradeHistory } from "../../services/phoenix/position.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
+import { tokenSize } from "../lib/fmt.js";
 
 export function registerShare(bot: Bot<BotContext>) {
   bot.command("share", async (ctx) => {
@@ -44,7 +45,7 @@ export function registerShare(bot: Bot<BotContext>) {
       exitPrice: trade.price,
       roiPercent,
       pnlUsdc: pnl,
-      size: `${size.toFixed(4)} ${baseToken}`,
+      size: tokenSize(size, 4, baseToken),
     });
 
     await ctx.replyWithPhoto(new InputFile(card, "pnl.png"));

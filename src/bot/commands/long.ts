@@ -25,9 +25,11 @@ import {
   price as fmtPrice,
   funding1h,
   fundingDot,
+  money,
   num,
   parseAmount,
   parseLeverage,
+  percentAbs,
   usd,
 } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
@@ -352,12 +354,13 @@ export async function sendTradeConfirm(
 
   const { snapshot, effectiveLeverage, notional, feeUsdc, liqPrice, totalCost } = pf;
   const entry = snapshot.markPrice;
-  const feePct = ((feeUsdc / notional) * 100).toFixed(3);
+  const feePct = percentAbs((feeUsdc / notional) * 100, 3);
 
   const liqDist = liqPrice > 0 ? Math.abs((liqPrice - entry) / entry) * 100 : null;
   const liqArrow = side === "long" ? "↓" : "↑";
   const liqWarn = liqDist !== null && liqDist < 10 ? " ⚠️" : "";
-  const liqDistStr = liqDist !== null ? ` ${liqArrow} ${liqDist.toFixed(1)}% away${liqWarn}` : "";
+  const liqDistStr =
+    liqDist !== null ? ` ${liqArrow} ${percentAbs(liqDist, 1)} away${liqWarn}` : "";
 
   const isLongPaying = snapshot.fundingRate > 0;
   const youPay = side === "long" ? isLongPaying : !isLongPaying;
@@ -365,22 +368,22 @@ export async function sendTradeConfirm(
   let fundingLine = fmt``;
   if (dailyCost > 0.01) {
     if (youPay) {
-      fundingLine = fmt`\n💸 Daily holding cost:  ${FormattedString.b(`$${dailyCost.toFixed(2)}/day`)}`;
+      fundingLine = fmt`\n💸 Daily holding cost:  ${FormattedString.b(`${money(dailyCost)}/day`)}`;
     } else {
-      fundingLine = fmt`\n💰 Daily funding income:  ${FormattedString.b(`$${dailyCost.toFixed(2)}/day`)} (rate in your favour)`;
+      fundingLine = fmt`\n💰 Daily funding income:  ${FormattedString.b(`${money(dailyCost)}/day`)} (rate in your favour)`;
     }
   }
 
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
   // toFixed never produces scientific notation; toPrecision does for prices < 1e-7
-  const anchorStr = entry.toFixed(12).replace(/\.?0+$/, "");
+  const anchorStr = entry.toFixed(12).replace(/\.?0+$/, ""); // numfmt-ignore: anchor-price key encoder
 
   const plainLine = fmt`${FormattedString.i(`You put in ${usd(sizeUsdc)} to control ${usd(notional, 0, 0)} (${effectiveLeverage}×).`)}`;
   const slipLine = fmt`\nMax slippage:  ${FormattedString.b(`${settings.slippageBps / 100}%`)}`;
   const levWarn =
     effectiveLeverage >= 20 && liqDist !== null
-      ? fmt`\n\n⚡ ${FormattedString.b("High leverage")} — a ${liqDist.toFixed(1)}% move against you triggers liquidation.`
+      ? fmt`\n\n⚡ ${FormattedString.b("High leverage")} — a ${percentAbs(liqDist, 1)} move against you triggers liquidation.`
       : fmt``;
 
   const kb = new InlineKeyboard()
@@ -396,7 +399,7 @@ export async function sendTradeConfirm(
     .row()
     .text("✕ Cancel", "cancel");
 
-  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n${plainLine}\n\nMargin:      ${FormattedString.b(usd(sizeUsdc))}\nExposure:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:  ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:         ${FormattedString.b(`${usd(feeUsdc)} (${feePct}%)`)}\nTotal cost:  ${FormattedString.b(usd(totalCost))}${slipLine}${fundingLine}\n\nLiq price:   ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}${levWarn}\n\n${FormattedString.i("(Quote based on current price)")}`;
+  const msg = fmt`📋 ${FormattedString.b("Open trade")}\n\n${emoji} ${FormattedString.b(`${label} ${symbol}`)}  (${effectiveLeverage}×)\n${plainLine}\n\nMargin:      ${FormattedString.b(usd(sizeUsdc))}\nExposure:    ${FormattedString.b(usd(notional, 0, 0))} of ${symbol}\nEntry near:  ${FormattedString.b(`~${fmtPrice(entry)}`)}\n\nFee:         ${FormattedString.b(`${usd(feeUsdc)} (${feePct})`)}\nTotal cost:  ${FormattedString.b(usd(totalCost))}${slipLine}${fundingLine}\n\nLiq price:   ${FormattedString.b(`~${fmtPrice(liqPrice)}${liqDistStr}`)}${levWarn}\n\n${FormattedString.i("(Quote based on current price)")}`;
 
   const opts = {
     entities: msg.entities,

@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { InlineKeyboard, InputFile } from "grammy";
 import type { Bot } from "grammy";
+import { tokensToLots } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
 import { generatePnlCard } from "../../services/image.js";
 import {
@@ -20,7 +21,16 @@ import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { positionKeyboard } from "../keyboards/position.js";
 import { requireActivation } from "../lib/activation.js";
-import { cryptoSize, price as fmtPrice, num, pct, pnlEmoji, signedUsd, usd } from "../lib/fmt.js";
+import {
+  cryptoSize,
+  price as fmtPrice,
+  num,
+  pct,
+  percentAbs,
+  pnlEmoji,
+  signedUsd,
+  usd,
+} from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
@@ -178,7 +188,7 @@ function buildTpSection(
   }
   const totalLots = rungs.reduce<bigint>((s, r) => s + r.maxSizeLots, 0n);
   const totalPct = rungPctOfPosition(totalLots, positionLots);
-  const header = fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${totalPct.toFixed(0)}% planned`;
+  const header = fmt`🎯 ${FormattedString.b("Take Profit")}  ·  ${percentAbs(totalPct, 0)} planned`;
 
   const lines: FormattedString[] = [header];
   let totalPnl = 0;
@@ -188,12 +198,12 @@ function buildTpSection(
     const estPnl = estimateRungPnl(r.triggerPrice, entry, side, r.maxSizeLots, baseLotsDecimals);
     totalPnl += estPnl;
     lines.push(
-      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${sizePct.toFixed(0)}%  →  est ${FormattedString.b(signedUsd(estPnl))}`,
+      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${percentAbs(sizePct, 0)}  →  est ${FormattedString.b(signedUsd(estPnl))}`,
     );
   }
   if (rungs.length > 1) {
     const mult = margin > 0 ? totalPnl / margin : null;
-    const multStr = mult !== null ? `  (${mult.toFixed(2)}× margin)` : "";
+    const multStr = mult !== null ? `  (${num(mult, 2, 2)}× margin)` : "";
     lines.push(fmt`  ${FormattedString.i(`If all fill: ${signedUsd(totalPnl)}${multStr}`)}`);
   }
   return FormattedString.join(lines, "\n");
@@ -224,8 +234,8 @@ function buildSlSection(
   const status: "none" | "partial" | "full" = fully ? "full" : "partial";
 
   const headerLabel = fully
-    ? `${totalPct.toFixed(0)}% protected`
-    : `⚠️ only ${totalPct.toFixed(0)}% protected`;
+    ? `${percentAbs(totalPct, 0)} protected`
+    : `⚠️ only ${percentAbs(totalPct, 0)} protected`;
   const header = fmt`🛑 ${FormattedString.b("Stop Loss")}  ·  ${FormattedString.b(headerLabel)}`;
 
   const lines: FormattedString[] = [header];
@@ -236,13 +246,13 @@ function buildSlSection(
     const estPnl = estimateRungPnl(r.triggerPrice, entry, side, r.maxSizeLots, baseLotsDecimals);
     totalLoss += estPnl;
     lines.push(
-      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${sizePct.toFixed(0)}%  →  est ${FormattedString.b(signedUsd(estPnl))}`,
+      fmt`  ${circleNum(i)} ${FormattedString.b(fmtPrice(r.triggerPrice))} ${r.mode}  ·  close ${percentAbs(sizePct, 0)}  →  est ${FormattedString.b(signedUsd(estPnl))}`,
     );
   }
   if (!fully) {
     const gapPct = 100 - totalPct;
     lines.push(
-      fmt`  ${FormattedString.i(`‼️ ${gapPct.toFixed(0)}% of position has NO stop — keeps bleeding past the trigger`)}`,
+      fmt`  ${FormattedString.i(`‼️ ${percentAbs(gapPct, 0)} of position has NO stop — keeps bleeding past the trigger`)}`,
     );
   } else if (rungs.length > 1) {
     lines.push(fmt`  ${FormattedString.i(`If all fill: ${signedUsd(totalLoss)}`)}`);
@@ -307,7 +317,7 @@ function buildDetailText(
     const dot = liqDistanceDot(dist);
     liqBlock = fmt`🚨 ${FormattedString.b("Liquidation")}
 Price        ${FormattedString.b(fmtPrice(liq))}
-Distance     ${FormattedString.b(`${dist.toFixed(1)}% away`)} ${dot}
+Distance     ${FormattedString.b(`${percentAbs(dist, 1)} away`)} ${dot}
 If hit       ${FormattedString.b(signedUsd(-margin))} margin ${FormattedString.i("(full wipe)")}`;
   } else {
     liqBlock = fmt`🚨 ${FormattedString.b("Liquidation")}    ${FormattedString.i("Safe ✅")}`;
@@ -367,7 +377,7 @@ export async function sendPositionDetail(
   const slRungs = rungs.filter((r) => r.leg === "sl");
 
   const baseLotsDecimals = market ? market.baseLotsDecimals : 4;
-  const positionLots = market ? BigInt(Math.round(Number(pos.size) * 10 ** baseLotsDecimals)) : 0n;
+  const positionLots = market ? tokensToLots(pos.size, baseLotsDecimals) : 0n;
 
   const unsettledFunding = Number(state.unsettledFunding);
   const built = buildDetailText(
@@ -544,7 +554,7 @@ export function registerPositions(bot: Bot<BotContext>) {
       try {
         const s = await getSettings(user.id);
         const marginFee = getFeeConfig(s.feeMode, s.customFeeSol);
-        const sig = await addMargin(symbol, user.walletAddress, amount, marginFee);
+        const sig = await addMargin(symbol, user.walletAddress, amtStr, marginFee);
         // Margin/liq changed — drop the TP/SL Protect-screen cache for this symbol.
         invalidateCtx(user.walletAddress, symbol, "long");
         invalidateCtx(user.walletAddress, symbol, "short");
@@ -681,13 +691,13 @@ async function executeClose(
         const pnl = Number(prePos.unrealizedPnl) * fraction;
         const leverage = prePos.leverage ?? 1;
         const margin = (Number(prePos.entryPrice) * Number(prePos.size)) / Math.max(leverage, 1);
-        const roiPct = margin > 0 ? ((pnl / margin) * 100).toFixed(2) : "0.00";
+        const roiPct = margin > 0 ? (pnl / margin) * 100 : 0;
         const card = await generatePnlCard({
           symbol,
           side: prePos.side,
           entryPrice: prePos.entryPrice,
           exitPrice: prePos.markPrice,
-          roiPercent: Number(roiPct),
+          roiPercent: roiPct,
           pnlUsdc: pnl,
         });
         await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));

@@ -94,10 +94,10 @@ describe("resolveSize", () => {
     expect(resolveSize({ kind: "lots", lots: 123n }, 1_145_000n, SOL_MARKET)).toBe(123n);
   });
   it("tokens 1.5 SOL @ 5 decimals = 150000 lots", () => {
-    expect(resolveSize({ kind: "tokens", tokens: 1.5 }, 0n, SOL_MARKET)).toBe(150_000n);
+    expect(resolveSize({ kind: "tokens", tokens: "1.5" }, 0n, SOL_MARKET)).toBe(150_000n);
   });
   it("tokens 0.00000001 BTC @ 8 decimals = 1 lot", () => {
-    expect(resolveSize({ kind: "tokens", tokens: 0.00000001 }, 0n, BTC_MARKET)).toBe(1n);
+    expect(resolveSize({ kind: "tokens", tokens: "0.00000001" }, 0n, BTC_MARKET)).toBe(1n);
   });
   it("percent 50 of 1000 lots = 500", () => {
     expect(resolveSize({ kind: "percent", pct: 50 }, 1000n, SOL_MARKET)).toBe(500n);
@@ -109,7 +109,7 @@ describe("resolveSize", () => {
     expect(resolveSize({ kind: "percent", pct: 101 }, 1000n, SOL_MARKET)).toBe(0n);
   });
   it("tokens 0 returns 0", () => {
-    expect(resolveSize({ kind: "tokens", tokens: 0 }, 0n, SOL_MARKET)).toBe(0n);
+    expect(resolveSize({ kind: "tokens", tokens: "0" }, 0n, SOL_MARKET)).toBe(0n);
   });
 });
 

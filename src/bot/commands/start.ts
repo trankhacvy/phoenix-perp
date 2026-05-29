@@ -17,7 +17,7 @@ import {
   getWalletUsdcBalance,
 } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
-import { usd } from "../lib/fmt.js";
+import { num, usd } from "../lib/fmt.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryDetail } from "./history.js";
 import { sendSizeStep } from "./long.js";
@@ -142,7 +142,7 @@ export function registerStart(bot: Bot<BotContext>) {
 
       const solLine =
         sol !== null
-          ? fmt`⛽ Gas               ${FormattedString.b(`${sol.toFixed(4)} SOL`)}${solPrice > 0 ? fmt` (${usd(sol * solPrice)})` : fmt``}`
+          ? fmt`⛽ Gas               ${FormattedString.b(`${num(sol, 4, 4)} SOL`)}${solPrice > 0 ? fmt` (${usd(sol * solPrice)})` : fmt``}`
           : fmt`⛽ Gas               —`;
 
       const usdcLine =

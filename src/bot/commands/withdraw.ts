@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
+import { toNative } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getTraderState } from "../../services/phoenix/position.js";
@@ -14,7 +15,7 @@ import { getSettings } from "../../services/settings.js";
 import { getSolBalance, getWalletUsdcBalance } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { requireActivation } from "../lib/activation.js";
-import { shortAddr, solscanUrl, usd } from "../lib/fmt.js";
+import { num, shortAddr, solscanUrl, usd } from "../lib/fmt.js";
 import { clearPending, setPending } from "../lib/pending.js";
 import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
@@ -29,23 +30,29 @@ type ExtSource = "trading" | "wallet";
 
 // ─── Redis helpers ─────────────────────────────────────────────────────────────
 
+interface ExtConfirm {
+  amount: number;
+  amountStr: string;
+  toAddress: string;
+  source: ExtSource;
+}
+
 async function storeExtConfirm(
   telegramId: string,
   amount: number,
   toAddress: string,
   source: ExtSource,
 ): Promise<void> {
-  await redis.set(`wd:ext:${telegramId}`, JSON.stringify({ amount, toAddress, source }), "EX", 600);
+  const payload: ExtConfirm = { amount, amountStr: String(amount), toAddress, source };
+  await redis.set(`wd:ext:${telegramId}`, JSON.stringify(payload), "EX", 600);
 }
 
 // Atomically consumes the ext confirm key — only the first concurrent caller
 // succeeds; subsequent callers get null. Prevents double-submit.
-async function consumeExtConfirm(
-  telegramId: string,
-): Promise<{ amount: number; toAddress: string; source: ExtSource } | null> {
+async function consumeExtConfirm(telegramId: string): Promise<ExtConfirm | null> {
   const raw = await redis.getdel(`wd:ext:${telegramId}`);
   if (!raw) return null;
-  return JSON.parse(raw) as { amount: number; toAddress: string; source: ExtSource };
+  return JSON.parse(raw) as ExtConfirm;
 }
 
 export async function clearWithdrawExtState(telegramId: string): Promise<void> {
@@ -207,14 +214,14 @@ export async function sendWithdrawAmountScreen(
     const amt = Math.floor(((safe * p) / 100) * 100) / 100;
     if (amt >= MIN_WITHDRAW_USD) {
       const btnLabel = p === 100 ? "Max safe" : `${p}%`;
-      kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:${prefix}:${amt.toFixed(2)}`);
+      kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:${prefix}:${amt.toFixed(2)}`); // numfmt-ignore: callback/pending data encoder
     }
     if (i % 2 === 1) kb.row();
   }
 
   if (deposited > safe + 0.01) {
     kb.row()
-      .text(`⚠️ Max all  ${usd(deposited)}`, `wd:amt:${prefix}:${deposited.toFixed(2)}`)
+      .text(`⚠️ Max all  ${usd(deposited)}`, `wd:amt:${prefix}:${deposited.toFixed(2)}`) // numfmt-ignore: callback/pending data encoder
       .row();
   }
 
@@ -262,7 +269,7 @@ export async function sendWithdrawWalletAmountScreen(ctx: BotContext, edit = fal
     const amt = Math.floor(((walletUsdc * p) / 100) * 100) / 100;
     if (amt >= MIN_WITHDRAW_USD) {
       const btnLabel = p === 100 ? "Max" : `${p}%`;
-      kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:wal:${amt.toFixed(2)}`);
+      kb.text(`${btnLabel}  ${usd(amt)}`, `wd:amt:wal:${amt.toFixed(2)}`); // numfmt-ignore: callback/pending data encoder
     }
     if (i % 2 === 1) kb.row();
   }
@@ -315,7 +322,7 @@ export async function sendWithdrawConfirmInternal(ctx: BotContext, amount: numbe
       : fmt``;
 
   const kb = new InlineKeyboard()
-    .text(`✅ Withdraw ${usd(amount)}`, `wd:exec:int:${amount.toFixed(2)}`)
+    .text(`✅ Withdraw ${usd(amount)}`, `wd:exec:int:${amount.toFixed(2)}`) // numfmt-ignore: callback/pending data encoder
     .row()
     .text("← Change amount", "wd:internal")
     .text("✕ Cancel", "cancel");
@@ -351,7 +358,7 @@ Enter the ${FormattedString.b("destination Solana wallet address")}:
 
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
   await clearPending(ctx.from.id);
-  await setPending(ctx.from.id, `withdraw_ext_addr:${amount.toFixed(2)}:${source}`);
+  await setPending(ctx.from.id, `withdraw_ext_addr:${amount.toFixed(2)}:${source}`); // numfmt-ignore: callback/pending data encoder
 }
 
 export async function sendWithdrawConfirmExternal(
@@ -379,7 +386,7 @@ export async function sendWithdrawConfirmExternal(
   const sol = await getSolBalance(ctx.user.walletAddress);
   if (sol < MIN_SOL_FOR_GAS) {
     await ctx.reply(
-      `Not enough SOL for gas (have ${sol.toFixed(4)} SOL, need ~${MIN_SOL_FOR_GAS}).\n\nSend a small amount of SOL to your bot wallet first:\n${ctx.user.walletAddress}`,
+      `Not enough SOL for gas (have ${num(sol, 4, 4)} SOL, need ~${MIN_SOL_FOR_GAS}).\n\nSend a small amount of SOL to your bot wallet first:\n${ctx.user.walletAddress}`,
     );
     return;
   }
@@ -573,7 +580,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
 
     await ctx.answerCallbackQuery("Processing…");
     const amount = Number(ctx.match[1]);
-    const amountNative = BigInt(Math.round(amount * 1_000_000));
+    const amountNative = toNative(ctx.match[1], 6);
 
     const { deposited } = await getWithdrawBalances(ctx.user.walletAddress);
     if (amount > deposited + 0.01) {
@@ -664,7 +671,7 @@ export function registerWithdraw(bot: Bot<BotContext>) {
     const api = ctx.api;
 
     const { amount, toAddress } = confirm;
-    const amountNative = BigInt(Math.round(amount * 1_000_000));
+    const amountNative = toNative(confirm.amountStr, 6);
 
     void (async () => {
       const s = await getSettings(user.id);

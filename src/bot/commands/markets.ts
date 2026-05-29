@@ -18,6 +18,9 @@ import {
   fundingAnnual,
   fundingDotAnnual,
   fundingHourly,
+  money,
+  num,
+  percentAbs,
   pnlEmoji,
 } from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
@@ -233,7 +236,7 @@ export async function sendMarketDetail(
     const dailyPer10k = (Math.abs(annual) / 100 / 365) * 10_000;
     fundingBlock = fmt`💸 ${FormattedString.b("Funding")} (1h)   ${FormattedString.b(fundingHourly(hour))}  ${dot} ${FormattedString.i(dir)}
    Annualized   ${FormattedString.b(fundingAnnual(annual))}
-   Cost         ${FormattedString.i(`~$${dailyPer10k.toFixed(2)} / day per $10k`)}`;
+   Cost         ${FormattedString.i(`~${money(dailyPer10k)} / day per $10k`)}`;
   } else {
     fundingBlock = fmt`💸 ${FormattedString.b("Funding")}   ${FormattedString.i("warming up…")}`;
   }
@@ -257,8 +260,8 @@ export async function sendMarketDetail(
       ? fmt`\n\n${FormattedString.i("Live data warming up — tap ↻ Refresh in a moment.")}`
       : fmt``;
 
-  const takerPct = (marketConfig.takerFee * 100).toFixed(3);
-  const makerPct = (marketConfig.makerFee * 100).toFixed(3);
+  const takerPct = percentAbs(marketConfig.takerFee * 100, 3);
+  const makerPct = percentAbs(marketConfig.makerFee * 100, 3);
 
   const msg = fmt`📊 ${FormattedString.b(symbol)}  ·  ${FormattedString.b(`${maxLev}x`)} max
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -269,7 +272,7 @@ OI      ${FormattedString.b(oiStr)}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 ${fundingBlock}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Fees    ${FormattedString.b(`${takerPct}%`)} taker · ${FormattedString.b(`${makerPct}%`)} maker${isolatedNote}${commodityNote}${coldNote}`;
+Fees    ${FormattedString.b(takerPct)} taker · ${FormattedString.b(makerPct)} maker${isolatedNote}${commodityNote}${coldNote}`;
 
   const kb = new InlineKeyboard();
   if (!isolated) {
@@ -312,7 +315,7 @@ async function sendMarketTa(ctx: BotContext, symbol: string, fromPage: number): 
         ? `${fmtPrice(ta.bbLowerBand)} – ${fmtPrice(ta.bbUpperBand)}`
         : "—";
     const atrStr = ta.atr !== null ? fmtPrice(ta.atr) : "—";
-    body = fmt`RSI(14)    ${FormattedString.b(ta.rsi.toFixed(1))} · ${FormattedString.i(rsiLabel)}
+    body = fmt`RSI(14)    ${FormattedString.b(num(ta.rsi, 1, 1))} · ${FormattedString.i(rsiLabel)}
 MACD       ${FormattedString.i(macdLabel)}
 Bollinger  ${FormattedString.b(bbStr)}
 ATR(14)    ${FormattedString.b(atrStr)}`;

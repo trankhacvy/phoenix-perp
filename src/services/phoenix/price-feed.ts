@@ -1,5 +1,6 @@
 import { logger } from "../../lib/logger.js";
 import { getPhoenixWsClient } from "./client.js";
+import { superviseFeed } from "./feed-supervisor.js";
 
 type TickFn = (mids: ReadonlyMap<string, number>) => void | Promise<void>;
 
@@ -26,8 +27,9 @@ export function startPriceFeed(): void {
   if (controller) return;
   const ac = new AbortController();
   controller = ac;
-  void (async () => {
+  void superviseFeed("allMids", ac.signal, async (onAlive) => {
     for await (const update of getPhoenixWsClient().allMids(ac.signal)) {
+      onAlive();
       for (const [symbol, price] of Object.entries(update.mids)) {
         mids.set(symbol.toUpperCase(), price);
       }
@@ -35,9 +37,6 @@ export function startPriceFeed(): void {
         Promise.resolve(fn(mids)).catch((err) => logger.error({ err }, "mids subscriber failed"));
       }
     }
-  })().catch((err) => {
-    if (err instanceof Error && err.name === "AbortError") return;
-    logger.error({ err }, "allMids subscription failed");
   });
 }
 

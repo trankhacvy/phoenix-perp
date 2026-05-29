@@ -58,25 +58,29 @@ describe("marginToTokens", () => {
 
 describe("fractionToCloseLots", () => {
   it("halves a 1000-lot position", () => {
-    expect(fractionToCloseLots(1000, 0.5)).toBe(500n);
+    expect(fractionToCloseLots(1000n, 0.5)).toBe(500n);
   });
 
   it("works on negative positions (shorts)", () => {
-    expect(fractionToCloseLots(-1000, 1)).toBe(1000n);
+    expect(fractionToCloseLots(-1000n, 1)).toBe(1000n);
   });
 
   it("rejects fraction outside (0, 1]", () => {
-    expect(() => fractionToCloseLots(1000, 0)).toThrow(BotError);
-    expect(() => fractionToCloseLots(1000, 1.5)).toThrow(BotError);
-    expect(() => fractionToCloseLots(1000, -0.1)).toThrow(BotError);
+    expect(() => fractionToCloseLots(1000n, 0)).toThrow(BotError);
+    expect(() => fractionToCloseLots(1000n, 1.5)).toThrow(BotError);
+    expect(() => fractionToCloseLots(1000n, -0.1)).toThrow(BotError);
   });
 
   it("ceil rounds up small fractions so 1 lot * 0.01 = 1 lot", () => {
-    expect(fractionToCloseLots(1, 0.01)).toBe(1n);
+    expect(fractionToCloseLots(1n, 0.01)).toBe(1n);
+  });
+
+  it("stays exact for lot counts beyond 2^53", () => {
+    expect(fractionToCloseLots(10n ** 30n, 0.25)).toBe(25n * 10n ** 28n);
   });
 
   it("throws SIZE_TOO_SMALL when position is 0 lots", () => {
-    expect(() => fractionToCloseLots(0, 1)).toThrow(BotError);
+    expect(() => fractionToCloseLots(0n, 1)).toThrow(BotError);
   });
 });
 

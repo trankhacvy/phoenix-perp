@@ -29,6 +29,13 @@ const schema = z.object({
     .default("false")
     .transform((v) => v === "true" || v === "1"),
 
+  // Leaderboard scanner toggle. Unset → defaults to on in production, off elsewhere
+  // (so you can opt in during dev to surface Phoenix/Helius rate limits early).
+  LEADERBOARD_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true" || v === "1")),
+
   PHOENIX_API_URL: z.string().url().default("https://perp-api.phoenix.trade"),
   PHOENIX_WS_URL: z.string().default("wss://perp-api.phoenix.trade/v1/ws"),
 

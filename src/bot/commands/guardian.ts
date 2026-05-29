@@ -20,7 +20,7 @@ import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/t
 import { getSettings } from "../../services/settings.js";
 import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
-import { price as fmtPrice, num, pct, usd } from "../lib/fmt.js";
+import { price as fmtPrice, money, moneyShort, num, pct, signedMoney, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
@@ -59,16 +59,10 @@ function ruleOneLiner(rule: GuardianRule): string {
   else if (rule.ruleType === "pnl_target")
     trigger = rule.direction === "above" ? `+${th}%` : `−${th}%`;
   else if (rule.ruleType === "funding_drain") trigger = `> $${th}/day`;
-  else if (rule.ruleType === "exposure_limit") trigger = `> $${formatCompact(th)}`;
+  else if (rule.ruleType === "exposure_limit") trigger = `> ${moneyShort(th)}`;
   else if (rule.ruleType === "margin_ratio") trigger = `< ${th}%`;
 
   return `${enabled} ${sym} — ${t.name} ${trigger}`;
-}
-
-function formatCompact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return n.toFixed(0);
 }
 
 function actionOneLiner(rule: GuardianRule): string {
@@ -301,7 +295,7 @@ async function sendThresholdPicker(ctx: BotContext, ruleType: string, symbol: st
   } else if (ruleType === "exposure_limit") {
     explanation = "Alert when total position value exceeds:";
     for (const v of [10000, 25000, 50000, 100000])
-      kb.text(`$${formatCompact(v)}`, `grd:th:${ruleType}:${symbol}:${v}`);
+      kb.text(moneyShort(v), `grd:th:${ruleType}:${symbol}:${v}`);
     kb.row();
   } else if (ruleType === "margin_ratio") {
     explanation = "Alert when account collateral vs total exposure drops below:";
@@ -466,7 +460,7 @@ async function sendConfirmScreen(
     triggerDesc =
       parsed?.direction === "above" ? `PnL reaches +${thVal}%` : `PnL drops to −${thVal}%`;
   else if (ruleType === "funding_drain") triggerDesc = `Funding > $${thVal}/day`;
-  else if (ruleType === "exposure_limit") triggerDesc = `Exposure > $${formatCompact(thVal)}`;
+  else if (ruleType === "exposure_limit") triggerDesc = `Exposure > ${moneyShort(thVal)}`;
   else if (ruleType === "margin_ratio") triggerDesc = `Margin ratio < ${thVal}%`;
 
   let actionLabel = ACTION_LABELS[action] ?? action;
@@ -1319,9 +1313,9 @@ ${String(count)} rules downgraded to "Notify + suggest actions".`;
       const notional = Number(pos.size) * Number(pos.markPrice);
       const msg = fmt`⚠️ ${FormattedString.b(`Close ${symbol} ${side.toUpperCase()}?`)}
 
-Size: ${pos.size} ${symbol} (~${FormattedString.code(`$${notional.toFixed(2)}`)})
-Mark: ${FormattedString.code(`$${Number(pos.markPrice).toFixed(2)}`)}
-Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$${Number(pos.unrealizedPnl).toFixed(2)}`)}`;
+Size: ${pos.size} ${symbol} (~${FormattedString.code(money(notional))})
+Mark: ${FormattedString.code(fmtPrice(Number(pos.markPrice)))}
+Est. PnL: ${FormattedString.code(signedMoney(Number(pos.unrealizedPnl)))}`;
 
       const kb = new InlineKeyboard()
         .text("✅ Close now", `grd:closego:${symbol}:${side}`)
@@ -1465,7 +1459,7 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
       try {
         const settings = await getSettings(user.id);
         const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
-        const txSig = await addMargin(symbol, user.walletAddress, amount, fee);
+        const txSig = await addMargin(symbol, user.walletAddress, amountStr, fee);
         const body = fmt`${FormattedString.b(`$${amount}`)} added to ${symbol}.`;
         const msg = txSuccess({ header: "Margin added", body, signature: txSig });
         const kb = new InlineKeyboard()

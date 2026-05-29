@@ -1,6 +1,7 @@
 import type { CustomSubscriptionDefinition } from "@ellipsis-labs/rise";
 import { z } from "zod";
 import { getPhoenixWsClient } from "./client.js";
+import { superviseFeed } from "./feed-supervisor.js";
 
 const tradesMsgSchema = z.object({
   channel: z.literal("trades"),
@@ -43,10 +44,11 @@ export function subscribeMarketTakers(
   onTaker: (taker: string) => void,
 ): () => void {
   const ac = new AbortController();
-  void (async () => {
+  void superviseFeed(`trades:${symbol.toUpperCase()}`, ac.signal, async (onAlive) => {
     for await (const update of getAdapter()(symbol, ac.signal)) {
+      onAlive();
       for (const taker of update.takers) onTaker(taker);
     }
-  })().catch(() => {});
+  });
   return () => ac.abort();
 }

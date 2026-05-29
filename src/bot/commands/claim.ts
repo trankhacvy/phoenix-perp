@@ -6,6 +6,7 @@ import { db } from "../../db/index.js";
 import { referrals } from "../../db/schema/index.js";
 import { getClaimableReferrals } from "../../services/referral.js";
 import type { BotContext } from "../../types/index.js";
+import { num } from "../lib/fmt.js";
 
 export function registerClaim(bot: Bot<BotContext>) {
   bot.command("claim", async (ctx) => {
@@ -37,7 +38,7 @@ export function registerClaim(bot: Bot<BotContext>) {
       ),
     );
 
-    const msg = fmt`✅ Claimed ${FormattedString.code(`${claimable.toFixed(6)} USDC`)} referral rebate.\n\nFunds will arrive in your wallet within 24 hours.`;
+    const msg = fmt`✅ Claimed ${FormattedString.code(`${num(claimable, 6, 6)} USDC`)} referral rebate.\n\nFunds will arrive in your wallet within 24 hours.`;
     await ctx.reply(msg.text, { entities: msg.entities });
   });
 }

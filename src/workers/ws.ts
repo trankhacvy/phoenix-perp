@@ -10,6 +10,7 @@ import { type AlertButton, alertQueue } from "../jobs/queues.js";
 import { MONITOR_EVENTS_CHANNEL } from "../lib/constants.js";
 import { logger } from "../lib/logger.js";
 import { getPhoenixWsClient } from "../services/phoenix/client.js";
+import { superviseFeed } from "../services/phoenix/feed-supervisor.js";
 import { getMarket } from "../services/phoenix/market.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { AccountSnapshot, CachedPosition } from "../types/index.js";
@@ -199,17 +200,15 @@ function subscribeTrader(walletAddress: string) {
   const controller = new AbortController();
   controllers.set(walletAddress, controller);
 
-  void (async () => {
+  void superviseFeed(`traderState:${walletAddress}`, controller.signal, async (onAlive) => {
     for await (const update of getPhoenixWsClient().traderState(
       walletAddress,
       0,
       controller.signal,
     )) {
+      onAlive();
       await applyTraderState(walletAddress, update);
     }
-  })().catch((err) => {
-    if (err instanceof Error && err.name === "AbortError") return;
-    logger.error({ err, walletAddress }, "traderState subscription failed");
   });
 }
 

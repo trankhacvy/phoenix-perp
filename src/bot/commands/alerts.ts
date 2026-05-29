@@ -7,7 +7,7 @@ import { alertSubscriptions } from "../../db/schema/index.js";
 import { getMarketSnapshot, getMarkets } from "../../services/phoenix/market.js";
 import type { BotContext } from "../../types/index.js";
 import { bustPriceAlertCache } from "../../workers/evaluators/index.js";
-import { price as fmtPrice, parseAmount } from "../lib/fmt.js";
+import { price as fmtPrice, money, parseAmount } from "../lib/fmt.js";
 import { setPending } from "../lib/pending.js";
 
 const ACCOUNT_ALERT_DEFS = [
@@ -185,7 +185,7 @@ ${lines.join("\n")}`;
   const kb = new InlineKeyboard();
   for (const a of alerts) {
     const trigger = Number(a.triggerPrice ?? 0);
-    const label = `🗑 ${a.symbol} $${Math.abs(trigger).toFixed(0)}`;
+    const label = `🗑 ${a.symbol} ${fmtPrice(Math.abs(trigger))}`;
     kb.text(label, `al:pa:rm:${a.id}`);
   }
   kb.row().text("+ Add new", "al:pa:add").row();
@@ -223,12 +223,12 @@ async function sendPricePrompt(ctx: BotContext, symbol: string) {
   const kb = new InlineKeyboard();
   if (mark !== null) {
     for (const p of [2, 5, 10]) {
-      const price = Number((mark * (1 + p / 100)).toFixed(6));
+      const price = Math.round(mark * (1 + p / 100) * 1e6) / 1e6;
       kb.text(`🔼 +${p}%  ${fmtPrice(price)}`, `al:pa:pick:${symbol}:${price}`);
     }
     kb.row();
     for (const p of [2, 5, 10]) {
-      const price = Number((mark * (1 - p / 100)).toFixed(6));
+      const price = Math.round(mark * (1 - p / 100) * 1e6) / 1e6;
       kb.text(`🔽 −${p}%  ${fmtPrice(price)}`, `al:pa:pick:${symbol}:${price}`);
     }
     kb.row();
@@ -258,7 +258,7 @@ export async function sendPriceAlertConfirm(ctx: BotContext, symbol: string, tri
 
   const distPart =
     markPrice !== null
-      ? `\n(Current: ${fmtPrice(markPrice)} · $${Math.abs(triggerPrice - markPrice).toFixed(2)} away)`
+      ? `\n(Current: ${fmtPrice(markPrice)} · ${money(Math.abs(triggerPrice - markPrice))} away)`
       : "";
 
   const msg = fmt`💰 Set price alert?

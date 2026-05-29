@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import satori from "satori";
 import sharp from "sharp";
+import { moneyShort, signedMoney } from "../bot/lib/fmt.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(__dirname, "../../assets");
@@ -191,28 +192,6 @@ function directionBadge(side: "long" | "short", leverage?: number): Node {
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
-function fmtUsd(n: number): string {
-  const abs = Math.abs(n);
-  const fmt =
-    abs >= 1_000_000
-      ? `$${(abs / 1_000_000).toFixed(2)}M`
-      : abs >= 1_000
-        ? `$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        : `$${abs.toFixed(2)}`;
-  return n >= 0 ? `+${fmt}` : `-${fmt}`;
-}
-
-function fmtCompact(n: number): string {
-  const abs = Math.abs(n);
-  const s =
-    abs >= 1_000_000
-      ? `$${(abs / 1_000_000).toFixed(1)}M`
-      : abs >= 1_000
-        ? `$${Math.round(abs / 1_000)}K`
-        : `$${Math.round(abs)}`;
-  return n >= 0 ? s : `-${s}`;
-}
-
 function fmtPct(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
@@ -370,7 +349,7 @@ export async function generatePnlCard(data: PnlCardData): Promise<Buffer> {
   const leftContent: Node[] = [
     field("Market", data.symbol, 52),
     directionBadge(data.side, data.leverage),
-    field("Realized PnL", fmtUsd(data.pnlUsdc), 74, accent),
+    field("Realized PnL", signedMoney(data.pnlUsdc), 74, accent),
     txt(fmtPct(data.roiPercent), 44, accent),
   ];
 
@@ -415,7 +394,7 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
 
   const leftContent: Node[] = [
     field("Trader", shortAddr(data.walletAddress), 32, C.muted),
-    field("Total PnL", fmtUsd(data.realizedPnl), 80, accent),
+    field("Total PnL", signedMoney(data.realizedPnl), 80, accent),
   ];
 
   if (data.winRate !== null) {
@@ -432,14 +411,14 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
             type: "div",
             props: {
               style: { display: "flex", flexDirection: "column", gap: 6 },
-              children: [lbl("Best Trade"), txt(fmtUsd(data.bestTrade.pnl), 32, C.profit)],
+              children: [lbl("Best Trade"), txt(signedMoney(data.bestTrade.pnl), 32, C.profit)],
             },
           },
           {
             type: "div",
             props: {
               style: { display: "flex", flexDirection: "column", gap: 6 },
-              children: [lbl("Worst Trade"), txt(fmtUsd(data.worstTrade.pnl), 32, C.loss)],
+              children: [lbl("Worst Trade"), txt(signedMoney(data.worstTrade.pnl), 32, C.loss)],
             },
           },
         ],
@@ -454,11 +433,11 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
   };
 
   addStat("Fills", String(data.totalFills));
-  addStat("Volume", fmtCompact(data.totalVolume));
+  addStat("Volume", moneyShort(data.totalVolume));
   const avg = data.totalFills > 0 ? data.realizedPnl / data.totalFills : 0;
-  addStat("Avg PnL", fmtUsd(avg), accent);
-  if (data.bestTrade) addStat("Best", fmtUsd(data.bestTrade.pnl), C.profit);
-  if (data.worstTrade) addStat("Worst", fmtUsd(data.worstTrade.pnl), C.loss);
+  addStat("Avg PnL", signedMoney(avg), accent);
+  if (data.bestTrade) addStat("Best", signedMoney(data.bestTrade.pnl), C.profit);
+  if (data.worstTrade) addStat("Worst", signedMoney(data.worstTrade.pnl), C.loss);
 
   const svg = await satori(cardShell(win, leftContent, barItems), {
     width: W,

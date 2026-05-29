@@ -3,6 +3,7 @@ import type { Bot } from "grammy";
 import { config } from "../../config/index.js";
 import { getReferralStats } from "../../services/referral.js";
 import type { BotContext } from "../../types/index.js";
+import { num } from "../lib/fmt.js";
 
 export function registerReferral(bot: Bot<BotContext>) {
   bot.command("referral", async (ctx) => {
@@ -21,7 +22,7 @@ export function registerReferral(bot: Bot<BotContext>) {
     const botInfo = await bot.api.getMe();
     const link = `https://t.me/${botInfo.username}?start=${ctx.user.referralCode}`;
 
-    const msg = fmt`👥 ${FormattedString.b("Your Referral")}\n\nLink: ${link}\nCode: ${FormattedString.code(ctx.user.referralCode)}\n\nDirect referrals: ${FormattedString.b(String(stats.t1Count))}\nIndirect referrals: ${FormattedString.b(String(stats.t2Count))}\n\nAccrued rebate: ${FormattedString.code(`${stats.totalAccruedUsdc.toFixed(6)} USDC`)}\nClaimable: ${FormattedString.code(`${stats.claimableUsdc.toFixed(6)} USDC`)}\n\nUse /claim to withdraw your rebate.`;
+    const msg = fmt`👥 ${FormattedString.b("Your Referral")}\n\nLink: ${link}\nCode: ${FormattedString.code(ctx.user.referralCode)}\n\nDirect referrals: ${FormattedString.b(String(stats.t1Count))}\nIndirect referrals: ${FormattedString.b(String(stats.t2Count))}\n\nAccrued rebate: ${FormattedString.code(`${num(stats.totalAccruedUsdc, 6, 6)} USDC`)}\nClaimable: ${FormattedString.code(`${num(stats.claimableUsdc, 6, 6)} USDC`)}\n\nUse /claim to withdraw your rebate.`;
 
     await ctx.reply(msg.text, {
       entities: msg.entities,

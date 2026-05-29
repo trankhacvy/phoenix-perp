@@ -1,5 +1,5 @@
-import { logger } from "../../lib/logger.js";
 import { getPhoenixWsClient } from "./client.js";
+import { superviseFeed } from "./feed-supervisor.js";
 
 export interface MarketStatsLive {
   markPrice: number;
@@ -44,8 +44,9 @@ export function startAllMarketStats(): void {
   const ac = new AbortController();
   controller = ac;
 
-  void (async () => {
+  void superviseFeed("marketStats", ac.signal, async (onAlive) => {
     for await (const update of getPhoenixWsClient().marketStats(undefined, ac.signal)) {
+      onAlive();
       const s = update.stats;
       stats.set(update.symbol.toUpperCase(), {
         markPrice: s.markPrice,
@@ -59,9 +60,6 @@ export function startAllMarketStats(): void {
         updatedAt: Date.now(),
       });
     }
-  })().catch((err) => {
-    if (err instanceof Error && err.name === "AbortError") return;
-    logger.error({ err }, "all-markets marketStats subscription failed");
   });
 }
 

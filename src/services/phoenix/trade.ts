@@ -36,6 +36,7 @@ import {
   signTransactionMessageWithSigners,
 } from "@solana/signers";
 import { config } from "../../config/index.js";
+import { toNative } from "../../lib/amount.js";
 import { getPrivyKitSigner } from "../wallet.js";
 import { getTradingClient } from "./client.js";
 import { fractionToCloseLots } from "./lots.js";
@@ -78,7 +79,7 @@ const DEFAULT_FEE: FeeConfig = FEE_PRESETS.normal;
 
 export function getFeeConfig(mode: string, customSol?: number | null): FeeConfig {
   if (mode === "custom" && customSol && customSol > 0) {
-    const tipLamports = BigInt(Math.round(customSol * 1e9));
+    const tipLamports = toNative(String(customSol), 9);
     const cuPrice = Math.max(Math.round((customSol * 1e15) / 250_000), 10_000);
     return { tipLamports, cuPrice };
   }
@@ -445,8 +446,8 @@ export async function closePosition(
   );
   if (!pos) throw new Error(`No open position for ${symbol}`);
 
-  const rawLots = Number(pos.basePositionLots);
-  const isLong = rawLots > 0;
+  const rawLots = BigInt(pos.basePositionLots);
+  const isLong = rawLots > 0n;
   const closeLots = fractionToCloseLots(rawLots, fraction);
   const closeSide = isLong ? Side.Ask : Side.Bid;
 
@@ -477,11 +478,10 @@ export async function closePosition(
 export async function addMargin(
   _symbol: string,
   walletAddress: string,
-  amountUsdc: number,
+  amountUsdcStr: string,
   fee?: FeeConfig,
 ): Promise<string> {
-  const amountNative = BigInt(Math.round(amountUsdc * 1_000_000));
-  return depositCollateral(walletAddress, amountNative, fee);
+  return depositCollateral(walletAddress, toNative(amountUsdcStr, 6), fee);
 }
 
 export async function depositCollateral(

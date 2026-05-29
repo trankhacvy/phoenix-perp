@@ -142,6 +142,13 @@ See `docs/ux-standards.md` — mandatory for all user-facing strings and on-chai
 - Trade confirm must separate margin vs position size, show max slippage, and warn at ≥20×.
 - Buttons: "← Back", "✕ Cancel", "✕ Close", "✅ <Verb>", "View on Solscan →".
 
+### Number handling (calculation + display)
+
+See `docs/number-formatting.md` — covers both precision and rendering. Non-negotiables:
+- **Headline rule:** any number that becomes part of a transaction (amount, size, price-as-ticks) must **never pass through a JS `number`/float**. Parse the human decimal *string* → native `bigint` via `toNative(str, decimals)`; do tx-bound math in `bigint`; convert to `number` only for display or explicitly-approximate estimates. Do **not** use `BigInt(Math.round(amount * 1e6))`.
+- Three layers: **L1 on-chain integer** (`bigint`: native USDC ×1e6, lots, ticks — exact), **L2 derived/analytics** (`number`: PnL, notional, ROI — approximate, inputs are float mark prices), **L3 display** (formatters). Default to native `bigint` + string parsing — no `decimal.js`/`bignumber.js`; `dnum` only if cross-decimal native mul appears.
+- **Display:** use the semantic formatters in `src/bot/lib/fmt.ts` (`money`/`signedMoney` exact, `moneyShort`/`signedMoneyShort` compact, `price`, `tokenSize`, `percent(n, dp)`, `compactNum`). Money you transact stays exact; only aggregates compact (threshold 1,000). Never raw `.toFixed()` or `$${…}` in the command layer.
+
 ### ESM / import rules
 
 `"type": "module"` + `"moduleResolution": "NodeNext"`. All imports must use `.js` extensions even for `.ts` source files. Never use CommonJS `require()`.

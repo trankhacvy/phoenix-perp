@@ -7,9 +7,43 @@ import {
   getLeaderboardStats,
 } from "../../services/leaderboard.js";
 import type { BotContext } from "../../types/index.js";
-import { compactUsd, shortAddr, signedUsd, timeAgo } from "../lib/fmt.js";
+import { compact, compactSigned, percentAbs, shortAddr, timeAgo } from "../lib/fmt.js";
 
 const PAGE_SIZE = 10;
+const NAME_MAX = 16;
+
+function truncateName(s: string, max = NAME_MAX): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+// Header label for the active sort, e.g. "by Volume".
+const SORT_HEADER: Record<LeaderboardSortBy, string> = {
+  total_volume: "Volume",
+  win_rate: "Win Rate",
+  realized_pnl: "PnL",
+};
+
+// Short per-row label for the single metric shown (= the active sort).
+const ROW_LABEL: Record<LeaderboardSortBy, string> = {
+  total_volume: "Vol",
+  win_rate: "Win",
+  realized_pnl: "PnL",
+};
+
+// The one metric value shown per row, matching the active sort.
+function metricValue(
+  r: Awaited<ReturnType<typeof getLeaderboard>>["rows"][number],
+  sortBy: LeaderboardSortBy,
+): string {
+  if (sortBy === "win_rate") {
+    const wr = winRate(r.winCount, r.lossCount);
+    return wr !== null ? percentAbs(wr, 0) : "—";
+  }
+  if (sortBy === "realized_pnl") {
+    return r.realizedPnl != null ? compactSigned(Number(r.realizedPnl)) : "—";
+  }
+  return r.totalVolume != null ? compact(Number(r.totalVolume)) : "—";
+}
 
 const VALID_SORT_KEYS = new Set<LeaderboardSortBy>(["total_volume", "win_rate", "realized_pnl"]);
 
@@ -44,7 +78,7 @@ function buildLeaderboardMessage(
   const pageLabel =
     totalPages > 1 ? fmt`  ·  ${FormattedString.i(`${page + 1}/${totalPages}`)}` : fmt``;
 
-  const header = fmt`🏆 ${FormattedString.b("Leaderboard")}${pageLabel}\n`;
+  const header = fmt`🏆 ${FormattedString.b("Leaderboard")}  ·  by ${SORT_HEADER[sortBy]}${pageLabel}\n`;
 
   const lines: FormattedString[] = [header];
 
@@ -57,22 +91,17 @@ function buildLeaderboardMessage(
     const rank = page * PAGE_SIZE + i + 1;
     const deepLink = `https://t.me/${botUsername}?start=wallet_${r.walletAddress}`;
     const meta = r.metadata as { name?: string; avatar?: string } | null;
-    const displayName = meta?.name
+    const rawName = meta?.name
       ? `${meta.avatar ?? ""} ${meta.name}`.trim()
       : shortAddr(r.walletAddress);
-    const nameLink = FormattedString.link(displayName, deepLink);
+    const nameLink = FormattedString.link(truncateName(rawName), deepLink);
 
-    let metric: string;
-    if (sortBy === "win_rate") {
-      const wr = winRate(r.winCount, r.lossCount);
-      metric = wr !== null ? `${wr.toFixed(1)}%` : "—";
-    } else if (sortBy === "realized_pnl") {
-      metric = signedUsd(Number(r.realizedPnl ?? 0));
-    } else {
-      metric = compactUsd(Number(r.totalVolume ?? 0));
-    }
+    // Single labeled metric — the one the list is sorted by.
+    const value = metricValue(r, sortBy);
 
-    lines.push(fmt`${FormattedString.b(`${rank}.`)} ${nameLink}      ${FormattedString.b(metric)}`);
+    lines.push(
+      fmt`${FormattedString.b(`${rank}.`)} ${nameLink}   ${ROW_LABEL[sortBy]} ${FormattedString.b(value)}`,
+    );
   }
 
   if (totalTraders > 0) {
@@ -88,7 +117,7 @@ function buildKeyboard(sortBy: LeaderboardSortBy, page: number, totalPages: numb
   const kb = new InlineKeyboard();
 
   for (const [key, label] of Object.entries(SORT_LABELS)) {
-    const active = key === sortBy ? `${label} ✓` : label;
+    const active = key === sortBy ? `${label} ▾` : label;
     kb.text(active, `lb:sort:${key}:0`);
   }
   kb.row();

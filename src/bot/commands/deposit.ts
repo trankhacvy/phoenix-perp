@@ -1,6 +1,7 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { type Bot, InlineKeyboard, InputFile } from "grammy";
 import QRCode from "qrcode";
+import { toNative } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
 import { depositCollateral, getFeeConfig } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
@@ -89,7 +90,7 @@ export function registerDeposit(bot: Bot<BotContext>) {
 
     void (async () => {
       try {
-        const amountNative = BigInt(Math.round(amount * 1_000_000));
+        const amountNative = toNative(ctx.match[1], 6);
         const s = await getSettings(user.id);
         const fee = getFeeConfig(s.feeMode, s.customFeeSol);
         const sig = await depositCollateral(user.walletAddress, amountNative, fee);
@@ -212,7 +213,7 @@ export async function sendDepositConfirm(ctx: BotContext, amount: number): Promi
   }
 
   const kb = new InlineKeyboard()
-    .text(`✅ Add ${usd(clamped)}`, `deposit:confirm:${clamped.toFixed(2)}`)
+    .text(`✅ Add ${usd(clamped)}`, `deposit:confirm:${clamped.toFixed(2)}`) // numfmt-ignore: callback/pending data encoder
     .text("✕ Cancel", "cancel");
 
   const msg = fmt`Add ${FormattedString.b(usd(clamped))} as collateral to your trading account?`;

@@ -455,10 +455,11 @@ async function executeAutoAction(
       actionDesc = `Reduced ${Math.round(fraction * 100)}% of ${triggerPosition.symbol} ${triggerPosition.side.toUpperCase()}`;
       txSig = await closePosition(triggerPosition.symbol, ctx.walletAddress, fraction, fee);
     } else if (rule.action === "auto_margin") {
-      const amount = Number(rule.actionParam ?? 100);
+      const amountStr = String(rule.actionParam ?? 100);
+      const amount = Number(amountStr);
       const symbolLabel = triggerPosition?.symbol ?? "account";
       actionDesc = `Added $${amount} margin to ${symbolLabel}`;
-      txSig = await addMargin(symbolLabel, ctx.walletAddress, amount, fee);
+      txSig = await addMargin(symbolLabel, ctx.walletAddress, amountStr, fee);
     } else {
       return;
     }
