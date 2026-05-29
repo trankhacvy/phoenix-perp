@@ -98,6 +98,7 @@ export interface RestDerived {
   riskTier: RiskTier;
   effectiveCollateralUsdc: number;
   liqPriceBySymbol: Record<string, number>;
+  marginBySymbol: Record<string, number>;
   updatedAt: number;
 }
 

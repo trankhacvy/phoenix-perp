@@ -37,6 +37,17 @@ async function resolveLabel(wallet: string, dbLabel: string | null): Promise<str
   return shortAddr(wallet);
 }
 
+async function publishMonitorFlags(
+  wallet: string,
+  telegramId: string,
+  flags: { fills: boolean; posChange: boolean },
+): Promise<void> {
+  await redis.publish(
+    MONITOR_EVENTS_CHANNEL,
+    JSON.stringify({ action: "subscribe", wallet, telegramId, flags }),
+  );
+}
+
 function watchingSummary(row: MonitorRow): string {
   const parts: string[] = [];
   if (row.alertOnPositionChange) parts.push("positions");
@@ -271,10 +282,15 @@ export function registerWalletMonitor(bot: Bot<BotContext>) {
       where: and(eq(walletMonitors.id, ctx.match[1]), eq(walletMonitors.userId, ctx.user.id)),
     });
     if (!row) return;
+    const posChange = !row.alertOnPositionChange;
     await db
       .update(walletMonitors)
-      .set({ alertOnPositionChange: !row.alertOnPositionChange })
+      .set({ alertOnPositionChange: posChange })
       .where(eq(walletMonitors.id, row.id));
+    await publishMonitorFlags(row.watchedWallet, ctx.user.telegramId, {
+      fills: row.alertOnFill,
+      posChange,
+    });
     await sendMonitorSettings(ctx, row.id);
   });
 
@@ -285,10 +301,15 @@ export function registerWalletMonitor(bot: Bot<BotContext>) {
       where: and(eq(walletMonitors.id, ctx.match[1]), eq(walletMonitors.userId, ctx.user.id)),
     });
     if (!row) return;
+    const fills = !row.alertOnFill;
     await db
       .update(walletMonitors)
-      .set({ alertOnFill: !row.alertOnFill })
+      .set({ alertOnFill: fills })
       .where(eq(walletMonitors.id, row.id));
+    await publishMonitorFlags(row.watchedWallet, ctx.user.telegramId, {
+      fills,
+      posChange: row.alertOnPositionChange,
+    });
     await sendMonitorSettings(ctx, row.id);
   });
 

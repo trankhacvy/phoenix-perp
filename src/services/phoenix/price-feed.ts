@@ -11,6 +11,10 @@ export function getMid(symbol: string): number | undefined {
   return mids.get(symbol.toUpperCase());
 }
 
+export function getMids(): ReadonlyMap<string, number> {
+  return mids;
+}
+
 export function onMids(fn: TickFn): () => void {
   subscribers.add(fn);
   return () => {

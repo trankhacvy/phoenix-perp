@@ -79,6 +79,15 @@ export async function toggleRule(ruleId: string, userId: string): Promise<Guardi
   return updated;
 }
 
+export async function deleteAllRules(userId: string): Promise<number> {
+  const deleted = await db
+    .delete(guardianRules)
+    .where(eq(guardianRules.userId, userId))
+    .returning({ id: guardianRules.id });
+  invalidateRulesCache(userId);
+  return deleted.length;
+}
+
 export async function deleteRule(ruleId: string, userId: string): Promise<boolean> {
   const deleted = await db
     .delete(guardianRules)

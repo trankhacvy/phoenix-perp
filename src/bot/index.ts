@@ -9,6 +9,7 @@ import { getMarketSnapshot } from "../services/phoenix/market.js";
 import { getWalletUsdcBalance } from "../services/wallet.js";
 import type { BotContext } from "../types/index.js";
 import { sendDepositConfirm } from "./commands/deposit.js";
+import { saveBreakevenRuleFromInput, saveTrailRuleFromInput } from "./commands/guardian.js";
 import { registerCommands } from "./commands/index.js";
 import { sendLevStep, sendTradeConfirm } from "./commands/long.js";
 import { sendPriceAlertConfirm } from "./commands/pricealert.js";
@@ -36,6 +37,22 @@ bot.api.config.use(
     maxDelaySeconds: 5,
   }),
 );
+
+interface LinkPreviewPayload {
+  link_preview_options?: { is_disabled: boolean };
+}
+
+// Default link previews off for every message we send, unless a caller set it.
+bot.api.config.use((prev, method, payload, signal) => {
+  if (
+    (method === "sendMessage" || method === "editMessageText") &&
+    payload &&
+    !(payload as LinkPreviewPayload).link_preview_options
+  ) {
+    (payload as LinkPreviewPayload).link_preview_options = { is_disabled: true };
+  }
+  return prev(method, payload, signal);
+});
 
 function getSessionKey(ctx: BotContext): string | undefined {
   return ctx.from?.id.toString();
@@ -359,6 +376,40 @@ bot.on("message:text", async (ctx) => {
       .text("✅ Save rule", `grd:save:${encoded}`)
       .text("✕ Cancel", "grd:list");
     await ctx.reply(`Auto-add $${val} margin. Save this rule?`, { reply_markup: kb });
+    return;
+  }
+
+  if (parts[0] === "protect_trail") {
+    const [, symbol, side] = parts;
+    const valTrail = parseAmount(text);
+    if (Number.isNaN(valTrail) || valTrail <= 0 || valTrail >= 100) {
+      await ctx.reply("Enter a trail distance between 0 and 100% (e.g. 4):");
+      return; // keep pending so the user can retry
+    }
+    try {
+      const done = await saveTrailRuleFromInput(ctx, symbol, side as "long" | "short", valTrail);
+      if (done) await clearPending(ctx.from.id);
+    } catch (err) {
+      await clearPending(ctx.from.id);
+      await renderBotError(ctx, err, { action: "set trailing stop" });
+    }
+    return;
+  }
+
+  if (parts[0] === "protect_be") {
+    const [, symbol, side] = parts;
+    const valBe = parseAmount(text);
+    if (Number.isNaN(valBe) || valBe <= 0) {
+      await ctx.reply("Enter a positive profit % (e.g. 25):");
+      return; // keep pending so the user can retry
+    }
+    try {
+      const done = await saveBreakevenRuleFromInput(ctx, symbol, side as "long" | "short", valBe);
+      if (done) await clearPending(ctx.from.id);
+    } catch (err) {
+      await clearPending(ctx.from.id);
+      await renderBotError(ctx, err, { action: "set breakeven" });
+    }
     return;
   }
 

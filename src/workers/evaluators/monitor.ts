@@ -107,3 +107,22 @@ export function emitMonitorFills(
     }
   }
 }
+
+export function emitMonitorLiquidations(
+  walletAddress: string,
+  watcherTelegramIds: string[],
+  fills: TraderStateTradeHistoryDelta[],
+) {
+  const shortEsc = esc(walletAddress);
+  for (const telegramId of watcherTelegramIds) {
+    for (const fill of fills) {
+      void alertQueue.add("monitor-liq", {
+        telegramId,
+        type: "monitor_liq",
+        symbol: fill.market,
+        message: `💥 <b>${shortEsc} was LIQUIDATED on ${esc(fill.market)}</b>\n${esc(fill.size)} @ $${esc(Number(fill.price).toFixed(4))}`,
+        keyboard: [[{ text: "📊 Trader", callback_data: `walletinfo:back:${walletAddress}` }]],
+      });
+    }
+  }
+}

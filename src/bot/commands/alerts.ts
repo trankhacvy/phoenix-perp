@@ -212,15 +212,33 @@ async function sendSymbolPicker(ctx: BotContext) {
 
 async function sendPricePrompt(ctx: BotContext, symbol: string) {
   if (!ctx.from) return;
-  let priceNote = "";
+  let mark: number | null = null;
   try {
     const snap = await getMarketSnapshot(symbol);
-    priceNote = `\nCurrent price: ${fmtPrice(snap.markPrice)}`;
+    mark = snap.markPrice;
   } catch {
     // ok
   }
+
+  const kb = new InlineKeyboard();
+  if (mark !== null) {
+    for (const p of [2, 5, 10]) {
+      const price = Number((mark * (1 + p / 100)).toFixed(6));
+      kb.text(`🔼 +${p}%  ${fmtPrice(price)}`, `al:pa:pick:${symbol}:${price}`);
+    }
+    kb.row();
+    for (const p of [2, 5, 10]) {
+      const price = Number((mark * (1 - p / 100)).toFixed(6));
+      kb.text(`🔽 −${p}%  ${fmtPrice(price)}`, `al:pa:pick:${symbol}:${price}`);
+    }
+    kb.row();
+  }
+  kb.text("← Back", "al:prices");
+
+  const priceNote = mark !== null ? `\nCurrent price: ${fmtPrice(mark)}` : "";
   await ctx.editMessageText(
-    `💰 Price Alert — ${symbol}${priceNote}\n\nEnter the price you want to be alerted at.\nExample: 150`,
+    `💰 Price Alert — ${symbol}${priceNote}\n\nTap a quick target below, or type a custom price (e.g. 150).`,
+    { reply_markup: kb },
   );
   await setPending(ctx.from.id, `al_pricealert:${symbol}`);
 }
@@ -367,6 +385,12 @@ export function registerAlerts(bot: Bot<BotContext>) {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendPricePrompt(ctx, ctx.match[1]);
+  });
+
+  bot.callbackQuery(/^al:pa:pick:([A-Z0-9]+):([\d.]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendPriceAlertConfirm(ctx, ctx.match[1], Number(ctx.match[2]));
   });
 
   bot.callbackQuery(/^al:pa:exec:([A-Z0-9]+):([\d.]+):(above|below)$/, async (ctx) => {

@@ -509,7 +509,6 @@ export async function executeTrade(
 
       await subscribeUser(wallet, telegramId);
 
-      let autoTpSet = false;
       let autoSlSet = false;
       let autoTpSlNote = fmt``;
       if (settings.autoTpPct || settings.autoSlPct) {
@@ -548,7 +547,6 @@ export async function executeTrade(
               ]
             : [];
           await setPositionTpSl({ symbol, walletAddress: wallet, positionSide: side, tp, sl }, fee);
-          autoTpSet = !!tpPrice;
           autoSlSet = !!slPrice;
           const parts: string[] = [];
           if (tpPrice) parts.push(`TP ${fmtPrice(tpPrice)}`);
@@ -562,9 +560,9 @@ export async function executeTrade(
 
       const tokenSize = pf.notional / pf.snapshot.markPrice;
       const sideLabel = side === "long" ? "Long" : "Short";
-      const protectLabel = autoTpSet || autoSlSet ? "🛡 TP / SL" : "🛡 Protect (set TP/SL)";
+      const protectLabel = autoSlSet ? "🛡 Protect" : "🛡 Add stop-loss";
       const kb = new InlineKeyboard()
-        .text(protectLabel, `tpsl:protect:${symbol}:${side}`)
+        .text(protectLabel, `protect:${symbol}:${side}`)
         .row()
         .text("📊 View position", "nav:positions");
 

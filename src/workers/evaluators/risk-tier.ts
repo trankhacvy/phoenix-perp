@@ -35,7 +35,7 @@ function riskKb(positions: CachedPosition[]): AlertButton[][] {
     return [
       [
         { text: "💰 Add margin", callback_data: `margin:${p.symbol}` },
-        { text: "🛑 Add stop", callback_data: `tpsl:protect:${p.symbol}:${p.side}` },
+        { text: "🛑 Add stop", callback_data: `tpsl:open:sl:${p.symbol}:${p.side}` },
       ],
       [{ text: "📊 Positions", callback_data: "nav:positions" }],
     ];

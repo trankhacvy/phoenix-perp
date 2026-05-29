@@ -87,6 +87,13 @@ function pctToTriggerPrice(
   return greater ? mark * (1 + delta) : mark * (1 - delta);
 }
 
+// A stop-loss trigger must stay on the safe side of the liquidation price,
+// otherwise the position is liquidated before the stop can fire.
+function slTriggerSafe(leg: Leg, side: "long" | "short", trigger: number, liq: number): boolean {
+  if (leg !== "sl" || liq <= 0) return true;
+  return side === "long" ? trigger > liq : trigger < liq;
+}
+
 // Convert a % of MARGIN (money) into a trigger price.
 // PnL at trigger = ±(marginFrac × margin); deltaPrice = that / size (tokens).
 function marginPctToTrigger(
@@ -323,12 +330,14 @@ function buildEmptyManagerKb(
   side: "long" | "short",
   symbol: string,
   mark: number,
+  liq: number,
 ): InlineKeyboard {
   const kb = new InlineKeyboard();
   const pcts = presetPctsFor(leg);
   let i = 0;
   for (const presetPct of pcts) {
     const trigger = pctToTriggerPrice(leg, side, mark, presetPct);
+    if (!slTriggerSafe(leg, side, trigger, liq)) continue;
     const sign = isGreaterDir(leg, side) ? "+" : "-";
     kb.text(
       `${sign}${presetPct}%  ${fmtPrice(trigger)}`,
@@ -404,7 +413,13 @@ export async function sendTpSlManager(
     body = fmt`${FormattedString.i(`No ${legLabel(leg).toLowerCase()} set.`)}
 
 Pick a trigger — next step lets you choose ${FormattedString.b("how much")} of the position to close (you can add more levels after):`;
-    kb = buildEmptyManagerKb(leg, side, symbol, Number(data.pos.markPrice));
+    kb = buildEmptyManagerKb(
+      leg,
+      side,
+      symbol,
+      Number(data.pos.markPrice),
+      data.pos.liquidationPrice === "N/A" ? 0 : Number(data.pos.liquidationPrice),
+    );
   } else {
     const rungBlocks = legRungs.map((r, i) =>
       formatRungBlock(
@@ -502,12 +517,14 @@ async function sendPriceStep(
     return;
   }
   const mark = Number(data.pos.markPrice);
+  const liq = data.pos.liquidationPrice === "N/A" ? 0 : Number(data.pos.liquidationPrice);
 
   const kb = new InlineKeyboard();
   const pcts = presetPctsFor(leg);
   let i = 0;
   for (const p of pcts) {
     const trigger = pctToTriggerPrice(leg, side, mark, p);
+    if (!slTriggerSafe(leg, side, trigger, liq)) continue;
     const sign = isGreaterDir(leg, side) ? "+" : "-";
     kb.text(`${sign}${p}%  ${fmtPrice(trigger)}`, `tpsl:px2:${leg}:${symbol}:${side}:${p}`);
     i++;
@@ -517,8 +534,13 @@ async function sendPriceStep(
   kb.text("✏️ Custom price", `tpsl:pxc:${leg}:${symbol}:${side}`).row();
   kb.text("← Back", `tpsl:open:${leg}:${symbol}:${side}`);
 
+  const liqNote =
+    leg === "sl" && liq > 0
+      ? fmt`
+Liq ${FormattedString.b(fmtPrice(liq))} — stop must stay ${side === "long" ? "above" : "below"} it.`
+      : fmt``;
   const msg = fmt`${legEmoji(leg)} ${FormattedString.b(`Add ${legLabel(leg)} level — ${symbol}`)}
-Entry ${FormattedString.b(fmtPrice(Number(data.pos.entryPrice)))} · Mark ${FormattedString.b(fmtPrice(mark))}
+Entry ${FormattedString.b(fmtPrice(Number(data.pos.entryPrice)))} · Mark ${FormattedString.b(fmtPrice(mark))}${liqNote}
 
 Pick trigger price:`;
 
@@ -758,7 +780,7 @@ async function executeAdd(
     return;
   }
 
-  await ctx.editMessageText(`⏳ Setting ${legLabel(leg).toLowerCase()}…`);
+  await ctx.editMessageText(CONFIRMING);
 
   void (async () => {
     try {
@@ -910,7 +932,7 @@ async function executeFlipMode(
   if (!chatId || !msgId) return;
   const api = ctx.api;
 
-  await ctx.editMessageText("⏳ Switching mode…");
+  await ctx.editMessageText(CONFIRMING);
 
   void (async () => {
     try {
@@ -1001,7 +1023,7 @@ async function executeRemove(
   if (!chatId || !msgId) return;
   const api = ctx.api;
 
-  await ctx.editMessageText("⏳ Removing…");
+  await ctx.editMessageText(CONFIRMING);
 
   void (async () => {
     try {
@@ -1073,7 +1095,7 @@ async function executeClearAll(
   if (!chatId || !msgId) return;
   const api = ctx.api;
 
-  await ctx.editMessageText("⏳ Removing all levels…");
+  await ctx.editMessageText(CONFIRMING);
 
   void (async () => {
     try {
@@ -1195,7 +1217,7 @@ export async function executeEditCommit(
     return;
   }
 
-  await api.sendMessage(chatId, `⏳ Updating ${legLabel(leg).toLowerCase()}…`);
+  await api.sendMessage(chatId, CONFIRMING);
 
   void (async () => {
     try {
@@ -1520,7 +1542,7 @@ async function executeSplit(
   if (!chatId || !msgId) return;
   const api = ctx.api;
 
-  await ctx.editMessageText("⏳ Splitting into ladder…");
+  await ctx.editMessageText(CONFIRMING);
 
   void (async () => {
     try {

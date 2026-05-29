@@ -8,6 +8,8 @@ export const guardianRuleTypeEnum = pgEnum("guardian_rule_type", [
   "funding_drain",
   "exposure_limit",
   "margin_ratio",
+  "trailing_stop",
+  "breakeven",
 ]);
 
 export const guardianActionEnum = pgEnum("guardian_action", [
@@ -25,6 +27,7 @@ export const guardianRules = pgTable("guardian_rules", {
     .references(() => users.id, { onDelete: "cascade" }),
   ruleType: guardianRuleTypeEnum("rule_type").notNull(),
   symbol: text("symbol"),
+  side: text("side"),
   threshold: numeric("threshold", { precision: 12, scale: 4 }).notNull(),
   direction: text("direction").notNull(),
   action: guardianActionEnum("action").notNull().default("suggest"),

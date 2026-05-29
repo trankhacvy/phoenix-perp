@@ -45,6 +45,15 @@ export function registerStart(bot: Bot<BotContext>) {
         }
       }
 
+      if (payload.startsWith("grd_")) {
+        const ruleId = payload.slice(4);
+        if (ruleId) {
+          const { sendRuleDetail } = await import("./guardian.js");
+          await sendRuleDetail(ctx, ruleId, false);
+          return;
+        }
+      }
+
       if (payload.startsWith("hist_")) {
         const parts = payload.slice(5).split("_");
         const globalIdx = Number(parts[0]);
@@ -164,7 +173,7 @@ export function registerStart(bot: Bot<BotContext>) {
     // ── New user: create wallet ───────────────────────────────────────────────
     const telegramId = String(ctx.from.id);
     const rawPayload = ctx.match ? String(ctx.match).trim() : "";
-    const DEEP_LINK_PREFIXES = ["pos_", "hist_", "mkt_", "wallet_", "long_", "short_"];
+    const DEEP_LINK_PREFIXES = ["pos_", "hist_", "mkt_", "wallet_", "long_", "short_", "grd_"];
     const isDeepLink = DEEP_LINK_PREFIXES.some((p) => rawPayload.startsWith(p));
     const referredBy = rawPayload && !isDeepLink ? rawPayload : undefined;
 

@@ -5,8 +5,14 @@ import { type AlertButton, alertQueue } from "../../jobs/queues.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
 import { getActiveRules, markTriggered } from "../../services/guardian.js";
+import { getPositionConditionals } from "../../services/phoenix/conditional.js";
 import { getStats } from "../../services/phoenix/market-stats-feed.js";
-import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/trade.js";
+import {
+  addMargin,
+  closePosition,
+  getFeeConfig,
+  setPositionTpSl,
+} from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
 import type {
   AccountSnapshot,
@@ -37,6 +43,43 @@ export async function clearPeak(userId: string, symbol: string) {
   await redis.del(`guardian:peak:${userId}:${symbol}`);
 }
 
+const TRAIL_STEP_PCT = 0.003;
+const TRAIL_MIN_INTERVAL_MS = 20_000;
+const BE_BUFFER = 0.001;
+
+interface TrailState {
+  peak: number;
+  stopPrice: number;
+  ts: number;
+}
+
+export async function clearTrail(userId: string, symbol: string) {
+  await redis.del(
+    `guardian:trail:${userId}:${symbol}:long`,
+    `guardian:trail:${userId}:${symbol}:short`,
+    `guardian:be:${userId}:${symbol}:long`,
+    `guardian:be:${userId}:${symbol}:short`,
+  );
+}
+
+export function isSnoozed(ruleId: string): Promise<boolean> {
+  return redis.get(`guardian:snooze:${ruleId}`).then((v) => v !== null);
+}
+
+export function dailyFundingPaid(
+  side: "long" | "short",
+  annualPct: number,
+  notional: number,
+): number {
+  const annual = annualPct / 100;
+  return ((side === "long" ? annual : -annual) * notional) / 365;
+}
+
+export function computeTrailStop(side: "long" | "short", peak: number, trailPct: number): number {
+  const trail = trailPct / 100;
+  return side === "long" ? peak * (1 - trail) : peak * (1 + trail);
+}
+
 export interface EvalContext {
   userId: string;
   telegramId: string;
@@ -52,9 +95,24 @@ export async function evaluateGuardianRules(ctx: EvalContext) {
 
   for (const rule of rules) {
     try {
+      if (await isSnoozed(rule.id)) continue;
+      if ((await redis.get(`guardian:retry:${rule.id}`)) !== null) continue;
       if (rule.lastTriggeredAt) {
         const elapsed = Date.now() - rule.lastTriggeredAt.getTime();
         if (elapsed < rule.cooldownSec * 1000) continue;
+      }
+
+      if (rule.ruleType === "trailing_stop") {
+        void handleTrailingStop(rule, ctx).catch((err) =>
+          logger.error({ err, ruleId: rule.id }, "trailing stop failed"),
+        );
+        continue;
+      }
+      if (rule.ruleType === "breakeven") {
+        void handleBreakeven(rule, ctx).catch((err) =>
+          logger.error({ err, ruleId: rule.id }, "breakeven failed"),
+        );
+        continue;
       }
 
       const allPositions = ctx.derived.positions;
@@ -73,21 +131,130 @@ export async function evaluateGuardianRules(ctx: EvalContext) {
       const result = await checkRule(rule, positions, ctx);
       if (!result) continue;
 
-      await markTriggered(rule.id, ctx.userId);
-
-      if (
+      const isAuto =
         rule.action === "auto_close" ||
         rule.action === "auto_reduce" ||
-        rule.action === "auto_margin"
-      ) {
-        await executeAutoAction(rule, result.triggerPosition, ctx);
+        rule.action === "auto_margin";
+
+      if (isAuto) {
+        void executeAutoAction(rule, result.triggerPosition, ctx).catch((err) =>
+          logger.error({ err, ruleId: rule.id }, "auto action failed"),
+        );
       } else {
+        await markTriggered(rule.id, ctx.userId);
         await queueGuardianAlert(rule, result, ctx);
       }
     } catch (err) {
       logger.error({ err, ruleId: rule.id }, "Guardian rule evaluation failed");
     }
   }
+}
+
+function findRulePosition(rule: GuardianRule, ctx: EvalContext): DerivedPosition | null {
+  if (!rule.symbol) return null;
+  const pos = ctx.derived.positions.find((p) => p.symbol === rule.symbol);
+  if (!pos) return null;
+  if (rule.side && rule.side !== pos.side) return null;
+  return pos;
+}
+
+async function setStopLoss(
+  ctx: EvalContext,
+  pos: DerivedPosition,
+  stopPrice: number,
+): Promise<void> {
+  const rungs = await getPositionConditionals(ctx.walletAddress, pos.symbol, pos.side);
+  const cancelSlIndices = rungs.filter((r) => r.leg === "sl").map((r) => r.conditionalOrderIndex);
+  const settings = await getSettings(ctx.userId);
+  const fee = getFeeConfig(settings.feeMode, settings.customFeeSol);
+  await setPositionTpSl(
+    {
+      symbol: pos.symbol,
+      walletAddress: ctx.walletAddress,
+      positionSide: pos.side,
+      cancelSlIndices,
+      sl: [{ leg: "sl", triggerPrice: stopPrice, mode: "market", size: { kind: "full" } }],
+    },
+    fee,
+  );
+}
+
+async function handleTrailingStop(rule: GuardianRule, ctx: EvalContext): Promise<void> {
+  const pos = findRulePosition(rule, ctx);
+  if (!pos) return;
+  const trail = Number(rule.threshold) / 100;
+  if (!(trail > 0)) return;
+  const mark = pos.mark;
+  if (!(mark > 0)) return;
+
+  const key = `guardian:trail:${ctx.userId}:${pos.symbol}:${pos.side}`;
+  const raw = await redis.get(key);
+  const state = raw ? (JSON.parse(raw) as TrailState) : null;
+
+  const peak = state
+    ? pos.side === "long"
+      ? Math.max(state.peak, mark)
+      : Math.min(state.peak, mark)
+    : mark;
+  const wantStop = computeTrailStop(pos.side, peak, Number(rule.threshold));
+
+  const improves =
+    !state ||
+    (pos.side === "long"
+      ? wantStop > state.stopPrice * (1 + TRAIL_STEP_PCT)
+      : wantStop < state.stopPrice * (1 - TRAIL_STEP_PCT));
+  const cooled = !state || Date.now() - state.ts > TRAIL_MIN_INTERVAL_MS;
+
+  if (!improves || !cooled) {
+    if (state && peak !== state.peak) {
+      const next: TrailState = { peak, stopPrice: state.stopPrice, ts: state.ts };
+      await redis.set(key, JSON.stringify(next));
+    }
+    return;
+  }
+
+  await setStopLoss(ctx, pos, wantStop);
+  const next: TrailState = { peak, stopPrice: wantStop, ts: Date.now() };
+  await redis.set(key, JSON.stringify(next));
+
+  await alertQueue.add("guardian-trail", {
+    telegramId: ctx.telegramId,
+    type: "guardian",
+    symbol: pos.symbol,
+    message: [
+      "🛟 <b>Trailing stop moved</b>",
+      "",
+      `${esc(pos.symbol)} ${esc(pos.side.toUpperCase())} — stop now <code>$${wantStop.toFixed(4)}</code>`,
+    ].join("\n"),
+  });
+}
+
+async function handleBreakeven(rule: GuardianRule, ctx: EvalContext): Promise<void> {
+  const pos = findRulePosition(rule, ctx);
+  if (!pos) return;
+  const key = `guardian:be:${ctx.userId}:${pos.symbol}:${pos.side}`;
+  if ((await redis.get(key)) !== null) return;
+
+  const margin = ctx.rest?.marginBySymbol[pos.symbol];
+  if (!margin || margin <= 0) return;
+  const pnlPct = (pos.uPnl / margin) * 100;
+  if (pnlPct < Number(rule.threshold)) return;
+
+  const stop =
+    pos.side === "long" ? pos.entryPrice * (1 + BE_BUFFER) : pos.entryPrice * (1 - BE_BUFFER);
+  await setStopLoss(ctx, pos, stop);
+  await redis.set(key, "1");
+
+  await alertQueue.add("guardian-breakeven", {
+    telegramId: ctx.telegramId,
+    type: "guardian",
+    symbol: pos.symbol,
+    message: [
+      "🎯 <b>Stop moved to breakeven</b>",
+      "",
+      `${esc(pos.symbol)} ${esc(pos.side.toUpperCase())} — stop now <code>$${stop.toFixed(4)}</code>`,
+    ].join("\n"),
+  });
 }
 
 interface CheckResult {
@@ -149,7 +316,7 @@ async function checkRule(
 
     case "pnl_target": {
       for (const pos of positions) {
-        const margin = marginForPosition(pos, ctx.snapshot);
+        const margin = ctx.rest?.marginBySymbol[pos.symbol] ?? marginForPosition(pos, ctx.snapshot);
         if (margin <= 0) continue;
         const pnlPct = (pos.uPnl / margin) * 100;
         if (rule.direction === "above" && pnlPct >= threshold) {
@@ -172,11 +339,11 @@ async function checkRule(
       for (const pos of positions) {
         const stats = getStats(pos.symbol);
         if (!stats) continue;
-        const dailyCost = ((Math.abs(stats.fundingAnnualPct) / 100) * pos.notional) / 365;
-        if (dailyCost >= threshold) {
+        const dailyPaid = dailyFundingPaid(pos.side, stats.fundingAnnualPct, pos.notional);
+        if (dailyPaid >= threshold) {
           return {
             triggerPosition: pos,
-            detail: `Daily funding: $${dailyCost.toFixed(2)} (limit: $${threshold})`,
+            detail: `Daily funding paid: $${dailyPaid.toFixed(2)} (limit: $${threshold})`,
           };
         }
       }
@@ -296,6 +463,8 @@ async function executeAutoAction(
       return;
     }
 
+    await markTriggered(rule.id, ctx.userId);
+
     const txLine = txSig ? `Tx: <a href="${solscanUrl(txSig)}">${txSig.slice(0, 8)}…</a>` : "";
 
     await alertQueue.add("guardian-auto-receipt", {
@@ -323,6 +492,7 @@ async function executeAutoAction(
     });
   } catch (err) {
     const be = toBotError(err);
+    await redis.set(`guardian:retry:${rule.id}`, "1", "EX", 30, "NX");
     const pos = triggerPosition;
     const keyboard: AlertButton[][] = [];
     if (pos) {

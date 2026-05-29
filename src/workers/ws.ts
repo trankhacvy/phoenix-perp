@@ -13,21 +13,30 @@ import { getPhoenixWsClient } from "../services/phoenix/client.js";
 import { getMarket } from "../services/phoenix/market.js";
 import { accrueReferralFee } from "../services/referral.js";
 import type { AccountSnapshot, CachedPosition } from "../types/index.js";
-import { clearPeak } from "./evaluators/guardian.js";
-import { emitMonitorFills, evaluateMonitorAlerts } from "./evaluators/monitor.js";
+import { clearPeak, clearTrail } from "./evaluators/guardian.js";
+import {
+  emitMonitorFills,
+  emitMonitorLiquidations,
+  evaluateMonitorAlerts,
+} from "./evaluators/monitor.js";
 import { evaluatePositionFlip } from "./evaluators/position-flip.js";
 import { markRestDirty } from "./rest-refresh.js";
 import { fillNotional, isLiquidation, mergeTraderState } from "./trader-state-merge.js";
 
+interface WatcherFlags {
+  fills: boolean;
+  posChange: boolean;
+}
+
 type MonitorEvent =
-  | { action: "subscribe"; wallet: string; telegramId: string }
+  | { action: "subscribe"; wallet: string; telegramId: string; flags?: WatcherFlags }
   | { action: "unsubscribe"; wallet: string; telegramId: string };
 
 const controllers = new Map<string, AbortController>();
 const snapshots = new Map<string, AccountSnapshot>();
 let shuttingDown = false;
 
-const watcherIndex = new Map<string, Set<string>>();
+const watcherIndex = new Map<string, Map<string, WatcherFlags>>();
 const ownerMap = new Map<string, string>();
 const ownerUserIdCache = new Map<string, string>();
 const OWNER_CACHE_MAX = 5000;
@@ -47,13 +56,13 @@ export function getOwners(): { walletAddress: string; telegramId: string }[] {
   }));
 }
 
-function addWatcher(walletAddress: string, telegramId: string) {
-  let set = watcherIndex.get(walletAddress);
-  if (!set) {
-    set = new Set();
-    watcherIndex.set(walletAddress, set);
+function addWatcher(walletAddress: string, telegramId: string, flags: WatcherFlags) {
+  let m = watcherIndex.get(walletAddress);
+  if (!m) {
+    m = new Map();
+    watcherIndex.set(walletAddress, m);
   }
-  set.add(telegramId);
+  m.set(telegramId, flags);
 }
 
 export async function getOwnerUserId(walletAddress: string): Promise<string | null> {
@@ -100,21 +109,26 @@ async function runStructuralEvaluators(
   prevPositions: CachedPosition[] | null,
 ) {
   const ownerTid = ownerMap.get(walletAddress);
-  const watchers = watcherIndex.get(walletAddress) ?? new Set<string>();
+  const watchers = watcherIndex.get(walletAddress) ?? new Map<string, WatcherFlags>();
 
   if (ownerTid) {
     const userId = (await getOwnerUserId(walletAddress)) ?? ownerTid;
     await evaluatePositionFlip(ownerTid, userId, positions, prevPositions);
     if (prevPositions) {
       for (const prev of prevPositions) {
-        if (!positions.find((p) => p.symbol === prev.symbol)) await clearPeak(userId, prev.symbol);
+        if (!positions.find((p) => p.symbol === prev.symbol)) {
+          await clearPeak(userId, prev.symbol);
+          await clearTrail(userId, prev.symbol);
+        }
       }
     }
   }
 
-  const externalWatchers = [...watchers].filter((tid) => tid !== ownerTid);
-  if (externalWatchers.length > 0) {
-    await evaluateMonitorAlerts(walletAddress, externalWatchers, positions, prevPositions);
+  const posWatchers = [...watchers]
+    .filter(([tid, f]) => tid !== ownerTid && f.posChange)
+    .map(([tid]) => tid);
+  if (posWatchers.length > 0) {
+    await evaluateMonitorAlerts(walletAddress, posWatchers, positions, prevPositions);
   }
 }
 
@@ -123,7 +137,7 @@ async function onFills(
   fills: TraderStateTradeHistoryDelta[],
 ): Promise<void> {
   const ownerTid = ownerMap.get(walletAddress);
-  const watchers = watcherIndex.get(walletAddress) ?? new Set<string>();
+  const watchers = watcherIndex.get(walletAddress) ?? new Map<string, WatcherFlags>();
 
   if (ownerTid) {
     if (config.REFERRAL_ENABLED) {
@@ -141,8 +155,15 @@ async function onFills(
     if (liquidations.length > 0) await queueLiquidationAlert(ownerTid, liquidations);
   }
 
-  const externalWatchers = [...watchers].filter((tid) => tid !== ownerTid);
-  if (externalWatchers.length > 0) emitMonitorFills(walletAddress, externalWatchers, fills);
+  const fillWatchers = [...watchers]
+    .filter(([tid, f]) => tid !== ownerTid && f.fills)
+    .map(([tid]) => tid);
+  if (fillWatchers.length > 0) emitMonitorFills(walletAddress, fillWatchers, fills);
+
+  const liqFills = fills.filter(isLiquidation);
+  if (liqFills.length > 0 && fillWatchers.length > 0) {
+    emitMonitorLiquidations(walletAddress, fillWatchers, liqFills);
+  }
 }
 
 async function queueLiquidationAlert(
@@ -200,12 +221,16 @@ function unsubscribeTrader(walletAddress: string) {
 
 export async function subscribeUser(walletAddress: string, telegramId: string) {
   ownerMap.set(walletAddress, telegramId);
-  addWatcher(walletAddress, telegramId);
+  addWatcher(walletAddress, telegramId, { fills: true, posChange: true });
   subscribeTrader(walletAddress);
 }
 
-export async function subscribeMonitored(watchedWallet: string, telegramId: string) {
-  addWatcher(watchedWallet, telegramId);
+export async function subscribeMonitored(
+  watchedWallet: string,
+  telegramId: string,
+  flags: WatcherFlags = { fills: true, posChange: true },
+) {
+  addWatcher(watchedWallet, telegramId, flags);
   subscribeTrader(watchedWallet);
 }
 
@@ -248,13 +273,18 @@ export async function startWsManager() {
     .select({
       watchedWallet: walletMonitors.watchedWallet,
       telegramId: users.telegramId,
+      alertOnFill: walletMonitors.alertOnFill,
+      alertOnPositionChange: walletMonitors.alertOnPositionChange,
     })
     .from(walletMonitors)
     .innerJoin(users, eq(walletMonitors.userId, users.id))
     .where(eq(walletMonitors.enabled, true));
 
   for (const m of monitors) {
-    await subscribeMonitored(m.watchedWallet, m.telegramId);
+    await subscribeMonitored(m.watchedWallet, m.telegramId, {
+      fills: m.alertOnFill,
+      posChange: m.alertOnPositionChange,
+    });
   }
 
   logger.info({ ownWallets: ownWallets.length, monitors: monitors.length }, "WS manager started");
@@ -294,7 +324,7 @@ function subscribeMonitorEvents() {
     try {
       const event = JSON.parse(message) as MonitorEvent;
       if (event.action === "subscribe") {
-        subscribeMonitored(event.wallet, event.telegramId).catch((err) =>
+        subscribeMonitored(event.wallet, event.telegramId, event.flags).catch((err) =>
           logger.error({ err }, "subscribeMonitored via pub/sub failed"),
         );
       } else if (event.action === "unsubscribe") {

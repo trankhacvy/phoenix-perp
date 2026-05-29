@@ -1,15 +1,15 @@
 import { logger } from "../lib/logger.js";
 import { getStats } from "../services/phoenix/market-stats-feed.js";
-import { onMids } from "../services/phoenix/price-feed.js";
+import { getMids, onMids } from "../services/phoenix/price-feed.js";
 import type { AccountSnapshot, DerivedMetrics, DerivedPosition } from "../types/index.js";
 import { evaluateGuardianRules } from "./evaluators/guardian.js";
 import { evaluateRiskTier } from "./evaluators/risk-tier.js";
 import { getRestDerived } from "./rest-refresh.js";
 import { getOwnerUserId, getOwners, getSnapshot } from "./ws.js";
 
-const THROTTLE_MS = 1000;
+const EVAL_INTERVAL_MS = 1000;
 let running = false;
-let lastRun = 0;
+let timer: ReturnType<typeof setInterval> | null = null;
 let unsubscribe: (() => void) | null = null;
 
 export function deriveMetrics(
@@ -29,41 +29,46 @@ export function deriveMetrics(
 
 async function runOnce(mids: ReadonlyMap<string, number>): Promise<void> {
   for (const { walletAddress, telegramId } of getOwners()) {
-    const snap = getSnapshot(walletAddress);
-    if (!snap || snap.positions.length === 0) continue;
-    const userId = (await getOwnerUserId(walletAddress)) ?? telegramId;
-    const derived = deriveMetrics(snap, mids);
-    const rest = getRestDerived(walletAddress);
-    await evaluateRiskTier(telegramId, userId, rest, snap.positions);
-    await evaluateGuardianRules({
-      userId,
-      telegramId,
-      walletAddress,
-      snapshot: snap,
-      derived,
-      rest,
-    });
+    try {
+      const snap = getSnapshot(walletAddress);
+      if (!snap || snap.positions.length === 0) continue;
+      const userId = (await getOwnerUserId(walletAddress)) ?? telegramId;
+      const derived = deriveMetrics(snap, mids);
+      const rest = getRestDerived(walletAddress);
+      await evaluateRiskTier(telegramId, userId, rest, snap.positions);
+      await evaluateGuardianRules({
+        userId,
+        telegramId,
+        walletAddress,
+        snapshot: snap,
+        derived,
+        rest,
+      });
+    } catch (err) {
+      logger.error({ err, walletAddress }, "eval owner failed");
+    }
   }
 }
 
-export function startEvalLoop(): void {
-  if (unsubscribe) return;
-  unsubscribe = onMids(async (mids) => {
-    const now = Date.now();
-    if (running || now - lastRun < THROTTLE_MS) return;
-    running = true;
-    lastRun = now;
-    try {
-      await runOnce(mids);
-    } catch (err) {
-      logger.error({ err }, "eval loop failed");
-    } finally {
+function tick(): void {
+  if (running) return;
+  running = true;
+  runOnce(getMids())
+    .catch((err) => logger.error({ err }, "eval loop failed"))
+    .finally(() => {
       running = false;
-    }
-  });
+    });
+}
+
+export function startEvalLoop(): void {
+  if (timer) return;
+  timer = setInterval(tick, EVAL_INTERVAL_MS);
+  unsubscribe = onMids(() => tick());
 }
 
 export function stopEvalLoop(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
   unsubscribe?.();
   unsubscribe = null;
 }

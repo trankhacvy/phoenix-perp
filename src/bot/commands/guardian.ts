@@ -3,27 +3,28 @@ import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
 import type { GuardianRule } from "../../db/schema/guardian.js";
 import { logger } from "../../lib/logger.js";
+import { redis } from "../../lib/redis.js";
 import {
   createRule,
+  deleteAllRules,
   deleteRule,
   disableAllAutoActions,
   generateRuleId,
   getUserRules,
-  markTriggered,
   toggleRule,
 } from "../../services/guardian.js";
-import { getMarkets } from "../../services/phoenix/market.js";
+import { getPositionConditionals } from "../../services/phoenix/conditional.js";
+import { getMarkets, isIsolatedOnly } from "../../services/phoenix/market.js";
 import { getTraderState } from "../../services/phoenix/position.js";
 import { addMargin, closePosition, getFeeConfig } from "../../services/phoenix/trade.js";
 import { getSettings } from "../../services/settings.js";
-import type { BotContext } from "../../types/index.js";
+import type { BotContext, PhoenixPosition } from "../../types/index.js";
 import { renderBotError } from "../lib/errors.js";
+import { price as fmtPrice, num, pct, usd } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
 import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
-
-const CIRCLE = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
 
 const TYPE_LABELS: Record<string, { icon: string; name: string }> = {
   liq_distance: { icon: "⚡", name: "Liq distance" },
@@ -81,8 +82,13 @@ function actionOneLiner(rule: GuardianRule): string {
 
 async function sendGuardianScreen(ctx: BotContext, edit = false) {
   if (!ctx.user) return;
-  const rules = await getUserRules(ctx.user.id);
+  const [rules, state] = await Promise.all([
+    getUserRules(ctx.user.id),
+    getTraderState(ctx.user.walletAddress).catch(() => null),
+  ]);
+  const positions = state?.positions ?? [];
 
+  const botUsername = ctx.me.username ?? "bot";
   let msg: FormattedString;
   const kb = new InlineKeyboard();
 
@@ -91,33 +97,34 @@ async function sendGuardianScreen(ctx: BotContext, edit = false) {
 
 No active rules. Your positions are running unprotected.
 
-Add a rule to get proactive alerts — or auto-protection — when your positions hit risk thresholds you define.`;
+Open a position and tap 🛡 Protect to add a stop, trailing stop, or auto-rule — or add an account-wide rule below.`;
   } else {
-    const lines = rules.map((r, i) => {
-      const circle = CIRCLE[i] ?? `${i + 1}.`;
-      return fmt`${circle} ${ruleOneLiner(r)}
-   ${actionOneLiner(r)}`;
+    const lines = rules.map((r) => {
+      const link = FormattedString.link(
+        ruleOneLiner(r),
+        `https://t.me/${botUsername}?start=grd_${r.id}`,
+      );
+      return fmt`${link}\n   ${actionOneLiner(r)}`;
     });
     msg = FormattedString.join(
-      [fmt`🛡 ${FormattedString.b(`Risk Guardian (${rules.length} rules)`)}`, fmt``, ...lines],
-      "\n",
+      [
+        fmt`🛡 ${FormattedString.b(`Risk Guardian (${rules.length} rules)`)}`,
+        fmt`${FormattedString.i("Tap a rule to edit, pause, or delete it.")}`,
+        ...lines,
+      ],
+      "\n\n",
     );
   }
 
-  kb.text("+ New rule", "grd:new").text("📋 Quick presets", "grd:preset").row();
-  if (rules.length > 0) {
-    for (let i = 0; i < rules.length; i += 3) {
-      const chunk = rules.slice(i, i + 3);
-      for (const [j, r] of chunk.entries()) {
-        kb.text(`⚙ ${CIRCLE[i + j] ?? i + j + 1}`, `grd:edit:${r.id}`);
-      }
-      kb.row();
-    }
-    const hasAuto = rules.some(
-      (r) => r.action === "auto_close" || r.action === "auto_reduce" || r.action === "auto_margin",
-    );
-    if (hasAuto) kb.text("⏸ Disable all auto-actions", "grd:killswitch").row();
+  if (positions.length > 0) {
+    kb.text("🛡 Protect a position", "nav:positions").row();
   }
+  kb.text("+ Account rule", "grd:new").text("📋 Presets", "grd:preset").row();
+  const hasAuto = rules.some(
+    (r) => r.action === "auto_close" || r.action === "auto_reduce" || r.action === "auto_margin",
+  );
+  if (hasAuto) kb.text("⏸ Disable all auto-actions", "grd:killswitch").row();
+  if (rules.length > 0) kb.text("🗑 Remove all rules", "grd:rmall").row();
   kb.text("🔔 Alerts", "al:main").text("✕ Close", "grd:close_menu");
 
   const opts = { entities: msg.entities, reply_markup: kb };
@@ -214,18 +221,15 @@ You'll get alerts when any position hits these thresholds.`;
 }
 
 async function sendRuleTypePicker(ctx: BotContext) {
-  const msg = fmt`🛡 ${FormattedString.b("New Rule — What should I watch?")}`;
+  const msg = fmt`🛡 ${FormattedString.b("Account rule — what should I watch?")}
+
+These apply to your whole account, not one position.
+To protect a single position, open it and tap 🛡 Protect.`;
 
   const kb = new InlineKeyboard()
-    .text("📉 Drawdown — PnL drops from its peak", "grd:type:drawdown")
+    .text("📊 Total Exposure — combined size cap", "grd:type:exposure_limit")
     .row()
-    .text("🎯 PnL Target — Hit profit or loss threshold", "grd:type:pnl_target")
-    .row()
-    .text("⚡ Liq Distance — Liquidation getting close", "grd:type:liq_distance")
-    .row()
-    .text("💸 Funding Cost — Daily funding too high", "grd:type:funding_drain")
-    .row()
-    .text("📊 Exposure Limit — Total size exceeds cap", "grd:type:exposure_limit")
+    .text("🛟 Margin Health — collateral too thin", "grd:type:margin_ratio")
     .row()
     .text("← Back", "grd:list");
 
@@ -299,10 +303,15 @@ async function sendThresholdPicker(ctx: BotContext, ruleType: string, symbol: st
     for (const v of [10000, 25000, 50000, 100000])
       kb.text(`$${formatCompact(v)}`, `grd:th:${ruleType}:${symbol}:${v}`);
     kb.row();
+  } else if (ruleType === "margin_ratio") {
+    explanation = "Alert when account collateral vs total exposure drops below:";
+    for (const v of [10, 15, 20, 25]) kb.text(`${v}%`, `grd:th:${ruleType}:${symbol}:${v}`);
+    kb.row();
   }
 
+  const accountType = ruleType === "exposure_limit" || ruleType === "margin_ratio";
   kb.text("✏️ Custom", `grd:thc:${ruleType}:${symbol}`).row();
-  kb.text("← Back", ruleType === "exposure_limit" ? "grd:new" : `grd:type:${ruleType}`);
+  kb.text("← Back", accountType ? "grd:new" : `grd:type:${ruleType}`);
 
   const msg = fmt`🛡 ${FormattedString.b(`${t.icon} ${t.name} — ${symLabel}`)}
 
@@ -481,13 +490,14 @@ Cooldown: 5 minutes${isAuto ? "\n\n⚠️ This will execute automatically withou
   await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
 }
 
-async function sendRuleDetail(ctx: BotContext, ruleId: string) {
+export async function sendRuleDetail(ctx: BotContext, ruleId: string, edit = true) {
   if (!ctx.user) return;
 
   const rules = await getUserRules(ctx.user.id);
   const rule = rules.find((r) => r.id === ruleId);
   if (!rule) {
-    await ctx.answerCallbackQuery("Rule not found.");
+    if (edit && ctx.callbackQuery) await ctx.answerCallbackQuery("Rule not found.");
+    else await ctx.reply("Rule not found — it may have been removed.");
     return;
   }
 
@@ -513,7 +523,9 @@ Last triggered: ${lastTriggered}`;
     .row()
     .text("← Back", "grd:list");
 
-  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+  const opts = { entities: msg.entities, reply_markup: kb };
+  if (edit && ctx.callbackQuery) await ctx.editMessageText(msg.text, opts);
+  else await ctx.reply(msg.text, opts);
 }
 
 function timeSince(tsMs: number): string {
@@ -522,6 +534,375 @@ function timeSince(tsMs: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+// ─── Protect hub (per-position, context-first) ─────────────────────────
+interface ProtectPos {
+  pos: PhoenixPosition;
+  margin: number;
+  mark: number;
+  entry: number;
+  liq: number;
+  liqDistPct: number | null;
+}
+
+function liqDot(distPct: number): string {
+  if (distPct < 5) return "🔴";
+  if (distPct < 12) return "🟡";
+  return "🟢";
+}
+
+async function loadProtectPos(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+): Promise<ProtectPos | null> {
+  if (!ctx.user) return null;
+  const state = await getTraderState(ctx.user.walletAddress);
+  const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
+  if (!pos) return null;
+  const mark = Number(pos.markPrice);
+  const entry = Number(pos.entryPrice);
+  const size = Number(pos.size);
+  const lev = pos.leverage && pos.leverage > 0 ? pos.leverage : 1;
+  const margin = (mark * size) / lev;
+  const liq = pos.liquidationPrice === "N/A" ? 0 : Number(pos.liquidationPrice);
+  const liqDistPct =
+    liq > 0 && mark > 0
+      ? side === "long"
+        ? ((mark - liq) / mark) * 100
+        : ((liq - mark) / mark) * 100
+      : null;
+  return { pos, margin, mark, entry, liq, liqDistPct };
+}
+
+function protectHeader(p: ProtectPos): FormattedString {
+  const markPct = p.entry > 0 ? ((p.mark - p.entry) / p.entry) * 100 : 0;
+  const liqLine =
+    p.liq > 0 && p.liqDistPct !== null
+      ? fmt`Liq        ${FormattedString.b(fmtPrice(p.liq))}  ·  ${num(Math.max(0, p.liqDistPct), 1, 1)}% away ${liqDot(p.liqDistPct)}`
+      : fmt`Liq        ${FormattedString.b("Safe ✅")}`;
+  return fmt`Margin     ${FormattedString.b(usd(p.margin))}
+Mark       ${FormattedString.b(fmtPrice(p.mark))}  (${pct(markPct)} vs entry ${fmtPrice(p.entry)})
+${liqLine}`;
+}
+
+async function sendProtectHub(ctx: BotContext, symbol: string, side: "long" | "short") {
+  if (!ctx.user) return;
+  const sideLabel = side === "long" ? "LONG" : "SHORT";
+
+  const [pp, rungs, rules] = await Promise.all([
+    loadProtectPos(ctx, symbol, side),
+    getPositionConditionals(ctx.user.walletAddress, symbol, side).catch(() => []),
+    getUserRules(ctx.user.id),
+  ]);
+
+  if (!pp) {
+    await ctx.editMessageText(`No open ${symbol} ${sideLabel} position.`, {
+      reply_markup: new InlineKeyboard().text("📊 Positions", "nav:positions"),
+    });
+    return;
+  }
+
+  const slCount = rungs.filter((r) => r.leg === "sl").length;
+  const tpCount = rungs.filter((r) => r.leg === "tp").length;
+  const symbolRules = rules.filter(
+    (r) => r.enabled && r.symbol === symbol && (!r.side || r.side === side),
+  );
+  const trailRule = symbolRules.find((r) => r.ruleType === "trailing_stop");
+  const beRule = symbolRules.find((r) => r.ruleType === "breakeven");
+  const autoCount = symbolRules.filter(
+    (r) => r.ruleType !== "trailing_stop" && r.ruleType !== "breakeven",
+  ).length;
+
+  const slStatus = slCount > 0 ? `${slCount} level${slCount > 1 ? "s" : ""}` : "⚠️ not set";
+  const tpStatus = tpCount > 0 ? `${tpCount} level${tpCount > 1 ? "s" : ""}` : "not set";
+  const trailStatus = trailRule ? `on · ${Number(trailRule.threshold)}% trail` : "off";
+  const beStatus = beRule ? `armed at +${Number(beRule.threshold)}%` : "off";
+  const autoStatus = autoCount > 0 ? `${autoCount} rule${autoCount > 1 ? "s" : ""}` : "none";
+
+  const msg = fmt`🛡 ${FormattedString.b(`Protect ${symbol} · ${sideLabel}`)}
+
+${protectHeader(pp)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${FormattedString.b("Currently set")}
+  🛑 Stop loss     ${slStatus}
+  🎯 Take profit   ${tpStatus}
+  🛟 Trailing      ${trailStatus}
+  🎯 Breakeven     ${beStatus}
+  ⚡ Auto-rules    ${autoStatus}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${FormattedString.i("🛑 Stop loss caps your downside · 🎯 Take profit banks gains")}
+${FormattedString.i("🛟 Trailing follows price up · 🎯 Breakeven locks in no-loss")}
+${FormattedString.i("⚡ Auto-protect alerts or acts on rules you set")}`;
+
+  const kb = new InlineKeyboard()
+    .text("🛑 Stop loss", `tpsl:open:sl:${symbol}:${side}`)
+    .text("🎯 Take profit", `tpsl:open:tp:${symbol}:${side}`)
+    .row()
+    .text("🛟 Trailing stop", `protect:trail:${symbol}:${side}`)
+    .text("🎯 Move to breakeven", `protect:be:${symbol}:${side}`)
+    .row()
+    .text("⚡ Auto-protect / alerts", `protect:auto:${symbol}:${side}`)
+    .row()
+    .text("← Back to position", `pos:detail:${symbol}:${side}`);
+
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+const TRAIL_PRESETS = [3, 5, 10] as const;
+const BE_PRESETS = [20, 30, 50] as const;
+
+function trailInitialStop(side: "long" | "short", mark: number, pct: number): number {
+  return side === "long" ? mark * (1 - pct / 100) : mark * (1 + pct / 100);
+}
+
+function trailStopSafe(side: "long" | "short", stop: number, liq: number): boolean {
+  if (liq <= 0) return true;
+  return side === "long" ? stop > liq : stop < liq;
+}
+
+async function sendTrailPicker(ctx: BotContext, symbol: string, side: "long" | "short") {
+  const pp = await loadProtectPos(ctx, symbol, side);
+  if (!pp) {
+    await ctx.editMessageText(`No open ${symbol} ${side.toUpperCase()} position.`, {
+      reply_markup: new InlineKeyboard().text("📊 Positions", "nav:positions"),
+    });
+    return;
+  }
+
+  const base = `protect:trailgo:${symbol}:${side}`;
+  const kb = new InlineKeyboard();
+  let n = 0;
+  for (const p of TRAIL_PRESETS) {
+    const stop = trailInitialStop(side, pp.mark, p);
+    if (!trailStopSafe(side, stop, pp.liq)) continue;
+    kb.text(`${p}% (${fmtPrice(stop)})`, `${base}:${p}`);
+    n++;
+  }
+  if (n > 0) kb.row();
+  kb.text("✏️ Custom %", `protect:trailc:${symbol}:${side}`).row();
+  kb.text("← Back", `protect:${symbol}:${side}`);
+
+  const msg = fmt`🛟 ${FormattedString.b(`Trailing stop — ${symbol} ${side.toUpperCase()}`)}
+
+${protectHeader(pp)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Your stop follows the price up and never down — locking in gains.
+The price shown is where your stop starts now; it ratchets as price moves.`;
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+async function sendBreakevenPicker(ctx: BotContext, symbol: string, side: "long" | "short") {
+  const pp = await loadProtectPos(ctx, symbol, side);
+  if (!pp) {
+    await ctx.editMessageText(`No open ${symbol} ${side.toUpperCase()} position.`, {
+      reply_markup: new InlineKeyboard().text("📊 Positions", "nav:positions"),
+    });
+    return;
+  }
+
+  const base = `protect:bego:${symbol}:${side}`;
+  const kb = new InlineKeyboard();
+  for (const p of BE_PRESETS) {
+    const profit = (pp.margin * p) / 100;
+    kb.text(`+${p}% (+${usd(profit)})`, `${base}:${p}`);
+  }
+  kb.row();
+  kb.text("✏️ Custom %", `protect:bec:${symbol}:${side}`).row();
+  kb.text("← Back", `protect:${symbol}:${side}`);
+
+  const msg = fmt`🎯 ${FormattedString.b(`Move to breakeven — ${symbol} ${side.toUpperCase()}`)}
+
+${protectHeader(pp)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Once profit reaches the level you pick, your on-chain stop moves to
+your entry (~${fmtPrice(pp.entry)}) — so the trade can't turn into a loss.`;
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+async function sendAutoTriggerPicker(ctx: BotContext, symbol: string, side: "long" | "short") {
+  const msg = fmt`⚡ ${FormattedString.b(`Auto-protect ${symbol} ${side.toUpperCase()}`)}
+
+Pick a trigger — next you'll choose notify-only or an auto-action.`;
+  const kb = new InlineKeyboard()
+    .text("⚡ Near liquidation", `protect:trig:liq_distance:${symbol}:${side}`)
+    .row()
+    .text("📉 Gives back profit", `protect:trig:drawdown:${symbol}:${side}`)
+    .row()
+    .text("🎯 Hits a P&L level", `protect:trig:pnl_target:${symbol}:${side}`)
+    .row()
+    .text("💸 Funding too expensive", `protect:trig:funding_drain:${symbol}:${side}`)
+    .row()
+    .text("← Back", `protect:${symbol}:${side}`);
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+async function sendProtectThreshold(
+  ctx: BotContext,
+  ruleType: string,
+  symbol: string,
+  side: "long" | "short",
+) {
+  const pp = await loadProtectPos(ctx, symbol, side);
+  if (!pp) {
+    await ctx.editMessageText(`No open ${symbol} ${side.toUpperCase()} position.`, {
+      reply_markup: new InlineKeyboard().text("📊 Positions", "nav:positions"),
+    });
+    return;
+  }
+  const t = typeInfo(ruleType);
+  const kb = new InlineKeyboard();
+  let explain = "";
+
+  if (ruleType === "liq_distance") {
+    const distNow = pp.liqDistPct !== null ? `${num(Math.max(0, pp.liqDistPct), 1, 1)}%` : "—";
+    explain = `Trigger when your liquidation gets within this % of price.\nLiq ${fmtPrice(pp.liq)} · currently ${distNow} away — pick a number below that.`;
+    for (const v of [5, 10, 15, 20]) kb.text(`${v}%`, `grd:th:${ruleType}:${symbol}:${v}`);
+    kb.row();
+  } else if (ruleType === "drawdown") {
+    explain = "Trigger when profit falls this % from its peak (only once you're in profit).";
+    for (const v of [5, 10, 15, 20]) kb.text(`${v}%`, `grd:th:${ruleType}:${symbol}:${v}`);
+    kb.row();
+  } else if (ruleType === "pnl_target") {
+    explain = `Trigger when this position's PnL hits a level (% of your ${usd(pp.margin)} margin).`;
+    for (const v of [25, 50, 100]) {
+      kb.text(`+${v}% (+${usd((pp.margin * v) / 100)})`, `grd:th:${ruleType}:${symbol}:+${v}`);
+    }
+    kb.row();
+    for (const v of [10, 25, 50]) {
+      kb.text(`−${v}% (−${usd((pp.margin * v) / 100)})`, `grd:th:${ruleType}:${symbol}:-${v}`);
+    }
+    kb.row();
+  } else if (ruleType === "funding_drain") {
+    explain = "Trigger when the daily funding you pay exceeds this amount.";
+    for (const v of [5, 10, 25, 50]) kb.text(`$${v}/day`, `grd:th:${ruleType}:${symbol}:${v}`);
+    kb.row();
+  }
+
+  kb.text("✏️ Custom", `grd:thc:${ruleType}:${symbol}`).row();
+  kb.text("← Back", `protect:auto:${symbol}:${side}`);
+
+  const msg = fmt`${t.icon} ${FormattedString.b(`${t.name} — ${symbol} ${side.toUpperCase()}`)}
+
+${protectHeader(pp)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${explain}`;
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+async function createScopedRule(
+  ctx: BotContext,
+  ruleType: GuardianRule["ruleType"],
+  symbol: string,
+  side: "long" | "short",
+  threshold: string,
+  direction: string,
+  successHeader: string,
+  successBody: string,
+) {
+  if (!ctx.user) return;
+  await createRule({
+    id: generateRuleId(),
+    userId: ctx.user.id,
+    ruleType,
+    symbol,
+    side,
+    threshold,
+    direction,
+    action: "suggest",
+  });
+  const msg = fmt`✅ ${FormattedString.b(successHeader)}
+
+${successBody}`;
+  const kb = new InlineKeyboard()
+    .text("🛡 Back to protect", `protect:${symbol}:${side}`)
+    .text("📊 Positions", "nav:positions");
+  await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+async function confirmScopedRule(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  header: string,
+  body: string,
+) {
+  const msg = fmt`✅ ${FormattedString.b(header)}
+
+${body}`;
+  const kb = new InlineKeyboard()
+    .text("🛡 Back to protect", `protect:${symbol}:${side}`)
+    .text("📊 Positions", "nav:positions");
+  await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+}
+
+// Returns true when the pending input should be cleared (saved or terminal),
+// false when the user should retry (recoverable validation failure).
+export async function saveTrailRuleFromInput(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  trailPct: number,
+): Promise<boolean> {
+  if (!ctx.user) return true;
+  const pp = await loadProtectPos(ctx, symbol, side);
+  if (!pp) {
+    await ctx.reply(`No open ${symbol} ${side.toUpperCase()} position.`);
+    return true;
+  }
+  const stop = trailInitialStop(side, pp.mark, trailPct);
+  if (!trailStopSafe(side, stop, pp.liq)) {
+    await ctx.reply(
+      `A ${trailPct}% trail would place the stop at ${fmtPrice(stop)}, past your liquidation ${fmtPrice(pp.liq)}. Enter a smaller distance:`,
+    );
+    return false;
+  }
+  await createRule({
+    id: generateRuleId(),
+    userId: ctx.user.id,
+    ruleType: "trailing_stop",
+    symbol,
+    side,
+    threshold: String(trailPct),
+    direction: "trail",
+    action: "suggest",
+  });
+  await confirmScopedRule(
+    ctx,
+    symbol,
+    side,
+    `Trailing stop on ${symbol}`,
+    `${trailPct}% trail · stop starts ~${fmtPrice(stop)} and ratchets up.`,
+  );
+  return true;
+}
+
+export async function saveBreakevenRuleFromInput(
+  ctx: BotContext,
+  symbol: string,
+  side: "long" | "short",
+  armPct: number,
+): Promise<boolean> {
+  if (!ctx.user) return true;
+  await createRule({
+    id: generateRuleId(),
+    userId: ctx.user.id,
+    ruleType: "breakeven",
+    symbol,
+    side,
+    threshold: String(armPct),
+    direction: "above",
+    action: "suggest",
+  });
+  await confirmScopedRule(
+    ctx,
+    symbol,
+    side,
+    `Breakeven on ${symbol}`,
+    `When ${symbol} reaches +${armPct}%, your on-chain stop moves to entry.`,
+  );
+  return true;
 }
 
 export function registerGuardian(bot: Bot<BotContext>) {
@@ -550,6 +931,93 @@ You'll still receive alerts for all active rules.`;
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     await sendGuardianScreen(ctx, true);
+  });
+
+  // ─── Protect hub (per-position) ──────────────────────────────────────
+  bot.callbackQuery(/^protect:trail:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendTrailPicker(ctx, ctx.match[1], ctx.match[2] as "long" | "short");
+  });
+
+  bot.callbackQuery(/^protect:trailgo:([A-Z0-9]+):(long|short):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Saving…");
+    if (!ctx.user) return;
+    const [symbol, side, pct] = [ctx.match[1], ctx.match[2] as "long" | "short", ctx.match[3]];
+    try {
+      await createScopedRule(
+        ctx,
+        "trailing_stop",
+        symbol,
+        side,
+        pct,
+        "trail",
+        `Trailing stop on ${symbol}`,
+        `${pct}% trail. Your on-chain stop now follows the price and ratchets up.`,
+      );
+    } catch (err) {
+      await renderBotError(ctx, err, { action: "set trailing stop", edit: true });
+    }
+  });
+
+  bot.callbackQuery(/^protect:be:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendBreakevenPicker(ctx, ctx.match[1], ctx.match[2] as "long" | "short");
+  });
+
+  bot.callbackQuery(/^protect:trailc:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const [symbol, side] = [ctx.match[1], ctx.match[2]];
+    await ctx.editMessageText(`Enter a trail distance % for ${symbol} (e.g. 4):`);
+    await setPending(ctx.from.id, `protect_trail:${symbol}:${side}`);
+  });
+
+  bot.callbackQuery(/^protect:bec:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const [symbol, side] = [ctx.match[1], ctx.match[2]];
+    await ctx.editMessageText(`Enter the profit % to arm breakeven for ${symbol} (e.g. 25):`);
+    await setPending(ctx.from.id, `protect_be:${symbol}:${side}`);
+  });
+
+  bot.callbackQuery(/^protect:bego:([A-Z0-9]+):(long|short):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Saving…");
+    if (!ctx.user) return;
+    const [symbol, side, pct] = [ctx.match[1], ctx.match[2] as "long" | "short", ctx.match[3]];
+    try {
+      await createScopedRule(
+        ctx,
+        "breakeven",
+        symbol,
+        side,
+        pct,
+        "above",
+        `Breakeven on ${symbol}`,
+        `When ${symbol} reaches +${pct}%, your on-chain stop moves to entry.`,
+      );
+    } catch (err) {
+      await renderBotError(ctx, err, { action: "set breakeven", edit: true });
+    }
+  });
+
+  bot.callbackQuery(/^protect:auto:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendAutoTriggerPicker(ctx, ctx.match[1], ctx.match[2] as "long" | "short");
+  });
+
+  bot.callbackQuery(/^protect:trig:(\w+):([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendProtectThreshold(ctx, ctx.match[1], ctx.match[2], ctx.match[3] as "long" | "short");
+  });
+
+  bot.callbackQuery(/^protect:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    await sendProtectHub(ctx, ctx.match[1], ctx.match[2] as "long" | "short");
   });
 
   bot.callbackQuery("grd:close_menu", async (ctx) => {
@@ -583,7 +1051,7 @@ You'll still receive alerts for all active rules.`;
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
     const ruleType = ctx.match[1];
-    if (ruleType === "exposure_limit") {
+    if (ruleType === "exposure_limit" || ruleType === "margin_ratio") {
       await sendThresholdPicker(ctx, ruleType, "_all");
     } else {
       await sendSymbolPicker(ctx, ruleType);
@@ -678,6 +1146,14 @@ You'll still receive alerts for all active rules.`;
     const [ruleType, symbol, thresholdStr, action] = parts;
     const actionParam = parts[4] || null;
 
+    if (action === "auto_margin" && symbol !== "_all" && isIsolatedOnly(symbol)) {
+      await ctx.editMessageText(
+        `⚠️ Auto-add-margin isn't supported for isolated markets like ${symbol} yet. Use auto-reduce or auto-close instead.`,
+        { reply_markup: new InlineKeyboard().text("🛡 Guardian", "grd:list") },
+      );
+      return;
+    }
+
     const direction = directionForType(ruleType, thresholdStr);
     const parsed = parseThreshold(thresholdStr);
     const thresholdVal = parsed?.value ?? Number(thresholdStr);
@@ -766,6 +1242,28 @@ This can't be undone.`;
     if (!ctx.user) return;
     await deleteRule(ctx.match[1], ctx.user.id);
     await sendGuardianScreen(ctx, true);
+  });
+
+  bot.callbackQuery("grd:rmall", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.user) return;
+    const msg = fmt`🗑 ${FormattedString.b("Remove all Guardian rules?")}
+
+This deletes every rule on your account (per-position and account-wide).
+On-chain stops you've already placed stay in place. This can't be undone.`;
+    const kb = new InlineKeyboard()
+      .text("🗑 Yes, remove all", "grd:rmallgo")
+      .text("✕ Cancel", "grd:list");
+    await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
+  });
+
+  bot.callbackQuery("grd:rmallgo", async (ctx) => {
+    await ctx.answerCallbackQuery("Removed.");
+    if (!ctx.user) return;
+    const count = await deleteAllRules(ctx.user.id);
+    const msg = fmt`🗑 ${FormattedString.b(`Removed ${count} rule${count === 1 ? "" : "s"}.`)}`;
+    const kb = new InlineKeyboard().text("🛡 Guardian", "grd:list");
+    await ctx.editMessageText(msg.text, { entities: msg.entities, reply_markup: kb });
   });
 
   bot.callbackQuery("grd:killswitch", async (ctx) => {
@@ -997,7 +1495,7 @@ Est. PnL: ${FormattedString.code(`${Number(pos.unrealizedPnl) >= 0 ? "+" : ""}$$
     await ctx.answerCallbackQuery("Snoozed.");
     if (!ctx.user) return;
     const [ruleId, minutes] = [ctx.match[1], Number(ctx.match[2])];
-    await markTriggered(ruleId, ctx.user.id);
+    await redis.set(`guardian:snooze:${ruleId}`, "1", "EX", minutes * 60);
 
     await ctx.editMessageText(`⏸ Snoozed for ${minutes} minutes. Alert will not fire until then.`, {
       reply_markup: {

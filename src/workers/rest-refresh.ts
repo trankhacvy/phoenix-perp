@@ -27,13 +27,18 @@ async function refreshWallet(wallet: string): Promise<void> {
   await bucket.acquire();
   const state = await getTraderState(wallet);
   const liqPriceBySymbol: Record<string, number> = {};
+  const marginBySymbol: Record<string, number> = {};
   for (const p of state.positions) {
     liqPriceBySymbol[p.symbol] = p.liquidationPrice === "N/A" ? 0 : Number(p.liquidationPrice);
+    const notional = Number(p.size) * Number(p.markPrice);
+    const lev = p.leverage && p.leverage > 0 ? p.leverage : 1;
+    marginBySymbol[p.symbol] = notional / lev;
   }
   restCache.set(wallet, {
     riskTier: state.riskTier,
     effectiveCollateralUsdc: Number(state.effectiveCollateral),
     liqPriceBySymbol,
+    marginBySymbol,
     updatedAt: Date.now(),
   });
 }

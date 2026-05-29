@@ -4,6 +4,7 @@ import { alertSubscriptions, users } from "../../db/schema/index.js";
 import { alertQueue } from "../../jobs/queues.js";
 import { logger } from "../../lib/logger.js";
 import { redis } from "../../lib/redis.js";
+import { getMarkPrice } from "../../services/phoenix/market-stats-feed.js";
 import { onMids } from "../../services/phoenix/price-feed.js";
 import { esc } from "./shared.js";
 
@@ -47,12 +48,12 @@ export function bustPriceAlertCache() {
   _priceAlertCache = null;
 }
 
-export async function checkPriceAlerts(mids: ReadonlyMap<string, number>) {
+export async function checkPriceAlerts(_mids: ReadonlyMap<string, number>) {
   const subs = await getPriceAlertSubs();
 
   for (const sub of subs) {
     if (!sub.symbol || !sub.triggerPrice) continue;
-    const current = mids.get(sub.symbol.toUpperCase());
+    const current = getMarkPrice(sub.symbol.toUpperCase());
     if (current === undefined) continue;
 
     const trigger = Number(sub.triggerPrice);
@@ -79,7 +80,12 @@ export async function checkPriceAlerts(mids: ReadonlyMap<string, number>) {
         ].join("\n"),
         keyboard: [
           [
-            { text: `📈 ${sub.symbol} Market`, callback_data: `market:detail:${sub.symbol}:0` },
+            {
+              text: `📈 View ${sub.symbol} market`,
+              callback_data: `market:detail:${sub.symbol}:0`,
+            },
+          ],
+          [
             { text: `🟢 Long ${sub.symbol}`, callback_data: `trade:long:${sub.symbol}` },
             { text: `🔴 Short ${sub.symbol}`, callback_data: `trade:short:${sub.symbol}` },
           ],
