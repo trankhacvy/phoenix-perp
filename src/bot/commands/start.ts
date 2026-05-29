@@ -2,7 +2,6 @@ import { FormattedString, fmt } from "@grammyjs/parse-mode";
 import { eq } from "drizzle-orm";
 import type { Bot } from "grammy";
 import { InlineKeyboard } from "grammy";
-import { config } from "../../config/index.js";
 import { db } from "../../db/index.js";
 import { users } from "../../db/schema/index.js";
 import { INVITE_SEARCH_URL } from "../../lib/constants.js";
@@ -18,6 +17,7 @@ import {
 } from "../../services/wallet.js";
 import type { BotContext } from "../../types/index.js";
 import { num, usd } from "../lib/fmt.js";
+import { referralLink } from "../lib/referral-link.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryDetail } from "./history.js";
 import { sendSizeStep } from "./long.js";
@@ -165,8 +165,17 @@ export function registerStart(bot: Bot<BotContext>) {
         .text("📈 Markets", "nav:markets")
         .text("📋 History", "nav:history");
 
-      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n${usdcLine}\n${collateralLine}\n${solLine}\n\n${FormattedString.code(ctx.user.walletAddress)}\n${FormattedString.i("(tap to copy)")}\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
-      await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
+      const refLink = referralLink(ctx);
+      const refLine = refLink
+        ? fmt`\n\n👥 ${FormattedString.b("Refer & earn:")} ${FormattedString.code(refLink)}`
+        : fmt``;
+
+      const msg = fmt`🔥 ${FormattedString.b(`Welcome back, ${name}!`)}\n\n${usdcLine}\n${collateralLine}\n${solLine}\n\n${FormattedString.code(ctx.user.walletAddress)}\n${FormattedString.i("(tap to copy)")}${refLine}\n\n${FormattedString.i("⚠️ Beta — trade at your own risk.")}`;
+      await ctx.reply(msg.text, {
+        entities: msg.entities,
+        reply_markup: kb,
+        link_preview_options: { is_disabled: true },
+      });
       return;
     }
 
@@ -218,7 +227,7 @@ export function registerStart(bot: Bot<BotContext>) {
         referredBy,
       });
 
-      if (referredBy && config.REFERRAL_ENABLED) await linkReferral(telegramId, referredBy);
+      if (referredBy) await linkReferral(telegramId, referredBy);
 
       const kb = new InlineKeyboard()
         .text("🔑 Enter invite code", "nav:activate")

@@ -12,7 +12,10 @@ export const referrals = pgTable("referrals", {
     .notNull()
     .references(() => users.id),
   tier: referralTierEnum("tier").notNull(),
-  // USDC accrued from builder fee rebate (operator-funded, not Phoenix native)
+  // Referral reward points — 1 point per $1 of referred trading volume.
+  // No cash payout; convertible to future rewards (airdrop / rebate) when launched.
+  points: numeric("points", { precision: 20, scale: 6 }).default("0").notNull(),
+  // Legacy USDC rebate columns — retained for back-compat, no longer written.
   accruedUsdc: numeric("accrued_usdc", { precision: 20, scale: 6 }).default("0").notNull(),
   claimedUsdc: numeric("claimed_usdc", { precision: 20, scale: 6 }).default("0").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

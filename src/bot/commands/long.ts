@@ -20,6 +20,7 @@ import { recordTrade } from "../../services/trade-log.js";
 import type { BotContext } from "../../types/index.js";
 import { subscribeUser } from "../../workers/ws.js";
 import { leveragePickerKeyboard, sizePickerKeyboard } from "../keyboards/trade.js";
+import { requireActivation } from "../lib/activation.js";
 import { renderBotError, toBotError } from "../lib/errors.js";
 import {
   price as fmtPrice,
@@ -46,14 +47,7 @@ export function registerLong(bot: Bot<BotContext>) {
       await ctx.reply("Please run /start first to set up your account.");
       return;
     }
-    if (!ctx.user.phoenixActivated) {
-      const kb = new InlineKeyboard().text("Activate account", "nav:activate");
-      await ctx.reply(
-        "Your trading account isn't activated yet.\nUse /activate <code> to unlock trading.",
-        { reply_markup: kb },
-      );
-      return;
-    }
+    if (!(await requireActivation(ctx))) return;
 
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
     const symbol = parts[0]?.toUpperCase().replace("/USD", "").replace("/USDT", "");
@@ -100,10 +94,7 @@ export function registerLong(bot: Bot<BotContext>) {
   bot.callbackQuery(/^trade:long:([A-Z0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
-    if (!ctx.user.phoenixActivated) {
-      await ctx.reply("Activate your account first. Use /activate <code>.");
-      return;
-    }
+    if (!(await requireActivation(ctx))) return;
     await sendSizeStep(ctx, "long", ctx.match[1]);
   });
 

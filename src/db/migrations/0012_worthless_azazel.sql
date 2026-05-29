@@ -1,0 +1,1 @@
+ALTER TABLE "referrals" ADD COLUMN "points" numeric(20, 6) DEFAULT '0' NOT NULL;

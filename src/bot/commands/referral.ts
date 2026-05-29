@@ -1,32 +1,46 @@
 import { FormattedString, fmt } from "@grammyjs/parse-mode";
-import type { Bot } from "grammy";
-import { config } from "../../config/index.js";
+import { type Bot, InputFile } from "grammy";
+import QRCode from "qrcode";
 import { getReferralStats } from "../../services/referral.js";
 import type { BotContext } from "../../types/index.js";
 import { num } from "../lib/fmt.js";
+import { referralLink } from "../lib/referral-link.js";
 
 export function registerReferral(bot: Bot<BotContext>) {
   bot.command("referral", async (ctx) => {
-    if (!config.REFERRAL_ENABLED) return;
     if (!ctx.user) {
       await ctx.reply("Please run /start first to set up your account.");
       return;
     }
-
     if (!ctx.user.referralCode) {
       await ctx.reply("Referral code not set up. Try again or contact support.");
       return;
     }
 
     const stats = await getReferralStats(ctx.user.id);
-    const botInfo = await bot.api.getMe();
-    const link = `https://t.me/${botInfo.username}?start=${ctx.user.referralCode}`;
+    const link = referralLink(ctx) ?? "";
 
-    const msg = fmt`👥 ${FormattedString.b("Your Referral")}\n\nLink: ${link}\nCode: ${FormattedString.code(ctx.user.referralCode)}\n\nDirect referrals: ${FormattedString.b(String(stats.t1Count))}\nIndirect referrals: ${FormattedString.b(String(stats.t2Count))}\n\nAccrued rebate: ${FormattedString.code(`${num(stats.totalAccruedUsdc, 6, 6)} USDC`)}\nClaimable: ${FormattedString.code(`${num(stats.claimableUsdc, 6, 6)} USDC`)}\n\nUse /claim to withdraw your rebate.`;
+    const rankLine = stats.rank
+      ? fmt`🏆 Rank             ${FormattedString.b(`#${stats.rank}`)} ${FormattedString.i(`of ${num(stats.totalReferrers)}`)}`
+      : fmt`🏆 Rank             ${FormattedString.i("unranked — refer to climb")}`;
 
-    await ctx.reply(msg.text, {
-      entities: msg.entities,
-      link_preview_options: { is_disabled: true },
+    const caption = fmt`👥 ${FormattedString.b("Your Referral")}
+
+Share your link. When friends trade, you earn ${FormattedString.b("points")} — ${FormattedString.b("1 point per $1")} of their volume.
+
+⭐ Points           ${FormattedString.b(num(stats.points))}
+👤 Referrals        ${FormattedString.b(num(stats.referralCount))}
+${rankLine}
+
+🔗 ${FormattedString.code(link)}
+Code: ${FormattedString.code(ctx.user.referralCode)}
+
+${FormattedString.i("Points count toward future rewards. Tap the link or code to copy.")}`;
+
+    const qr = await QRCode.toBuffer(link, { type: "png", width: 320, margin: 2 });
+    await ctx.replyWithPhoto(new InputFile(qr, "referral-qr.png"), {
+      caption: caption.caption,
+      caption_entities: caption.caption_entities,
     });
   });
 }

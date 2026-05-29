@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import QRCode from "qrcode";
 import satori from "satori";
 import sharp from "sharp";
 import { moneyShort, signedMoney } from "../bot/lib/fmt.js";
+
+/** Scannable referral badge embedded on share cards. */
+export interface ReferralBadge {
+  /** Deep link encoded in the QR, e.g. https://t.me/<bot>?start=<code> */
+  url: string;
+  /** Human-readable code shown under the QR for non-scanners. */
+  code: string;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(__dirname, "../../assets");
@@ -32,6 +41,15 @@ function getBg(win: boolean): string {
     bgCache.set(key, `data:image/jpeg;base64,${data.toString("base64")}`);
   }
   return bgCache.get(key) as string;
+}
+
+let logoCache: string | null = null;
+function getLogo(): string {
+  if (logoCache === null) {
+    const data = readFileSync(join(ASSETS, "logo.png"));
+    logoCache = `data:image/png;base64,${data.toString("base64")}`;
+  }
+  return logoCache;
 }
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -144,48 +162,31 @@ function directionBadge(side: "long" | "short", leverage?: number): Node {
   const isLong = side === "long";
   const color = isLong ? C.profit : C.loss;
   const bg = isLong ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
-  const pillChildren: Node[] = [
-    {
-      type: "div",
-      props: {
-        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
-        children: isLong ? "▲" : "▼",
-      },
-    },
-    {
-      type: "div",
-      props: {
-        style: { fontFamily: FF, fontSize: 15, fontWeight: 700, color },
-        children: isLong ? "LONG" : "SHORT",
-      },
-    },
-  ];
-  const rowChildren: Node[] = [
-    {
-      type: "div",
-      props: {
-        style: {
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 8,
-          background: bg,
-          border: `1.5px solid ${color}`,
-          borderRadius: 8,
-          padding: "7px 16px",
-        },
-        children: pillChildren,
-      },
-    },
-  ];
-  if (leverage !== undefined) {
-    rowChildren.push(txt(`${leverage}×`, 17, C.muted));
-  }
+  const sideLabel = isLong ? "Long" : "Short";
+  const label = leverage !== undefined ? `${sideLabel} ${leverage}x` : sideLabel;
+  // Single pill — "Long 10x" / "Short 2x". No glyph (SpaceGrotesk lacks ▲/▼).
   return {
     type: "div",
     props: {
-      style: { display: "flex", flexDirection: "row", alignItems: "center", gap: 14 },
-      children: rowChildren,
+      style: { display: "flex", flexDirection: "row" },
+      children: [
+        {
+          type: "div",
+          props: {
+            style: {
+              fontFamily: FF,
+              fontSize: 17,
+              fontWeight: 700,
+              color,
+              background: bg,
+              border: `1.5px solid ${color}`,
+              borderRadius: 8,
+              padding: "7px 18px",
+            },
+            children: label,
+          },
+        },
+      ],
     },
   };
 }
@@ -200,9 +201,111 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+// ── Referral badge (QR + code) ──────────────────────────────────────────────
+
+async function referralBadge(ref: ReferralBadge): Promise<Node> {
+  const qr = await QRCode.toDataURL(ref.url, {
+    margin: 1,
+    width: 264,
+    color: { dark: "#05050f", light: "#ffffff" },
+  });
+  // Wrapped in a dark, semi-opaque panel so the white text + QR stay readable
+  // over the bright part of the background image.
+  return {
+    type: "div",
+    props: {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 6,
+        background: "rgba(5,5,15,0.72)",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: 16,
+        padding: "13px 14px",
+      },
+      children: [
+        {
+          type: "img",
+          props: {
+            src: qr,
+            width: 120,
+            height: 120,
+            style: { width: 120, height: 120, borderRadius: 8, border: "4px solid #ffffff" },
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: {
+              fontFamily: FF,
+              fontSize: 12,
+              fontWeight: 700,
+              color: C.label,
+              letterSpacing: 2,
+              textTransform: "uppercase",
+            },
+            children: "Scan to trade",
+          },
+        },
+        {
+          type: "div",
+          props: {
+            style: { fontFamily: FF, fontSize: 18, fontWeight: 700, color: "#fbbf24" },
+            children: ref.code,
+          },
+        },
+      ],
+    },
+  };
+}
+
+// Logo + wordmark, top-left of every card.
+const brandRow: Node = {
+  type: "div",
+  props: {
+    style: { display: "flex", flexDirection: "row", alignItems: "center", gap: 12 },
+    children: [
+      {
+        type: "img",
+        props: {
+          src: getLogo(),
+          width: 46,
+          height: 46,
+          style: { width: 46, height: 46, borderRadius: 11 },
+        },
+      },
+      {
+        type: "div",
+        props: {
+          style: { fontFamily: FF, fontSize: 28, fontWeight: 700, color: C.label },
+          children: "SuperNova",
+        },
+      },
+    ],
+  },
+};
+
+// Fallback top-right chip when no referral badge is supplied.
+const creditNode: Node = {
+  type: "div",
+  props: {
+    style: {
+      background: "rgba(5,5,15,0.6)",
+      borderRadius: 8,
+      padding: "6px 12px",
+      fontFamily: FF,
+      fontSize: 13,
+      fontWeight: 700,
+      color: C.label,
+    },
+    children: "SuperNova",
+  },
+};
+
 // ── Shared card shell ─────────────────────────────────────────────────────────
 
-function cardShell(win: boolean, leftContent: Node[], barItems: Node[]): Node {
+function cardShell(win: boolean, leftContent: Node[], barItems: Node[], topRight: Node): Node {
   return {
     type: "div",
     props: {
@@ -261,40 +364,24 @@ function cardShell(win: boolean, leftContent: Node[], barItems: Node[]): Node {
               flexDirection: "column",
             },
             children: [
-              // Credit — top right
-              {
-                type: "div",
-                props: {
-                  style: { display: "flex", justifyContent: "flex-end", padding: "20px 36px 0" },
-                  children: [
-                    {
-                      type: "div",
-                      props: {
-                        style: { fontFamily: FF, fontSize: 12, fontWeight: 400, color: C.credit },
-                        children: "Created by @trankhac_vy",
-                      },
-                    },
-                  ],
-                },
-              },
-              // Main row
+              // Main row — left panel top-aligned (brand + content), image right
               {
                 type: "div",
                 props: {
                   style: { display: "flex", flexDirection: "row", flex: 1 },
                   children: [
-                    // Left panel
+                    // Left panel — top-aligned stack
                     {
                       type: "div",
                       props: {
                         style: {
                           display: "flex",
                           flexDirection: "column",
-                          gap: 24,
+                          gap: 22,
                           width: PANEL_W,
                           padding: `${PAD_T}px 0 ${PAD_T}px ${PAD_L}px`,
                         },
-                        children: leftContent,
+                        children: [brandRow, ...leftContent],
                       },
                     },
                     // Right spacer — transparent, phoenix image shows through
@@ -323,6 +410,14 @@ function cardShell(win: boolean, leftContent: Node[], barItems: Node[]): Node {
             ],
           },
         },
+        // Top-right slot — referral QR badge (absolute, doesn't push content down)
+        {
+          type: "div",
+          props: {
+            style: { position: "absolute", top: 28, right: 40, display: "flex" },
+            children: [topRight],
+          },
+        },
       ],
     },
   };
@@ -340,6 +435,7 @@ export interface PnlCardData {
   pnlUsdc: number;
   duration?: string;
   size?: string;
+  referral?: ReferralBadge;
 }
 
 export async function generatePnlCard(data: PnlCardData): Promise<Buffer> {
@@ -353,6 +449,8 @@ export async function generatePnlCard(data: PnlCardData): Promise<Buffer> {
     txt(fmtPct(data.roiPercent), 44, accent),
   ];
 
+  const topRight = data.referral ? await referralBadge(data.referral) : creditNode;
+
   const barItems: Node[] = [];
   const addStat = (l: string, v: string, color?: string) => {
     if (barItems.length > 0) barItems.push(vDivider);
@@ -364,7 +462,7 @@ export async function generatePnlCard(data: PnlCardData): Promise<Buffer> {
   if (data.size) addStat("Size", data.size);
   if (data.duration) addStat("Duration", data.duration);
 
-  const svg = await satori(cardShell(win, leftContent, barItems), {
+  const svg = await satori(cardShell(win, leftContent, barItems, topRight), {
     width: W,
     height: H,
     fonts: [
@@ -386,11 +484,14 @@ export interface WalletCardData {
   totalVolume: number;
   bestTrade: { pnl: number; symbol: string } | null;
   worstTrade: { pnl: number; symbol: string } | null;
+  referral?: ReferralBadge;
 }
 
 export async function generateWalletCard(data: WalletCardData): Promise<Buffer> {
   const win = data.realizedPnl >= 0;
   const accent = win ? C.profit : C.loss;
+
+  const topRight = data.referral ? await referralBadge(data.referral) : creditNode;
 
   const leftContent: Node[] = [
     field("Trader", shortAddr(data.walletAddress), 32, C.muted),
@@ -439,7 +540,7 @@ export async function generateWalletCard(data: WalletCardData): Promise<Buffer> 
   if (data.bestTrade) addStat("Best", signedMoney(data.bestTrade.pnl), C.profit);
   if (data.worstTrade) addStat("Worst", signedMoney(data.worstTrade.pnl), C.loss);
 
-  const svg = await satori(cardShell(win, leftContent, barItems), {
+  const svg = await satori(cardShell(win, leftContent, barItems, topRight), {
     width: W,
     height: H,
     fonts: [

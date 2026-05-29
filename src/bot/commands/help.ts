@@ -42,7 +42,6 @@ const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[
     content: fmt`📋 ${FormattedString.b("History & Analytics")}
 
 /history — Trade history with P&L
-/share <symbol> — Generate PnL card image
 /wallet <address> — Look up any trader's stats
 /leaderboard — Top traders by volume/PnL/win rate`,
   },
@@ -57,13 +56,16 @@ const BASE_CATEGORIES: { key: string; label: string; content: FormattedString }[
   },
 ];
 
-const _REFERRAL_CATEGORY = {
+const REFERRAL_CATEGORY = {
   key: "referral",
   label: "👥 Referral",
   content: fmt`👥 ${FormattedString.b("Referral")}
 
-/referral — Your referral link & stats
-/claim — Withdraw referral rebate`,
+Share your link. When friends trade, you earn ${FormattedString.b("points")} — 1 point per $1 of their trading volume.
+
+/referral — Your link, points & rank
+
+${FormattedString.i("Points count toward future rewards (airdrop / rebates) when we launch them. No cash payout yet.")}`,
 };
 
 const FAQ_CATEGORY = {
@@ -86,12 +88,15 @@ ${FormattedString.b("Common trade failures")}
   · ${FormattedString.i("Transaction expired")} — safe to retry, blockhash stale
   · ${FormattedString.i("Insufficient margin")} — deposit more USDC via /deposit
 
+${FormattedString.b("How do referrals work?")}
+Share your /referral link. When someone joins through it and trades, you earn ${FormattedString.b("points")} — 1 point per $1 of their volume. Points convert to future rewards (airdrop / rebates). No cash payout yet.
+
 ${FormattedString.b("My P&L looks wrong?")}
 Unrealized P&L is based on the current mark price and excludes fees. Realized P&L in /history includes all trading fees.`,
 };
 
 function getCategories() {
-  return [...BASE_CATEGORIES, FAQ_CATEGORY];
+  return [...BASE_CATEGORIES, REFERRAL_CATEGORY, FAQ_CATEGORY];
 }
 
 function mainKeyboard(): InlineKeyboard {

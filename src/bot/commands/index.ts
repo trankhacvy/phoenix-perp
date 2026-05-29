@@ -4,7 +4,6 @@ import { requireActivation } from "../lib/activation.js";
 import { clearPending } from "../lib/pending.js";
 import { registerActivate } from "./activate.js";
 import { registerAlerts, sendAlertsScreen } from "./alerts.js";
-import { registerClaim } from "./claim.js";
 import { registerDeposit, sendDepositScreen } from "./deposit.js";
 import { registerGuardian } from "./guardian.js";
 import { registerHelp } from "./help.js";
@@ -15,13 +14,12 @@ import { registerLong, sendSymbolPicker } from "./long.js";
 import { registerMarkets, sendMarketsScreen } from "./markets.js";
 import { registerPortfolio, sendPortfolioScreen } from "./portfolio.js";
 import { registerPositions, sendPositionsScreen } from "./positions.js";
-import { registerPriceAlert } from "./pricealert.js";
 import { registerReferral } from "./referral.js";
 import { registerSettings } from "./settings.js";
-import { registerShare } from "./share.js";
 import { registerShort } from "./short.js";
 import { registerStart } from "./start.js";
 import { registerStatus } from "./status.js";
+import { registerTestCard } from "./testcard.js";
 import { registerTpSl } from "./tpsl.js";
 import { registerWalletMonitor } from "./wallet-monitor.js";
 import { registerWallet } from "./wallet.js";
@@ -41,16 +39,14 @@ export function registerCommands(bot: Bot<BotContext>) {
   registerAlerts(bot);
   registerSettings(bot);
   registerReferral(bot);
-  registerShare(bot);
   registerPortfolio(bot);
   registerTpSl(bot);
-  registerClaim(bot);
-  registerPriceAlert(bot);
   registerWalletMonitor(bot);
   registerWallet(bot);
   registerLeaderboard(bot);
   registerLog(bot);
   registerStatus(bot);
+  registerTestCard(bot);
   registerGuardian(bot);
 
   bot.callbackQuery("nav:balance", async (ctx) => {
@@ -63,6 +59,7 @@ export function registerCommands(bot: Bot<BotContext>) {
   bot.callbackQuery("nav:deposit", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.user) return;
+    if (!(await requireActivation(ctx))) return;
     await sendDepositScreen(ctx);
   });
 

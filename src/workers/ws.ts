@@ -12,7 +12,7 @@ import { logger } from "../lib/logger.js";
 import { getPhoenixWsClient } from "../services/phoenix/client.js";
 import { superviseFeed } from "../services/phoenix/feed-supervisor.js";
 import { getMarket } from "../services/phoenix/market.js";
-import { accrueReferralFee } from "../services/referral.js";
+import { accrueReferralPoints } from "../services/referral.js";
 import type { AccountSnapshot, CachedPosition } from "../types/index.js";
 import { clearPeak, clearTrail } from "./evaluators/guardian.js";
 import {
@@ -141,14 +141,12 @@ async function onFills(
   const watchers = watcherIndex.get(walletAddress) ?? new Map<string, WatcherFlags>();
 
   if (ownerTid) {
-    if (config.REFERRAL_ENABLED) {
-      const ownerId = await getOwnerUserId(walletAddress);
-      if (ownerId) {
-        for (const fill of fills) {
-          await accrueReferralFee(ownerId, fillNotional(fill)).catch((err) =>
-            logger.error({ err }, "Referral fee accrual failed"),
-          );
-        }
+    const ownerId = await getOwnerUserId(walletAddress);
+    if (ownerId) {
+      for (const fill of fills) {
+        await accrueReferralPoints(ownerId, fillNotional(fill)).catch((err) =>
+          logger.error({ err }, "Referral points accrual failed"),
+        );
       }
     }
 
