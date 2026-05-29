@@ -17,7 +17,7 @@
 |---|---|
 | `/long [symbol] [leverage] [size]` | Open a long position. No args → guided flow: symbol picker → size step (% of balance or custom) → leverage step → confirm with full quote. Or pass all three inline (e.g., `/long SOL 10x 500`) for one-shot execution. Preflight validates activation, collateral, leverage tiers, and price drift. |
 | `/short [symbol] [leverage] [size]` | Open a short position. Same flow as `/long`. |
-| `/positions` | List all open positions with unrealized PnL, leverage, liquidation price. Tap a position for detail view — close (25/50/100%), add margin, set SL/TP, refresh. Generates PnL card on close. |
+| `/positions` | List all open positions with unrealized PnL, leverage, liquidation price. Tap a position for detail view — close (25/50/100%), add margin, set SL/TP, refresh. After a close, a "📸 Share PnL" button generates a shareable PnL card (with referral QR) on demand. |
 | `/markets` | Browse all markets paginated (10 per page) with price, funding rate APR + trend, and max leverage. Tap a market for full detail. |
 | `/market <symbol>` | Market detail: mark price, open interest, funding rate (APR, direction, daily cost per $10K, trend arrows), taker fee, leverage tiers. 1H technical indicators: RSI(14), MACD, Bollinger Bands, ATR(14). Commodity market hours noted when applicable. Buttons to go long/short or set a price alert. |
 | (TP/SL via position detail) | Set or manage take-profit / stop-loss from `/positions` → tap position → "🎯 Set TP" / "🛑 Set SL" buttons. Each opens a per-leg manager supporting ladder (multiple levels), per-rung edit (price/size/mode), atomic single-tx submits. Standalone `/setsl` and `/settp` commands removed. |
@@ -27,7 +27,6 @@
 | Command | Description |
 |---|---|
 | `/history` | Paginated trade history (5 per page, last 30 fills). Each row shows action type (Open Long, Close Short, SL, TP), size, fill price, and value (opens) or realized PnL (closes) with timestamps. Tap a row for full detail + Solscan link. |
-| `/share <symbol>` | Generate a shareable PnL card image (PNG) for the most recent closed trade on a symbol. Card shows market, side, entry/exit price, ROI%, and realized PnL with themed background. |
 | `/wallet <address>` | Look up any Solana wallet's Phoenix activity. Shows full address (copyable), portfolio, live positions (up to 5) with Copy/Counter deep links, all-time stats (PnL, win rate, volume, long/short ratio, maker %), best/worst trade, per-market breakdown. Buttons: Follow trader, trade history, generate wallet card. |
 
 ## Leaderboard
@@ -40,8 +39,7 @@
 
 | Command | Description |
 |---|---|
-| `/referral` | Your referral link, T1/T2 referral counts, total accrued USDC rebate, and claimable balance. Referral system is bot-native (independent of Phoenix's $10K volume requirement). T1 = 20% of builder fee, T2 = 10%. |
-| `/claim` | Claim accrued referral rebate (minimum $1 USDC). |
+| `/referral` | Your referral link (+ QR), points balance, direct-referral count, and rank. Bot-native single-tier: you earn **points** as your referrals trade — 1 point per $1 of their volume. Points have no cash payout; they convert to future rewards (airdrop / rebates) when launched. |
 
 ## Alerts & Monitoring
 
@@ -59,3 +57,4 @@
 | `/exportkey` | **Dev only.** Export your Privy wallet private key (base58). Prompts for confirmation. Not registered in production. |
 | `/log [user_id]` | **Admin only.** Show last 10 action log entries for a user. Gated by `ADMIN_TELEGRAM_IDS` env var. |
 | `/status` | **Dev only.** Preview all 9 alert message formats with live inline keyboards. Not registered in production. |
+| `/testcard` | **Dev/test.** Renders sample share cards (PnL win, PnL loss, wallet summary) with the referral QR badge so the image layout can be eyeballed. Not listed in the command menu. |

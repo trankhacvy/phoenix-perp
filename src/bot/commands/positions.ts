@@ -3,7 +3,8 @@ import { InlineKeyboard, InputFile } from "grammy";
 import type { Bot } from "grammy";
 import { tokensToLots } from "../../lib/amount.js";
 import { logger } from "../../lib/logger.js";
-import { generatePnlCard } from "../../services/image.js";
+import { redis } from "../../lib/redis.js";
+import { type PnlCardData, generatePnlCard } from "../../services/image.js";
 import {
   type ConditionalRung,
   getPositionConditionals,
@@ -33,6 +34,7 @@ import {
 } from "../lib/fmt.js";
 import { claimIdempotencyKey } from "../lib/idempotent.js";
 import { setPending } from "../lib/pending.js";
+import { referralBadgeData } from "../lib/referral-link.js";
 import { CONFIRMING, TX_MSG_OPTS, txError, txSuccess } from "../lib/tx-flow.js";
 import { checkOrderRateLimit } from "../middleware/rate-limit.js";
 import { invalidateCtx } from "./tpsl.js";
@@ -412,6 +414,25 @@ export function registerPositions(bot: Bot<BotContext>) {
     await sendPositionsScreen(ctx);
   });
 
+  // Opt-in PnL card share (button shown on the close result)
+  bot.callbackQuery(/^pnl:share:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Generating card…");
+    const token = ctx.match[1];
+    const raw = await redis.get(`pnlcard:${token}`);
+    if (!raw) {
+      await ctx.reply("This share card expired. Close a position again to share.");
+      return;
+    }
+    try {
+      const data = JSON.parse(raw) as PnlCardData;
+      const card = await generatePnlCard({ ...data, referral: referralBadgeData(ctx) });
+      await ctx.replyWithPhoto(new InputFile(card, "pnl.png"));
+    } catch (err) {
+      logger.error({ err, token }, "PnL share card generation failed");
+      await ctx.reply("Failed to generate card. Try again.");
+    }
+  });
+
   // List navigation
   bot.callbackQuery("pos:list", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -649,6 +670,30 @@ async function executeClose(
       });
     }
 
+    // Stash PnL card data so the user can opt into sharing (no auto-spam on close).
+    let shareToken: string | null = null;
+    if (prePos) {
+      try {
+        const pnl = Number(prePos.unrealizedPnl) * fraction;
+        const leverage = prePos.leverage ?? 1;
+        const margin = (Number(prePos.entryPrice) * Number(prePos.size)) / Math.max(leverage, 1);
+        const roiPct = margin > 0 ? (pnl / margin) * 100 : 0;
+        const cardData: PnlCardData = {
+          symbol,
+          side: prePos.side,
+          entryPrice: prePos.entryPrice,
+          exitPrice: prePos.markPrice,
+          roiPercent: roiPct,
+          pnlUsdc: pnl,
+        };
+        shareToken = crypto.randomUUID();
+        await redis.set(`pnlcard:${shareToken}`, JSON.stringify(cardData), "EX", 3600);
+      } catch (stashErr) {
+        logger.warn({ err: stashErr, symbol }, "failed to stash PnL share card");
+        shareToken = null;
+      }
+    }
+
     const afterKb =
       fraction === 1
         ? new InlineKeyboard()
@@ -660,6 +705,7 @@ async function executeClose(
             .text("📊 View position", `pos:detail:${symbol}:${side}`)
             .row()
             .text("📋 Positions", "nav:positions");
+    if (shareToken) afterKb.row().text("📸 Share PnL", `pnl:share:${shareToken}`);
 
     const closedLabel = closePct === 100 ? "closed" : `${closePct}% closed`;
     let resultBody = fmt`${symbol} — ${FormattedString.b(closedLabel)}`;
@@ -684,26 +730,6 @@ async function executeClose(
         { err: editErr, symbol, sig },
         "editMessageText failed after closePosition succeeded",
       );
-    }
-
-    if (prePos) {
-      try {
-        const pnl = Number(prePos.unrealizedPnl) * fraction;
-        const leverage = prePos.leverage ?? 1;
-        const margin = (Number(prePos.entryPrice) * Number(prePos.size)) / Math.max(leverage, 1);
-        const roiPct = margin > 0 ? (pnl / margin) * 100 : 0;
-        const card = await generatePnlCard({
-          symbol,
-          side: prePos.side,
-          entryPrice: prePos.entryPrice,
-          exitPrice: prePos.markPrice,
-          roiPercent: roiPct,
-          pnlUsdc: pnl,
-        });
-        await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));
-      } catch (cardErr) {
-        logger.error({ err: cardErr, symbol }, "PnL card generation failed");
-      }
     }
   })().catch((err) => logger.error({ err }, "close position async error"));
 }

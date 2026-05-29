@@ -1,26 +1,27 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, sql } from "drizzle-orm";
-import { config } from "../config/index.js";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { referrals, users } from "../db/schema/index.js";
-
-const T1_RATIO = 0.2;
-const T2_RATIO = 0.1;
 
 export function generateReferralCode(): string {
   return randomBytes(4).toString("hex").toUpperCase();
 }
 
+/**
+ * Link a new user to their referrer. Single-tier only — the referee's direct
+ * referrer earns points on the referee's volume. The `referral_tier` enum still
+ * carries "t2" for back-compat, but no T2 rows are created.
+ */
 export async function linkReferral(refereeId: string, referralCode: string) {
   const referrer = await db.query.users.findFirst({
     where: eq(users.referralCode, referralCode),
   });
   if (!referrer || referrer.id === refereeId) return;
 
-  const existingT1 = await db.query.referrals.findFirst({
+  const existing = await db.query.referrals.findFirst({
     where: and(eq(referrals.refereeId, refereeId), eq(referrals.tier, "t1")),
   });
-  if (existingT1) return;
+  if (existing) return;
 
   await db.insert(referrals).values({
     id: crypto.randomUUID(),
@@ -28,67 +29,53 @@ export async function linkReferral(refereeId: string, referralCode: string) {
     refereeId,
     tier: "t1",
   });
-
-  const referrerRecord = await db.query.referrals.findFirst({
-    where: and(eq(referrals.refereeId, referrer.id), eq(referrals.tier, "t1")),
-  });
-  if (referrerRecord) {
-    const existingT2 = await db.query.referrals.findFirst({
-      where: and(eq(referrals.refereeId, refereeId), eq(referrals.tier, "t2")),
-    });
-    if (!existingT2) {
-      await db.insert(referrals).values({
-        id: crypto.randomUUID(),
-        referrerId: referrerRecord.referrerId,
-        refereeId,
-        tier: "t2",
-      });
-    }
-  }
 }
 
-export async function getReferralStats(userId: string) {
+export interface ReferralStats {
+  referralCount: number;
+  points: number;
+  /** 1-based rank among referrers with > 0 points; null if user has no points. */
+  rank: number | null;
+  totalReferrers: number;
+}
+
+export async function getReferralStats(userId: string): Promise<ReferralStats> {
   const rows = await db.query.referrals.findMany({
     where: eq(referrals.referrerId, userId),
   });
+  const referralCount = rows.filter((r) => r.tier === "t1").length;
+  const points = rows.reduce((sum, r) => sum + Number(r.points), 0);
 
-  const t1 = rows.filter((r) => r.tier === "t1");
-  const t2 = rows.filter((r) => r.tier === "t2");
-  const totalAccrued = rows.reduce((sum, r) => sum + Number(r.accruedUsdc), 0);
-  const totalClaimed = rows.reduce((sum, r) => sum + Number(r.claimedUsdc), 0);
+  const ranked = await db
+    .select({
+      referrerId: referrals.referrerId,
+      total: sql<string>`sum(${referrals.points})`,
+    })
+    .from(referrals)
+    .groupBy(referrals.referrerId);
+
+  const withPoints = ranked.filter((r) => Number(r.total) > 0);
+  const higher = withPoints.filter((r) => Number(r.total) > points).length;
 
   return {
-    t1Count: t1.length,
-    t2Count: t2.length,
-    totalAccruedUsdc: totalAccrued,
-    claimableUsdc: totalAccrued - totalClaimed,
+    referralCount,
+    points,
+    rank: points > 0 ? higher + 1 : null,
+    totalReferrers: withPoints.length,
   };
 }
 
-export async function accrueReferralFee(userId: string, notionalUsdc: number) {
-  const builderFeeUsdc = (notionalUsdc * config.BUILDER_FEE_BPS) / 10000;
-
-  const t1Fee = builderFeeUsdc * T1_RATIO;
+/**
+ * Award referral points to the referee's direct referrer.
+ * 1 point per $1 of referred trading volume (taker notional). No cash payout.
+ */
+export async function accrueReferralPoints(refereeId: string, notionalUsdc: number) {
+  if (!(notionalUsdc > 0)) return;
   await db
     .update(referrals)
     .set({
-      accruedUsdc: sql`${referrals.accruedUsdc}::numeric + ${t1Fee.toFixed(6)}`,
+      points: sql`${referrals.points}::numeric + ${notionalUsdc.toFixed(6)}`,
       updatedAt: new Date(),
     })
-    .where(and(eq(referrals.refereeId, userId), eq(referrals.tier, "t1")));
-
-  const t2Fee = builderFeeUsdc * T2_RATIO;
-  await db
-    .update(referrals)
-    .set({
-      accruedUsdc: sql`${referrals.accruedUsdc}::numeric + ${t2Fee.toFixed(6)}`,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(referrals.refereeId, userId), eq(referrals.tier, "t2")));
-}
-
-export async function getClaimableReferrals(userId: string) {
-  return db.query.referrals.findMany({
-    where: and(eq(referrals.referrerId, userId), gt(referrals.accruedUsdc, "0")),
-  });
+    .where(and(eq(referrals.refereeId, refereeId), eq(referrals.tier, "t1")));
 }

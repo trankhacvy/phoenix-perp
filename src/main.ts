@@ -57,22 +57,27 @@ async function main() {
   }
 
   try {
-    await bot.api.setMyCommands([
+    const commands = [
       { command: "start", description: "Create wallet & get started" },
+      { command: "activate", description: "Unlock trading with an invite/referral code" },
       { command: "portfolio", description: "Full account overview" },
       { command: "long", description: "Open a long position" },
       { command: "short", description: "Open a short position" },
-      { command: "positions", description: "View open positions" },
+      { command: "positions", description: "View & manage open positions" },
       { command: "markets", description: "Browse all markets" },
       { command: "deposit", description: "Add USDC to your account" },
       { command: "withdraw", description: "Move funds out" },
       { command: "history", description: "Trade history with P&L" },
+      { command: "wallet", description: "Look up any trader — /wallet <address>" },
+      { command: "monitor", description: "Follow traders & get live alerts" },
       { command: "guardian", description: "Risk rules & auto-protection" },
-      { command: "alerts", description: "Toggle alert types" },
-      { command: "settings", description: "Slippage & leverage defaults" },
+      { command: "alerts", description: "Price & account alerts" },
       { command: "leaderboard", description: "Top traders" },
+      { command: "settings", description: "Slippage & leverage defaults" },
+      { command: "referral", description: "Your referral link & points" },
       { command: "help", description: "All commands & help" },
-    ]);
+    ];
+    await bot.api.setMyCommands(commands);
     await bot.api.setMyDescription(
       "SuperNova — trade perpetual futures on Phoenix, directly from Telegram.",
     );

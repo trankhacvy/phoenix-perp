@@ -20,15 +20,10 @@ const schema = z.object({
 
   // Phoenix / Flight
   BUILDER_AUTHORITY_PUBKEY: z.string().min(1),
-  BUILDER_FEE_BPS: z.coerce.number().min(1).max(50).default(10),
+  BUILDER_FEE_BPS: z.coerce.number().min(1).max(50).default(5),
   BUILDER_ACCESS_CODE: z.string().default(""),
 
   // Feature flags
-  REFERRAL_ENABLED: z
-    .enum(["true", "false", "1", "0"])
-    .default("false")
-    .transform((v) => v === "true" || v === "1"),
-
   // Leaderboard scanner toggle. Unset → defaults to on in production, off elsewhere
   // (so you can opt in during dev to surface Phoenix/Helius rate limits early).
   LEADERBOARD_ENABLED: z

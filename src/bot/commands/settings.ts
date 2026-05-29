@@ -71,8 +71,7 @@ function settingsKeyboard(s: Settings): InlineKeyboard {
     .text(`Confirm Close: ${toggleIcon(s.confirmClose)}`, "settings:toggle_confirm_close")
     .row()
     .text("🔔 Alerts", "al:main")
-    .text("🛡 Guardian", "grd:list")
-    .text("✕ Close", "settings:close");
+    .text("🛡 Guardian", "grd:list");
 }
 
 async function sendSettingsScreen(ctx: BotContext, edit = false): Promise<void> {
@@ -109,21 +108,10 @@ export function registerSettings(bot: Bot<BotContext>) {
   });
 
   bot.callbackQuery("settings:cancel_input", async (ctx) => {
-    await ctx.answerCallbackQuery("Cancelled");
+    await ctx.answerCallbackQuery();
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await sendSettingsScreen(ctx, true);
-  });
-
-  bot.callbackQuery("settings:close", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!ctx.user) return;
-    const s = await getSettings(ctx.user.id);
-    const msg = settingsMsg(s);
-    await ctx.editMessageText(msg.text, {
-      entities: msg.entities,
-      reply_markup: new InlineKeyboard(),
-    });
   });
 
   // ── Slippage ────────────────────────────────────────────────────────────────
@@ -160,7 +148,7 @@ Current: ${FormattedString.code(`${s.slippageBps / 100}%`)}`;
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "settings_custom_slip");
-    const kb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+    const kb = new InlineKeyboard().text("← Back", "settings:cancel_input");
     const msg = fmt`${FormattedString.b("Custom Slippage")}
 
 Enter slippage % (Range: 0.01–5.00%)
@@ -206,7 +194,7 @@ Current: ${FormattedString.code(`${s.defaultLeverage}×`)}`;
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "settings_custom_lev");
-    const kb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+    const kb = new InlineKeyboard().text("← Back", "settings:cancel_input");
     const msg = fmt`${FormattedString.b("Custom Default Leverage")}
 
 Enter leverage (Range: 1–100×)
@@ -265,7 +253,7 @@ Current: ${FormattedString.code(s.autoTpPct ? `+${s.autoTpPct}%` : "Off")}`;
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "settings_auto_tp");
-    const kb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+    const kb = new InlineKeyboard().text("← Back", "settings:cancel_input");
     const msg = fmt`${FormattedString.b("Auto TP — Custom %")}
 
 Enter the profit % at which to auto-close your position.
@@ -324,7 +312,7 @@ Current: ${FormattedString.code(s.autoSlPct ? `-${s.autoSlPct}%` : "Off")}`;
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "settings_auto_sl");
-    const kb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+    const kb = new InlineKeyboard().text("← Back", "settings:cancel_input");
     const msg = fmt`${FormattedString.b("Auto SL — Custom %")}
 
 Enter the max loss % you'll accept before auto-closing.
@@ -349,7 +337,7 @@ e.g. ${FormattedString.code("8")} to close at -8% unrealized PnL`;
     if (!ctx.user || !ctx.from) return;
     await clearPending(ctx.from.id);
     await setPending(ctx.from.id, "settings_custom_fee");
-    const kb = new InlineKeyboard().text("✕ Cancel", "settings:cancel_input");
+    const kb = new InlineKeyboard().text("← Back", "settings:cancel_input");
     const msg = fmt`${FormattedString.b("Custom Priority Fee")}
 
 Sets the Jito tip + compute price for your transactions.

@@ -25,6 +25,7 @@ import {
   usd,
 } from "../lib/fmt.js";
 import { addPaginationRow, paginate } from "../lib/paginate.js";
+import { referralBadgeData } from "../lib/referral-link.js";
 import { BASE58_RE } from "../lib/validate.js";
 import { sendHistoryScreen } from "./history.js";
 
@@ -492,6 +493,7 @@ export function registerWallet(bot: Bot<BotContext>) {
               symbol: analytics.worstTrade.symbol,
             }
           : null,
+        referral: referralBadgeData(ctx),
       });
 
       await ctx.replyWithPhoto(
