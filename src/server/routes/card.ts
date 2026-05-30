@@ -12,6 +12,21 @@ function esc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Validate redirect URL: only allow HTTPS/HTTP schemes, pin to t.me or localhost (dev).
+function safeRedirectUrl(url: string | undefined): string {
+  if (!url) return "https://t.me";
+  try {
+    const parsed = new URL(url);
+    const isTelegram = parsed.hostname === "t.me";
+    const isLocalhost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    const isHttps = parsed.protocol === "https:";
+    if ((isTelegram || isLocalhost) && isHttps) return parsed.toString();
+  } catch {
+    // Invalid URL, fall through to default
+  }
+  return "https://t.me";
+}
+
 async function loadCard(token: string): Promise<PnlCardData | null> {
   const raw = await redis.get(`pnlcard:${token}`);
   if (!raw) return null;
@@ -50,7 +65,7 @@ export async function cardRoutes(app: FastifyInstance) {
     }
 
     const imgUrl = `${base}/card/${token}/image.png`;
-    const redirect = data.referral?.url ?? "https://t.me";
+    const redirect = safeRedirectUrl(data.referral?.url);
     const win = data.pnlUsdc >= 0;
     const sign = win ? "+" : "";
     const title = `${data.side.toUpperCase()} ${data.symbol} — ${sign}${data.roiPercent.toFixed(1)}% ROI`;
