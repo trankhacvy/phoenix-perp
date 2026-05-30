@@ -5,13 +5,20 @@ export function sizePickerKeyboard(
   side: "long" | "short",
   symbol: string,
   balance: number,
+  maxMargin: number,
 ): InlineKeyboard {
-  const pcts = [10, 25, 50, 100];
-  const kb = new InlineKeyboard();
-  for (let i = 0; i < pcts.length; i++) {
-    const p = pcts[i];
+  // Max = largest margin that still leaves room for fees at max leverage.
+  // Floor to cents so the value clears sendLevStep's `> maxSafeMargin` gate.
+  const maxAmt = Math.floor(maxMargin * 100) / 100;
+  const presets: Array<{ amt: number; label: string }> = [10, 25, 50].map((p) => {
     const amt = Number.parseFloat(((balance * p) / 100).toFixed(2));
-    kb.text(`${usd(amt)}  (${p}%)`, `trade_size:${side}:${symbol}:${amt}`);
+    return { amt, label: `${usd(amt)}  (${p}%)` };
+  });
+  presets.push({ amt: maxAmt, label: "Max" });
+
+  const kb = new InlineKeyboard();
+  for (let i = 0; i < presets.length; i++) {
+    kb.text(presets[i].label, `trade_size:${side}:${symbol}:${presets[i].amt}`);
     if (i % 2 === 1) kb.row();
   }
   kb.text("Enter custom amount", `trade_size_custom:${side}:${symbol}`)

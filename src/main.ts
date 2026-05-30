@@ -50,10 +50,10 @@ async function main() {
 
   const leaderboardEnabled = config.LEADERBOARD_ENABLED ?? config.NODE_ENV === "production";
   if (leaderboardEnabled) {
-    logger.info({ env: config.NODE_ENV }, "Starting leaderboard scanner");
-    startLeaderboardScanner().catch((err) => {
-      logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
-    });
+    // logger.info({ env: config.NODE_ENV }, "Starting leaderboard scanner");
+    // startLeaderboardScanner().catch((err) => {
+    //   logger.error({ err }, "Leaderboard scanner failed to start (non-fatal)");
+    // });
   }
 
   try {

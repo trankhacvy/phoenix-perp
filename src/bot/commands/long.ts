@@ -225,6 +225,13 @@ export async function sendSymbolPickerPage(
   }
 }
 
+// Largest margin that still leaves room for the opening fee at max leverage.
+// fee = margin × leverage × feeRate, and margin + fee must fit inside collateral:
+//   margin × (1 + leverage × feeRate) ≤ available
+function computeMaxMargin(available: number, maxLeverage: number, totalFeeRate: number): number {
+  return available / (1 + maxLeverage * totalFeeRate);
+}
+
 export async function sendSizeStep(
   ctx: BotContext,
   side: "long" | "short",
@@ -255,9 +262,12 @@ export async function sendSizeStep(
     return;
   }
 
+  const totalFeeRate = snapshot.takerFee + config.BUILDER_FEE_BPS / 10_000;
+  const maxMargin = computeMaxMargin(available, snapshot.maxLeverage, totalFeeRate);
+
   const emoji = side === "long" ? "🟢" : "🔴";
   const label = side === "long" ? "Long" : "Short";
-  const kb = sizePickerKeyboard(side, symbol, available);
+  const kb = sizePickerKeyboard(side, symbol, available, maxMargin);
 
   const msg = fmt`${emoji} ${FormattedString.b(`${label} ${symbol}`)}  ·  ${fmtPrice(snapshot.markPrice)}\n\nYour balance: ${FormattedString.b(usd(available))}\n\nHow much margin to put in?`;
   await ctx.reply(msg.text, { entities: msg.entities, reply_markup: kb });
@@ -284,7 +294,7 @@ export async function sendLevStep(
   const state = await getTraderState(ctx.user.walletAddress);
   const available = Number(state.effectiveCollateral);
   const totalFeeRate = snapshot.takerFee + config.BUILDER_FEE_BPS / 10_000;
-  const maxSafeMargin = available / (1 + snapshot.maxLeverage * totalFeeRate);
+  const maxSafeMargin = computeMaxMargin(available, snapshot.maxLeverage, totalFeeRate);
   if (sizeUsdc > maxSafeMargin + 0.01) {
     const kb = new InlineKeyboard()
       .text("← Pick size", `trade:${side}:${symbol}`)

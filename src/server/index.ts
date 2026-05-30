@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import fastify from "fastify";
 import { handleWebhook } from "../bot/index.js";
 import { config } from "../config/index.js";
+import { cardRoutes } from "./routes/card.js";
 import { healthRoutes } from "./routes/health.js";
 
 export async function createServer() {
@@ -10,6 +11,7 @@ export async function createServer() {
 
   await app.register(cors, { origin: false });
   await app.register(healthRoutes);
+  await app.register(cardRoutes);
 
   const webhookSlug = createHash("sha256")
     .update(config.TELEGRAM_BOT_TOKEN)

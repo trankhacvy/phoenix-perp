@@ -18,6 +18,8 @@ export function positionKeyboard(
     .text("💰 Add margin", `margin:${symbol}`)
     .text(protectLabel, `protect:${symbol}:${side}`)
     .row()
+    .text("📸 Generate Card", `pos:card:${symbol}:${side}`)
+    .row()
     .text("🔄 Refresh", `pos:refresh:${symbol}:${side}`)
     .text("← Back", "pos:list");
 }

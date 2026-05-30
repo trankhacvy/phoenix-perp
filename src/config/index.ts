@@ -46,6 +46,9 @@ const schema = z.object({
   // Server
   PORT: z.coerce.number().default(3000),
   HOST: z.string().default("0.0.0.0"),
+  // Public origin for shareable links (PnL card pages w/ Twitter Card unfurl).
+  // Falls back to WEBHOOK_URL when unset. Must be publicly reachable for X to scrape.
+  PUBLIC_URL: z.string().url().optional(),
 
   // Dev-only: base58-encoded 64-byte Solana keypair secret key.
   // When set in non-production, bypasses Privy signing entirely.

@@ -414,25 +414,6 @@ export function registerPositions(bot: Bot<BotContext>) {
     await sendPositionsScreen(ctx);
   });
 
-  // Opt-in PnL card share (button shown on the close result)
-  bot.callbackQuery(/^pnl:share:(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Generating card…");
-    const token = ctx.match[1];
-    const raw = await redis.get(`pnlcard:${token}`);
-    if (!raw) {
-      await ctx.reply("This share card expired. Close a position again to share.");
-      return;
-    }
-    try {
-      const data = JSON.parse(raw) as PnlCardData;
-      const card = await generatePnlCard({ ...data, referral: referralBadgeData(ctx) });
-      await ctx.replyWithPhoto(new InputFile(card, "pnl.png"));
-    } catch (err) {
-      logger.error({ err, token }, "PnL share card generation failed");
-      await ctx.reply("Failed to generate card. Try again.");
-    }
-  });
-
   // List navigation
   bot.callbackQuery("pos:list", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -468,6 +449,43 @@ export function registerPositions(bot: Bot<BotContext>) {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (!errMsg.includes("message is not modified")) throw err;
+    }
+  });
+
+  // Generate live position card (for flexing on X)
+  bot.callbackQuery(/^pos:card:([A-Z0-9]+):(long|short)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Generating card…");
+    if (!ctx.user) return;
+    const [symbol, side] = ctx.match.slice(1) as [string, "long" | "short"];
+    try {
+      const state = await getTraderState(ctx.user.walletAddress);
+      const pos = state.positions.find((p) => p.symbol === symbol && p.side === side);
+      if (!pos) {
+        await ctx.reply(`No open ${symbol} ${side} position found.`);
+        return;
+      }
+      const upnl = Number(pos.unrealizedPnl);
+      const size = Number(pos.size);
+      const entry = Number(pos.entryPrice);
+      const mark = Number(pos.markPrice);
+      const lev = pos.leverage ?? 1;
+      const margin = (entry * size) / Math.max(lev, 1);
+      const roi = margin > 0 ? (upnl / margin) * 100 : 0;
+      const cardData: PnlCardData = {
+        symbol,
+        side: pos.side,
+        leverage: pos.leverage,
+        entryPrice: fmtPrice(entry).replace(/^\$/, ""),
+        exitPrice: fmtPrice(mark).replace(/^\$/, ""),
+        roiPercent: roi,
+        pnlUsdc: upnl,
+        referral: referralBadgeData(ctx),
+      };
+      const card = await generatePnlCard(cardData);
+      await ctx.replyWithPhoto(new InputFile(card, "position.png"));
+    } catch (err) {
+      logger.error({ err, symbol, side }, "Live position card generation failed");
+      await ctx.reply("Failed to generate card. Try again.");
     }
   });
 
@@ -681,10 +699,13 @@ async function executeClose(
         const cardData: PnlCardData = {
           symbol,
           side: prePos.side,
-          entryPrice: prePos.entryPrice,
-          exitPrice: prePos.markPrice,
+          // Card prepends "$" itself, so strip the leading "$" from the formatter.
+          entryPrice: fmtPrice(Number(prePos.entryPrice)).replace(/^\$/, ""),
+          exitPrice: fmtPrice(Number(prePos.markPrice)).replace(/^\$/, ""),
           roiPercent: roiPct,
           pnlUsdc: pnl,
+          // Baked in so the hosted card page can render the QR + redirect to the bot.
+          referral: referralBadgeData(ctx),
         };
         shareToken = crypto.randomUUID();
         await redis.set(`pnlcard:${shareToken}`, JSON.stringify(cardData), "EX", 3600);
@@ -705,7 +726,6 @@ async function executeClose(
             .text("📊 View position", `pos:detail:${symbol}:${side}`)
             .row()
             .text("📋 Positions", "nav:positions");
-    if (shareToken) afterKb.row().text("📸 Share PnL", `pnl:share:${shareToken}`);
 
     const closedLabel = closePct === 100 ? "closed" : `${closePct}% closed`;
     let resultBody = fmt`${symbol} — ${FormattedString.b(closedLabel)}`;
@@ -730,6 +750,20 @@ async function executeClose(
         { err: editErr, symbol, sig },
         "editMessageText failed after closePosition succeeded",
       );
+    }
+
+    // Auto-send PnL card right after close (no opt-in needed).
+    if (shareToken) {
+      try {
+        const raw = await redis.get(`pnlcard:${shareToken}`);
+        if (raw) {
+          const data = JSON.parse(raw) as PnlCardData;
+          const card = await generatePnlCard({ ...data, referral: referralBadgeData(ctx) });
+          await api.sendPhoto(chatId, new InputFile(card, "pnl.png"));
+        }
+      } catch (cardErr) {
+        logger.warn({ err: cardErr, shareToken }, "PnL card generation failed after close");
+      }
     }
   })().catch((err) => logger.error({ err }, "close position async error"));
 }

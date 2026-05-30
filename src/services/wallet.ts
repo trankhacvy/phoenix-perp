@@ -87,7 +87,7 @@ export async function resolvePrivyWalletId(walletAddress: string): Promise<strin
 }
 
 export async function getPrivyKitSigner(walletAddress: string): Promise<SolanaKitSigner> {
-  if (config.NODE_ENV !== "production" && config.DEV_SIGNER_SECRET_KEY) {
+  if (config.DEV_SIGNER_SECRET_KEY) {
     const secretBytes = bs58.decode(config.DEV_SIGNER_SECRET_KEY);
     // createKeyPairSignerFromBytes returns a KeyPairSigner which satisfies
     // the TransactionSigner interface that the Rise SDK expects.
